@@ -40,7 +40,7 @@ function caso(nome, ok, detalhe) {
 const semTexto = (u) => (u ? { messageId: u.messageId, runId: u.runId, caracteres: u.texto?.length ?? 0, truncada: u.truncada } : null);
 
 const { tools } = await cliente.listTools();
-caso('ferramentas', tools.length === 7, tools.map((t) => t.name));
+caso('ferramentas', tools.length === 8, tools.map((t) => t.name));
 
 const amb = await chamar('t3_ambientes', {});
 caso('t3_ambientes', amb.ambientes?.every((a) => a.disponivel), amb.ambientes?.map((a) => ({ alias: a.alias, padrao: a.padrao, transporte: a.transporte, disponivel: a.disponivel, versao: a.versao, erro: a.erro })));
