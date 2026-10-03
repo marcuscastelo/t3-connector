@@ -1,0 +1,17 @@
+{
+  "padrao": "local",
+  "ambientes": {
+    "local": {
+      "environmentId": "00000000-0000-4000-8000-000000000001",
+      "url": "http://127.0.0.1:3773",
+      "tokenFile": "~/.config/t3-connector/tokens/local.token",
+      "projetosPermitidos": ["00000000-0000-4000-8000-0000000000a1"]
+    },
+    "remoto": {
+      "environmentId": "00000000-0000-4000-8000-000000000002",
+      "ssh": { "host": "meu-servidor", "portaRemota": 3773 },
+      "tokenFile": "~/.config/t3-connector/tokens/remoto.token",
+      "projetosPermitidos": ["mcp-project:00000000-0000-4000-8000-0000000000b1"]
+    }
+  }
+}

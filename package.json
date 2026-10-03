@@ -1,0 +1,55 @@
+{
+  "name": "t3-connector",
+  "version": "0.5.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP connectors between external clients (e.g. ChatGPT via Secure MCP Tunnel) and the T3 Code Orchestrator V2: read-only access without a lease, and writes behind a passkey-approved lease, with explicit environments.",
+  "license": "MIT",
+  "bin": {
+    "t3-connector": "bin/t3-connector.mjs",
+    "t3-connector-write": "bin/t3-connector-write.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "web/",
+    "examples/",
+    "docs/",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:package": "node scripts/check-package.mjs",
+    "smoke": "node test/smoke-ao-vivo.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.0",
+    "@simplewebauthn/browser": "13.3.0",
+    "@simplewebauthn/server": "13.3.3",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@levischuck/tiny-cbor": "0.2.11"
+  },
+  "keywords": [
+    "mcp",
+    "t3code",
+    "model-context-protocol",
+    "webauthn",
+    "passkey"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marcuscastelo/t3-connector.git"
+  },
+  "homepage": "https://github.com/marcuscastelo/t3-connector#readme",
+  "bugs": {
+    "url": "https://github.com/marcuscastelo/t3-connector/issues"
+  }
+}
