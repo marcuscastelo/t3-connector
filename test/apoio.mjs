@@ -71,7 +71,8 @@ export function ambientesFalsos(dados = dadosPadrao(), { chamadas = [] } = {}) {
       base: new URL(url),
       ambiente: async () => (reg('ambiente'), d.descritor),
       sessao: async () => (reg('sessao'), { scopes: d.escopos }),
-      shell: async () => (reg('shell'), d.shell),
+      // `shell` pode ser função, para simular falha ou environment que não responde.
+      shell: async () => (reg('shell'), typeof d.shell === 'function' ? d.shell() : d.shell),
       thread: async (id) => {
         reg(`thread:${id}`);
         if (!d.bounded[id]) throw Object.assign(new Error('404'), { status: 404 });
@@ -91,8 +92,8 @@ export function ambientesFalsos(dados = dadosPadrao(), { chamadas = [] } = {}) {
   });
 }
 
-export async function conectarMcp(ambientes) {
-  const servidor = criarServidor({ ambientes });
+export async function conectarMcp(ambientes, opcoesBusca) {
+  const servidor = criarServidor({ ambientes, opcoesBusca });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await servidor.connect(a);
   const cliente = new Client({ name: 'teste', version: '0' });

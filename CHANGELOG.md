@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- New read tool `t3_buscar_threads`: finds threads by title or exact ID without an
+  environment, across every configured environment (or one, with `ambiente`). Each result
+  carries `ambiente: {alias, environmentId, nome}`. Deadlines of 4 s per environment and
+  10 s in total; environments that fail are listed in `falhasAmbientes` with
+  `completa: false` instead of failing the search. Ambiguous matches are all returned,
+  ordered by environment and thread ID, with a cursor bound to the environments that
+  answered. Existing tools and write actions are unchanged and still take one environment.
+
 ## 0.5.0
 
 First public release, as **T3 Connector**. Functionally equivalent to the previous

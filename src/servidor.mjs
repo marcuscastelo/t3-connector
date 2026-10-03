@@ -14,6 +14,7 @@ import {
 } from './estado.mjs';
 import { ForaDoEscopo } from './ambientes.mjs';
 import { aguardarThread, TETO_MS } from './espera.mjs';
+import { buscarThreads, EntradaInvalida, PRAZO_AMBIENTE_MS, PRAZO_TOTAL_MS } from './busca-threads.mjs';
 import { assinatura, casaBusca, comparador, CursorInvalido, normalizar, paginar } from './paginacao.mjs';
 import { Cancelada, ErroT3 } from './t3.mjs';
 
@@ -45,13 +46,13 @@ function resposta(dados) {
 }
 
 function erro(e) {
-  const mensagem = e instanceof ForaDoEscopo || e instanceof ErroT3 || e instanceof Cancelada || e instanceof CursorInvalido
+  const mensagem = e instanceof ForaDoEscopo || e instanceof ErroT3 || e instanceof Cancelada || e instanceof CursorInvalido || e instanceof EntradaInvalida
     ? e.message
     : `falha ao consultar o T3: ${e?.message ?? e}`;
   return { content: [{ type: 'text', text: mensagem }], isError: true };
 }
 
-export function criarServidor({ ambientes }) {
+export function criarServidor({ ambientes, opcoesBusca = {} }) {
   const servidor = new McpServer({ name: 't3-connector', version: VERSAO });
   const nomes = ambientes.registros.map((r) => r.alias).join(', ');
   const campoAmbiente = z.string().min(1).optional()
@@ -191,6 +192,35 @@ export function criarServidor({ ambientes }) {
         threads: pagina,
       };
     }),
+  );
+
+  servidor.registerTool(
+    't3_buscar_threads',
+    {
+      title: 'Find threads across environments',
+      description:
+        'Finds threads by title or ID in every configured environment (or only in `ambiente`) and returns each candidate with the environment where it lives (`ambiente: {alias, environmentId, nome}`). ' +
+        'Pass exactly one of `busca` (part of the title or ID, or the whole title with `correspondencia: "exata"`) or `threadId` (exact ID). ' +
+        `Each environment has ${PRAZO_AMBIENTE_MS} ms and the whole search ${PRAZO_TOTAL_MS} ms; environments that fail or time out are listed in \`falhasAmbientes\` and \`completa\` is false, so zero results then do not prove the thread is missing. ` +
+        'The same title or ID can exist in several environments: never pick one on your own; ask the user when `total` > 1, then call the other tools with the chosen `ambiente` and `threadId`. ' +
+        'Includes archived threads (`arquivada`) and threads without a run. Results are ordered by environmentId and threadId; when `truncado: true`, repeat with `cursor` = `proximoCursor`. Read-only.',
+      inputSchema: {
+        busca: z.string().min(1).optional().describe('Part of the title or threadId, ignoring case and accents; exclusive with threadId'),
+        threadId: z.string().min(1).optional().describe('Exact thread ID, compared literally; exclusive with busca'),
+        correspondencia: z.enum(['parcial', 'exata']).optional().describe('With busca: parcial (substring, default) or exata (whole title, or exact ID)'),
+        ambiente: z.string().min(1).optional().describe(`Restrict the search to one environment (alias or environmentId): ${nomes}. Omitted: every configured environment`),
+        limite: z.number().int().min(1).max(50).optional().describe('Maximum threads per page; default 20. `total` counts every match in the environments that answered'),
+        cursor: z.string().min(1).optional().describe('`proximoCursor` from the previous page of the same search; omitted: first page'),
+      },
+      annotations: SO_LEITURA,
+    },
+    async (args, extra) => {
+      try {
+        return resposta(await buscarThreads(ambientes, args, { ...opcoesBusca, signal: extra?.signal, resumir: (t, p) => resumoDaThread(t, p) }));
+      } catch (e) {
+        return erro(e);
+      }
+    },
   );
 
   servidor.registerTool(

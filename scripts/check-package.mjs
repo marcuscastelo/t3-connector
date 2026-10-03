@@ -88,7 +88,7 @@ try {
   if (server?.name !== 't3-connector' || server?.version !== pkg.version) fail(`MCP server announces ${server?.name} ${server?.version}`);
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name).sort();
-  const expected = ['t3_aguardar_thread', 't3_ambientes', 't3_atencao', 't3_mensagens', 't3_projetos', 't3_thread', 't3_threads'];
+  const expected = ['t3_aguardar_thread', 't3_ambientes', 't3_atencao', 't3_buscar_threads', 't3_mensagens', 't3_projetos', 't3_thread', 't3_threads'];
   if (JSON.stringify(names) !== JSON.stringify(expected)) fail(`tools: ${names.join(', ')}`);
   if (tools.some((t) => t.annotations?.readOnlyHint !== true)) fail('read tool without readOnlyHint');
   // Public descriptions are in English; tool and parameter names are the stable API and stay as they are.

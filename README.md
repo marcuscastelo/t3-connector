@@ -118,7 +118,11 @@ restart the tunnel and refresh the tool list in the client.
    projects belong to one environment: a remote thread ID does not exist locally, and the
    same repository has a different projectId in each environment.
 2. **"Thread not found"** means it does not exist in *that* environment or is not in one
-   of its authorized projects. The connector never searches other environments.
+   of its authorized projects. Reads by ID never fall back to other environments.
+   **To find a thread without knowing its environment**, call `t3_buscar_threads` (find
+   threads): each result carries the environment where the thread lives. When `total` is
+   above 1, ask the user which one; never pick by order, recency or the default
+   environment. Then read with that `ambiente` and `threadId`.
 3. **To follow a thread**, call `t3_aguardar_thread` with `timeoutMs` between 1000 and 2000
    for voice (max 5000). `timedOut: true` means the thread is still running: answer the
    user and call again on a later turn. Do not chain waits in the same turn.
@@ -128,13 +132,15 @@ restart the tunnel and refresh the tool list in the client.
 ### Read tools
 
 All have `readOnlyHint: true` and `destructiveHint: false`. Every response includes
-`ambiente: {alias, environmentId}`.
+`ambiente: {alias, environmentId}`, except `t3_buscar_threads`, which puts it on each
+thread.
 
 | Tool | Input | Main output |
 |---|---|---|
 | `t3_ambientes` (environments) | `verificar?` (check, default true) | environments with alias, default, transport, `disponivel` (available), version |
 | `t3_projetos` (projects) | `ambiente?`, `busca?` (search), `limite?` (limit), `cursor?` | `total`, `retornados`, `truncado`, `proximoCursor?`; authorized projects ordered by title |
 | `t3_threads` | `ambiente?`, `projectId?`, `estado?` (state), `incluirSemExecucao?` (include threads without a run, default false), `busca?`, `limite?` (1-50, 20), `cursor?` | `total`, `retornadas`, `truncado`, `proximoCursor?`, `alteradasDesdeInicio?`, `ocultasSemExecucao?` |
+| `t3_buscar_threads` (find threads) | exactly one of `busca?` or `threadId?` (exact), `correspondencia?` (`parcial` = substring, default; `exata` = whole title), `ambiente?` (restricts; omitted: every environment), `limite?` (1-50, 20), `cursor?` | `total`, `retornadas`, `truncado`, `completa`, `proximoCursor?`, `ambientesConsultados`, `falhasAmbientes`; each thread with `ambiente: {alias, environmentId, nome}` and `arquivada` |
 | `t3_atencao` (attention) | `ambiente?` | threads that need intervention, or failed and were not settled |
 | `t3_thread` | `ambiente?`, `threadId`, `maxCaracteres?` (200-6000, 1500) | state, pending requests, provider session, latest run, latest response, `historico` |
 | `t3_mensagens` (messages) | `ambiente?`, `threadId`, `limite?` (1-20, 6), `maxCaracteres?` (100-4000, 800) | recent messages and `historico.completo` |
@@ -152,6 +158,29 @@ more items follow; repeat the call with `cursor` set to `proximoCursor` (next cu
 the same `ambiente` and filters. `busca` matches part of the title or ID, ignoring case and
 accents. The cursor stores the key of the last item and is bound to the environment, the
 tool and the filters; it is rejected in any other query. It is opaque but not secret.
+
+### Finding threads across environments (`t3_buscar_threads`)
+
+The connector reads the shell of every configured environment (at most 4 at a time),
+applies each environment's ACL and merges the results. It searches archived threads and
+threads without a run too, so an ID that `t3_thread` accepts is not reported missing. It
+never reads `/bounded` per candidate.
+
+- **Deadlines:** 4 s per environment (connection, shell and retry) and 10 s for the
+  whole search. Environments that fail, time out or answer as another environment go to
+  `falhasAmbientes` (`codigo`, `motivo`, with no token paths or transport output), and
+  `completa` is false. `total` counts matches in the environments that answered, so zero
+  results with `completa: false` do not prove the thread is missing. If every environment
+  fails, the response is still a normal envelope with `completa: false`.
+- **Ambiguity:** the same title or ID can exist in several environments and projects;
+  every match is returned. Use `total`, not the page size, to decide whether the result
+  is unique.
+- **Order and pages:** by `environmentId`, then `threadId`, independent of response time.
+  The cursor is bound to the search, the environment filter and the set of environments
+  that answered; if that set changes between pages, the cursor is rejected and the search
+  must start again. Pages are not a snapshot.
+- **Actions** in the write bridge still require `ambiente`; the search only finds
+  candidates.
 
 ### Waiting (`t3_aguardar_thread`)
 

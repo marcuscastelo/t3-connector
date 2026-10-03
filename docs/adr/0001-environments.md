@@ -43,6 +43,12 @@ tunnel keeps that rule and reuses the SSH identity the operator already has
 - Authorization is by the (environment, projectId) pair. A missing thread and an
   out-of-scope thread get the same refusal. When an ID is not found, the connector does
   not search other environments.
+- Exception, for discovery only (2026-10-03): `t3_buscar_threads` searches by title or ID
+  in every configured environment and returns each candidate with its environment. It
+  reads the shell of each environment with that environment's ACL, 4 s per environment
+  and 10 s in total; failures are reported per environment and the result is marked
+  incomplete instead of failing. It never chooses among candidates. Reads by ID and every
+  write action keep requiring a single environment, with no fallback.
 - Every response carries `ambiente: {alias, environmentId}`.
 - The SSH tunnel is a child process of the connector on a free loopback port. It starts on
   the first call to that environment and is recreated if it dies. The connector only
