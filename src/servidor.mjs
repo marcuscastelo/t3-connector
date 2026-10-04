@@ -17,7 +17,7 @@ import { assinatura, casaBusca, comparador, CursorInvalido, normalizar, paginar 
 import { Cancelada, ErroT3 } from './t3.mjs';
 import { resumirPedidosRuntime } from './pedidos-runtime.mjs';
 
-export const VERSAO = '0.5.0';
+export const VERSAO = '0.6.0';
 const ESTADOS = ['running', 'needs_intervention', 'completed', 'failed', 'cancelled', 'no_run', 'unknown'];
 const SO_LEITURA = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
