@@ -341,8 +341,10 @@ With `T3_CONNECTOR_OAUTH_RESOURCE` and `T3_CONNECTOR_OAUTH_TUNNEL_PORT` set:
   `/token`, `/revoke`, public ceremonies/consent/vendor and capability-gated public enrollment); `/mcp` and the protected resource metadata answer 404 there;
 - the tunnel listener (`127.0.0.1:<tunnel port>`, Host `127.0.0.1:<port>` or `localhost:<port>`
   only, 421 otherwise) serves `/mcp` and its metadata, never the authorization server;
-- the metadata names the configured resource and the issuer as authorization server; `/authorize`
-  and `/token` accept only that exact resource, and tokens are bound to it;
+- the metadata names the issuer as authorization server and, as `resource`, the configured
+  resource R — or the advertised value A when `T3_CONNECTOR_OAUTH_ADVERTISED_RESOURCE` is set (see
+  below); `/authorize`, `/token`, refresh and the resource server accept only R, and tokens are
+  bound to it;
 - an `/authorize` with another resource is refused (`invalid_target`) and logged as
   `authorize_unknown_resource` with a hash of the requested value only.
 
@@ -367,8 +369,12 @@ Observed in production (tunnel-client 0.0.14): the hosted resource ChatGPT sends
 OpenAI gateway URL (`https://tunnel-service.gateway.<…>.internal.api.openai.org/v1/mcp/<tunnel_id>`)
 that tunnel-client cannot reach; advertising it locally makes tunnel-client's own startup discovery
 time out on that origin and never register the discovery target. Configure it as
-`T3_CONNECTOR_OAUTH_RESOURCE` and advertise a reachable exact URL with
-`T3_CONNECTOR_OAUTH_ADVERTISED_RESOURCE` (the hosted rewrite replaces it before ChatGPT reads it).
+`T3_CONNECTOR_OAUTH_RESOURCE` (R) and advertise a reachable exact URL with
+`T3_CONNECTOR_OAUTH_ADVERTISED_RESOURCE` (A). This depends on the hosted tunnel rewriting both the
+metadata `resource` and the challenge's `resource_metadata` before any external client reads them:
+a client that saw A directly could not authenticate, because A is never accepted. The internal
+hostname and this workaround are observed behaviour of the current service, not a public API
+guarantee; keep the two values separate (no alias acceptance).
 
 Tunnel client profile (`server_urls`, channel `main`): `http://127.0.0.1:<tunnel port>/mcp`.
 

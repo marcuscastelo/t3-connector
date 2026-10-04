@@ -47,6 +47,21 @@ test('tunnel mode: metadata and challenge advertise the advertised resource; onl
   const rt = await c.refresh(s.tokens.refresh_token, { resource: ADVERTISED });
   assert.equal(rt.status, 400);
   assert.equal(rt.data.error, 'invalid_target');
+  // Same store, live token bound to A: the resource server refuses it for its audience (review T1).
+  const { authority, tokens } = c.connector;
+  const sid = authority.create({ sub: c.connector.subject, clientId: CLIENT, credentialId: 'fixture', scope: 'connector:read connector:write', resource: ADVERTISED });
+  const code = tokens.issueCode({ sid, clientId: CLIENT, redirectUri: 'https://client.example/cb', codeChallenge: 'x', resource: ADVERTISED, scope: 'connector:read connector:write' });
+  const aToken = tokens.consumeCode(code, { clientId: CLIENT, redirectUri: 'https://client.example/cb', verifyPkce: () => true, resource: ADVERTISED });
+  const ra = await c.mcp(aToken.access_token, 'initialize', {});
+  assert.equal(ra.status, 401);
+  assert.match(ra.headers['www-authenticate'], /error_description="wrong_audience"/);
+  // Omitted resource at code exchange and refresh binds R (the accepted value), never A.
+  const om = await c.signIn({ tokenResource: null });
+  assert.ok(om.tokens?.access_token, JSON.stringify(om.tokenResponse?.data));
+  assert.equal(tokens.resolveAccess(om.tokens.access_token).resource, ACCEPTED);
+  const omr = await c.token({ grant_type: 'refresh_token', refresh_token: om.tokens.refresh_token });
+  assert.equal(omr.status, 200);
+  assert.equal(tokens.resolveAccess(omr.data.access_token).resource, ACCEPTED);
   const started = readFileSync(join(c.connector.stateDir, 'events.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l)).find(e => e.event === 'started');
   assert.equal(started.resource, ACCEPTED);
 });
