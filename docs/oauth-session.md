@@ -95,10 +95,17 @@ Measured in the spike (ChatGPT web, 04/10/2026):
    and refresh, callback `https://chatgpt.com/connector_platform_oauth_redirect`, PKCE S256,
    `resource` sent, `iss` accepted. It also probes `/.well-known/openid-configuration`.
 2. With a 60 s access token it refreshes early: right after the code exchange and before each call.
-3. On `401 invalid_token`, even with a valid refresh token, it does **not** refresh: it shows
-   "connection expired" with a manual Reconnect. After `invalid_grant` it also asks for Reconnect.
-4. Reconnect redoes `/authorize` with PKCE without recreating the app, and the original call resumes.
-5. The detour HTTPS `/authorize` → `http://localhost/login` (passkey, UV) → `/resume` → callback worked
+   With a 3600 s access token it just calls with the token it has.
+3. After a `401 invalid_token` it is not reliable about refreshing: with only the access token
+   revoked (refresh token still valid) and with a dead session it did not call `/token`; after
+   natural idle expiry it tried one refresh and got `invalid_grant`. In every dead-session case the
+   UI showed "connection expired" with a manual Reconnect; it never opened the sign-in by itself
+   and never required recreating the connection.
+4. Reconnect → Continue → passkey redoes `/authorize` with PKCE without recreating the app, and the
+   interrupted call resumed without being resent.
+5. Server side, natural idle expiry worked: the session ended by itself and both the nominally
+   valid access token and the refresh token were refused.
+6. The detour HTTPS `/authorize` → `http://localhost/login` (passkey, UV) → `/resume` → callback worked
    with button and with 302 in a Firefox-based browser.
 
 Consequences built into the defaults:
@@ -111,8 +118,11 @@ Consequences built into the defaults:
   client presents one (missed or late refresh, long delay between refresh and request) it also
   gets a 401. Proactive refresh by the real client must be confirmed in the end-to-end rehearsal.
 - Revoking only access tokens (not exposed in the product UI) would therefore cost a Reconnect too.
-- Longer access-token lifetimes are configurable but untested with ChatGPT; if it stops refreshing
-  early, users would see Reconnect prompts before the idle window ends.
+- **Do not raise the access-token lifetime for ChatGPT.** With a long token it stops refreshing
+  early and calls with the token it has; when that token expires the call gets a 401, which costs
+  a Reconnect before the idle window ends. The setting exists for other clients.
+- Accepted UX cost (spike verdict, provisional GO with caveat): one manual Reconnect + passkey per
+  dead session (idle, revocation, kill switch, restart).
 
 ## 3. Coexistence with the passkey lease
 
