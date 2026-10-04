@@ -57,7 +57,7 @@ test('leitura: nome antigo e novo com valores diferentes falham; iguais passam',
   const c = await conectarMcp(ambientesFalsos());
   const conflito = await c.callTool({ name: 't3_projetos', arguments: { ambiente: 'remoto', environment: 'local' } });
   assert.equal(conflito.isError, true);
-  assert.match(conflito.content[0].text, /`environment` and its deprecated alias `ambiente` have different values/);
+  assert.match(conflito.content[0].text, /^parameter_conflict: `environment` and its deprecated alias `ambiente` have different values/);
   const estado = await c.callTool({ name: 't3_threads', arguments: { estado: 'concluida', state: 'running' } });
   assert.equal(estado.isError, true);
   const iguais = await c.callTool({ name: 't3_threads', arguments: { ambiente: 'remoto', environment: 'remoto', estado: 'rodando', state: 'running' } });
@@ -71,13 +71,13 @@ test('leitura: valores antigos só no nome antigo, e o valor do alias é validad
   assert.equal(portuguesNoNovo.isError, true);
   const inglesNoAntigo = await c.callTool({ name: 't3_threads', arguments: { estado: 'running' } });
   assert.equal(inglesNoAntigo.isError, true);
-  assert.match(inglesNoAntigo.content[0].text, /invalid `estado` \(deprecated alias of `state`\)/);
+  assert.match(inglesNoAntigo.content[0].text, /^parameter_invalid: invalid `estado` \(deprecated alias of `state`\)/);
   const limite = await c.callTool({ name: 't3_threads', arguments: { limite: 51 } });
   assert.equal(limite.isError, true);
-  assert.match(limite.content[0].text, /invalid `limite`/);
+  assert.match(limite.content[0].text, /^parameter_invalid: invalid `limite`/);
   const espera = await c.callTool({ name: 't3_aguardar_thread', arguments: { threadId: 't-llm', timeoutMs: 100 } });
   assert.equal(espera.isError, true);
-  assert.match(espera.content[0].text, /`environment` is required/);
+  assert.match(espera.content[0].text, /^parameter_required: `environment` is required/);
 });
 
 test('leitura: cursor de uma chamada antiga continua na chamada nova', async () => {
@@ -147,6 +147,11 @@ test('config de escrita: nomes em inglês aceitos; allowlists continuam recusada
   const ingles = validarConfigEscrita({ port: 7433, stateDir: '/x', channel: { organization: 'o', tunnelId: 'tunnel_abc' }, environments: { remoto: ambiente } });
   const antigo = validarConfigEscrita({ porta: 7433, estado: '/x', canal: { organization: 'o', tunnelId: 'tunnel_abc' }, ambientes: { remoto: ambiente } });
   assert.deepEqual(ingles, antigo);
+  // Mesmo valor nos dois nomes, com as propriedades em outra ordem, não é conflito.
+  const reordenada = validarConfigEscrita({ port: 7433, stateDir: '/x', channel: { organization: 'o', tunnelId: 'tunnel_abc' }, canal: { tunnelId: 'tunnel_abc', organization: 'o' },
+    environments: { remoto: ambiente }, ambientes: { remoto: { tokenFile: '/t', ssh: { host: 'remoto' }, environmentId: 'env-s' } } });
+  assert.deepEqual(reordenada, ingles);
+  assert.throws(() => validarConfigEscrita({ port: 7433, stateDir: '/x', channel: { organization: 'o', tunnelId: 'tunnel_abc' }, canal: { organization: 'o', tunnelId: 'tunnel_xyz' }, environments: { remoto: ambiente } }), /"channel" e o nome antigo "canal"/);
   assert.throws(() => validarConfigEscrita({ port: 7433, porta: 7434, stateDir: '/x', channel: { organization: 'o', tunnelId: 'tunnel_abc' }, environments: { remoto: ambiente } }), /"port" e o nome antigo "porta"/);
   for (const campo of ['allowedProjects', 'projects', 'actions']) {
     assert.throws(() => validarConfigEscrita({ port: 7433, stateDir: '/x', channel: { organization: 'o', tunnelId: 'tunnel_abc' }, environments: { remoto: { ...ambiente, [campo]: ['x'] } } }), /não é suportado/);

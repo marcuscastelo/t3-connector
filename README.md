@@ -348,9 +348,10 @@ working; both spellings with different values are refused at start-up.
 
 Write results carry `environment: {alias, environmentId}`. Routing errors:
 `environment_required`, `environment_unknown`, `environment_not_in_lease`,
-`environment_unavailable` (nothing was sent), `gate_unavailable` and `thread_not_found`. Parameter errors, in both
-connectors: `parameter_conflict` (an English name and its deprecated alias with different
-values), `parameter_invalid` (invalid value in a deprecated alias) and `parameter_required`.
+`environment_unavailable` (nothing was sent), `gate_unavailable` and `thread_not_found`.
+Parameter errors, in both connectors, start the error text with the code: `parameter_conflict` (an English name and
+its deprecated alias with different values), `parameter_invalid` (invalid value in a
+deprecated alias) and `parameter_required`.
 
 ### `thread.send` timing contract
 

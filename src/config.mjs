@@ -25,11 +25,16 @@ export const expandir = (p) => (p.startsWith('~/') ? path.join(homedir(), p.slic
 
 export class ErroConfig extends Error {}
 
+/** JSON com as chaves dos objetos em ordem: a ordem das propriedades não muda o valor. */
+const canonico = (v) => JSON.stringify(v, (_, x) => (x && typeof x === 'object' && !Array.isArray(x)
+  ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]]))
+  : x));
+
 /** Valor de `ingles` ou do nome antigo `legado`; os dois com valores diferentes são erro. */
 export function campoConfig(obj, ingles, legado, falha, onde = '') {
   const novo = obj?.[ingles];
   const antigo = obj?.[legado];
-  if (novo !== undefined && antigo !== undefined && JSON.stringify(novo) !== JSON.stringify(antigo)) {
+  if (novo !== undefined && antigo !== undefined && canonico(novo) !== canonico(antigo)) {
     falha(`${onde}"${ingles}" e o nome antigo "${legado}" têm valores diferentes; use só "${ingles}"`);
   }
   return novo ?? antigo;

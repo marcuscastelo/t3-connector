@@ -60,7 +60,8 @@ function resposta(dados) {
 }
 
 function erro(e) {
-  const mensagem = e instanceof ForaDoEscopo || e instanceof ErroT3 || e instanceof Cancelada || e instanceof CursorInvalido || e instanceof EntradaInvalida || e instanceof ParametroInvalido
+  const mensagem = e instanceof ParametroInvalido ? `${e.codigo}: ${e.message}`
+    : e instanceof ForaDoEscopo || e instanceof ErroT3 || e instanceof Cancelada || e instanceof CursorInvalido || e instanceof EntradaInvalida
     ? e.message
     : `failed to query T3: ${e?.message ?? e}`;
   return { content: [{ type: 'text', text: mensagem }], isError: true };

@@ -33,7 +33,9 @@ Constraints found in the code (SDK 1.32.0, Zod 4):
    object lets extra keys through and `src/parametros.mjs` maps them to the English name.
    The alias value is validated with the same schema as the English field.
 3. **Both names with different values fail** with `parameter_conflict`; equal values are
-   accepted. Enum values follow the name: the English name takes English values only, and
+   accepted. An invalid value is reported first: an invalid English value fails the SDK
+   validation (`-32602`), an invalid alias value fails with `parameter_invalid`. Read and
+   write errors start with the code (`parameter_conflict: …`). Enum values follow the name: the English name takes English values only, and
    the legacy name takes its legacy values only (`estado: "rodando"` or
    `state: "running"`, never `state: "rodando"`).
 4. **Configuration keys are English** in both config files, with the previous keys
