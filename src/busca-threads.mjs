@@ -47,19 +47,21 @@ function falhaSanitizada(e) {
   return { codigo: 'falha', motivo: 'falha ao consultar o environment' };
 }
 
-function validar({ busca, threadId, correspondencia }) {
+function validar({ search: busca, threadId, match }) {
   const temBusca = busca !== undefined;
   const temId = threadId !== undefined;
-  if (temBusca === temId) throw new EntradaInvalida('informe exatamente um entre `busca` e `threadId`');
-  if (temBusca && !busca.trim()) throw new EntradaInvalida('`busca` vazia');
-  if (temId && correspondencia !== undefined) throw new EntradaInvalida('`correspondencia` só vale com `busca`; `threadId` é sempre exato');
+  if (temBusca === temId) throw new EntradaInvalida('pass exactly one of `search` and `threadId`');
+  if (temBusca && !busca.trim()) throw new EntradaInvalida('`search` is empty');
+  if (temId && match !== undefined) throw new EntradaInvalida('`match` only applies to `search`; `threadId` is always exact');
 }
 
-function criterio({ busca, threadId, correspondencia = 'parcial' }) {
+// As partes da assinatura do cursor mantêm os rótulos antigos (parcial/exata): um cursor
+// emitido antes da troca dos nomes dos parâmetros continua valendo.
+function criterio({ search: busca, threadId, match = 'partial' }) {
   if (threadId !== undefined) {
     return { casa: (t) => t.id === threadId, partes: ['threadId', threadId] };
   }
-  if (correspondencia === 'exata') {
+  if (match === 'exact') {
     const alvo = normalizar(busca);
     return { casa: (t) => normalizar(t.title) === alvo || t.id === busca, partes: ['exata', busca] };
   }
@@ -79,7 +81,7 @@ export async function buscarThreads(ambientes, args, {
 } = {}) {
   validar(args);
   const { casa, partes } = criterio(args);
-  const selecionados = (args.ambiente !== undefined ? [ambientes.resolver(args.ambiente)] : [...ambientes.registros])
+  const selecionados = (args.environment !== undefined ? [ambientes.resolver(args.environment)] : [...ambientes.registros])
     .sort((a, b) => comparador()([a.environmentId], [b.environmentId]));
 
   const total = AbortSignal.timeout(prazoTotalMs);
@@ -135,11 +137,11 @@ export async function buscarThreads(ambientes, args, {
   const comparar = comparador();
   const itens = sucesso.flatMap((x) => x.threads).sort((a, b) => comparar(chave(a), chave(b)));
 
-  const filtro = args.ambiente !== undefined ? selecionados[0].environmentId : null;
+  const filtro = args.environment !== undefined ? selecionados[0].environmentId : null;
   const consulta = assinatura(['t3_buscar_threads', ...partes, filtro, selecionados.map((r) => r.environmentId), sucesso.map((x) => x.ambiente.environmentId)]);
   let pagina;
   try {
-    pagina = paginar({ itens, consulta, cursor: args.cursor, limite: args.limite ?? 20, chave, comparar });
+    pagina = paginar({ itens, consulta, cursor: args.cursor, limite: args.limit ?? 20, chave, comparar });
   } catch (e) {
     // Mesma consulta com outra cobertura: diz por que o cursor deixou de valer.
     if (e instanceof CursorInvalido && args.cursor && mesmaConsultaOutraCobertura(args.cursor, consulta)) throw new CoberturaMudou();
@@ -148,7 +150,7 @@ export async function buscarThreads(ambientes, args, {
 
   return {
     total: itens.length,
-    ...(args.busca !== undefined ? { busca: args.busca, correspondencia: args.correspondencia ?? 'parcial' } : { threadId: args.threadId }),
+    ...(args.search !== undefined ? { busca: args.search, correspondencia: args.match === 'exact' ? 'exata' : 'parcial' } : { threadId: args.threadId }),
     retornadas: pagina.pagina.length,
     truncado: pagina.truncado,
     completa: falhasAmbientes.length === 0,

@@ -16,7 +16,8 @@ environment.
    (`src/escrita`, `bin/t3-connector-write.mjs`, `web/`). They keep their own process,
    token, tunnel and client plugin. The read server stays lease-free and has no mutating
    tools; losing or revoking one does not affect the other.
-2. **`ambiente` is required** on every write tool, guarded read and reconcile (alias or
+2. **`environment` is required** (formerly `ambiente`, see
+   [ADR 0004](0004-english-contract.md)) on every write tool, guarded read and reconcile (alias or
    environmentId). Writes have no default environment. Missing →
    `ambiente_obrigatorio`; unknown → `ambiente_desconhecido`. There is never a fallback.
 3. **Lease scope v2:** `{scopeVersion: 2, runtimeMode, environments: [grant]}`, one grant
@@ -52,7 +53,7 @@ environment.
 - A refusal before sending returns the reason (`thread_not_found`, `scope_denied`,
   `ambiente_*`, `workspace_*`); after sending without an answer it returns
   `reconciliation_required` and the lease closes, as before.
-- The new journal lives in the `estado` directory of the write config. The prototype
+- The new journal lives in the `stateDir` (formerly `estado`) directory of the write config. The prototype
   journal is not migrated: its keys included the boot, so they no longer deduplicated
   across restarts.
 - Upgrading requires restarting the gate (in-memory lease), a new passkey approval, and

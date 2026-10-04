@@ -70,11 +70,11 @@ test('prazo do chamador vira erro "prazo", não "indisponivel"', async () => {
 test('config: exige environmentId, um transporte, token e ACL não vazia por environment', () => {
   const base = { environmentId: 'e1', url: 'http://127.0.0.1:3773', tokenFile: '~/t', projetosPermitidos: ['p'] };
   assert.equal(validarConfig({ ambientes: { local: base } }).padrao, 'local');
-  assert.throws(() => validarConfig({ ambientes: { local: { ...base, projetosPermitidos: [] } } }), /projetosPermitidos vazio/);
+  assert.throws(() => validarConfig({ ambientes: { local: { ...base, projetosPermitidos: [] } } }), /allowedProjects vazio/);
   assert.throws(() => validarConfig({ ambientes: { local: { ...base, environmentId: undefined } } }), /environmentId/);
   assert.throws(() => validarConfig({ ambientes: { local: { ...base, ssh: { host: 'remoto' } } } }), /exatamente um/);
   assert.throws(() => validarConfig({ ambientes: { local: { ...base, url: 'http://remoto.example.com:3773' } } }), /loopback/);
-  assert.throws(() => validarConfig({ padrao: 'inexistente', ambientes: { local: base } }), /padrao "inexistente"/);
+  assert.throws(() => validarConfig({ padrao: 'inexistente', ambientes: { local: base } }), /default "inexistente"/);
   assert.throws(() => validarConfig({ ambientes: { a: base, b: base } }), /environmentId repetido/);
 });
 

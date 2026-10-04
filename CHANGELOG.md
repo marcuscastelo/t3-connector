@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Tool parameters and configuration keys are now English: `environment`, `search`,
+  `limit`, `state` (values `running`, `needs_intervention`, `completed`, `failed`,
+  `cancelled`, `no_run`, `unknown`), `includeNoRun`, `match` (`partial`, `exact`),
+  `maxCharacters`, `includeLatestResponse`, `check`; config keys `default`,
+  `environments`, `allowedProjects`, `ssh.remotePort`, `port`, `stateDir`, `channel`.
+  `tools/list` advertises only the English names. The previous Portuguese names and
+  values remain accepted as deprecated aliases, so existing calls and config files keep
+  working; both spellings with different values fail with `parameter_conflict` (config:
+  refused at start-up). New error codes `parameter_conflict`, `parameter_invalid` and
+  `parameter_required`. Tool names, response fields, error codes and the private
+  bridge-to-gate relay are unchanged. Migration table in
+  [ADR 0004](docs/adr/0004-english-contract.md).
+
 - `t3_thread.pedidosPendentes` now exposes request IDs, public response capability,
   full user-input questions/options/field constraints, and approval prompts/provider
   decisions. Exact request-ID joins and field allowlists exclude native/session details

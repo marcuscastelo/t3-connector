@@ -16,11 +16,11 @@ test('ferramentas expostas são só as de leitura, marcadas readOnly', async () 
   assert.ok(tools.every((t) => t.annotations?.readOnlyHint === true && t.annotations?.destructiveHint === false));
 });
 
-test('a espera exige ambiente e timeoutMs com teto de 5 s', async () => {
+test('a espera exige environment e timeoutMs com teto de 5 s', async () => {
   const c = await conectarMcp(ambientesFalsos());
   const { tools } = await c.listTools();
   const espera = tools.find((t) => t.name === 't3_aguardar_thread').inputSchema;
-  assert.deepEqual(espera.required.sort(), ['ambiente', 'threadId', 'timeoutMs']);
+  assert.deepEqual(espera.required.sort(), ['environment', 'threadId', 'timeoutMs']);
   assert.equal(espera.properties.timeoutMs.maximum, 5000);
   const r = await c.callTool({ name: 't3_aguardar_thread', arguments: { ambiente: 'remoto', threadId: 't-llm', timeoutMs: 60000 } });
   assert.equal(r.isError, true);

@@ -33,7 +33,7 @@ Facts gathered (upstream T3 Code commit `8ed276c246b6`, MCP SDK 1.32.0, tunnel-c
 ## Decision
 
 - Tool `t3_aguardar_thread` on top of `orchestration.subscribeThread`.
-- `ambiente` and `timeoutMs` are required. `timeoutMs` ranges from 1 to 5,000 ms; for
+- `environment` (formerly `ambiente`, see [ADR 0004](0004-english-contract.md)) and `timeoutMs` are required. `timeoutMs` ranges from 1 to 5,000 ms; for
   voice, 1,000 to 2,000 ms.
 - The deadline covers the whole call: connection, authorization, WS ticket, snapshot and
   events. It is not a timer for the waiting phase only.

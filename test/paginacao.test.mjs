@@ -46,15 +46,16 @@ test('t3_threads sem parâmetros novos mantém lista e total, e diz que não tru
   assert.equal('busca' in r, false);
 });
 
-test('schema de t3_threads e t3_projetos só ganhou campos opcionais', async () => {
+test('schema de t3_threads e t3_projetos: parâmetros em inglês, todos opcionais', async () => {
   const c = await conectarMcp(ambientesFalsos());
   const { tools } = await c.listTools();
   const threads = tools.find((t) => t.name === 't3_threads').inputSchema;
-  for (const campo of ['ambiente', 'projectId', 'estado', 'incluirSemExecucao', 'limite', 'busca', 'cursor']) assert.ok(campo in threads.properties, campo);
+  assert.deepEqual(Object.keys(threads.properties).sort(), ['cursor', 'environment', 'includeNoRun', 'limit', 'projectId', 'search', 'state']);
   assert.deepEqual(threads.required ?? [], []);
-  assert.equal(threads.properties.limite.maximum, 50);
+  assert.equal(threads.properties.limit.maximum, 50);
+  assert.deepEqual(threads.properties.state.enum, ['running', 'needs_intervention', 'completed', 'failed', 'cancelled', 'no_run', 'unknown']);
   const projetos = tools.find((t) => t.name === 't3_projetos').inputSchema;
-  for (const campo of ['ambiente', 'busca', 'limite', 'cursor']) assert.ok(campo in projetos.properties, campo);
+  assert.deepEqual(Object.keys(projetos.properties).sort(), ['cursor', 'environment', 'limit', 'search']);
   assert.deepEqual(projetos.required ?? [], []);
 });
 

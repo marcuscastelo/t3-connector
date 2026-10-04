@@ -137,7 +137,7 @@ test('config de escrita: destino lógico estável, ações válidas e sem enviro
  for(const campo of ['projetos','acoes'])assert.throws(()=>validarConfigEscrita({...base,ambientes:{remoto:{...base.ambientes.remoto,[campo]:['x']}}}),/não é suportado/);
  assert.equal(c.ambientes[0].acoes.length,42);
  assert.throws(()=>validarConfigEscrita({...base,ambientes:{remoto:{...base.ambientes.remoto,url:'http://127.0.0.1:1'}}}),/exatamente um/);
- assert.throws(()=>validarConfigEscrita({...base,canal:{organization:'x',tunnelId:'nope'}}),/canal/);
+ assert.throws(()=>validarConfigEscrita({...base,canal:{organization:'x',tunnelId:'nope'}}),/channel/);
 });
 
 test('config de escrita: rótulos da passkey são opcionais e validados',()=>{

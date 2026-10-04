@@ -17,7 +17,7 @@ Of particular interest:
 
 - writes without a valid lease, a lease widened beyond the scope approved with the
   passkey, or reused after expiry/revocation;
-- reads outside `projetosPermitidos` (read connector) or outside the lease grant (guarded
+- reads outside `allowedProjects` (read connector) or outside the lease grant (guarded
   reads of the write connector);
 - acceptance of a token with scopes other than the required ones (`orchestration:read`
   for reads; `orchestration:read` + `orchestration:operate` for writes);

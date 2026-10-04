@@ -37,7 +37,7 @@ const esperar = (entrada, opcoes = {}, { dados, chamadas } = {}) =>
 test('conclusão normal no Remoto: retorna no evento terminal, sem esperar o prazo', async () => {
   const reg = {};
   const r = await esperar(
-    { ambiente: 'remoto', threadId: 't-comum', timeoutMs: 5000 },
+    { environment: 'remoto', threadId: 't-comum', timeoutMs: 5000 },
     { assinarImpl: assinaturaFalsa([[5, [snapshot(), { kind: 'synchronized' }]], [40, [evento('run.updated', { ...RUN, status: 'completed' })]]], reg) },
   );
   assert.deepEqual(r.ambiente, { alias: 'remoto', environmentId: REMOTO.environmentId });
@@ -57,7 +57,7 @@ test('conclusão normal no Remoto: retorna no evento terminal, sem esperar o pra
 test('timeout: devolve o estado observado com timedOut, sem erro', async () => {
   const reg = {};
   const r = await esperar(
-    { ambiente: 'remoto', threadId: 't-comum', timeoutMs: 150 },
+    { environment: 'remoto', threadId: 't-comum', timeoutMs: 150 },
     { assinarImpl: assinaturaFalsa([[5, [snapshot(), { kind: 'synchronized' }]]], reg) },
   );
   assert.equal(r.timedOut, true);
@@ -72,7 +72,7 @@ test('timeout: devolve o estado observado com timedOut, sem erro', async () => {
 
 test('timeoutMs acima do teto é limitado a 5 s', async () => {
   const r = await esperar(
-    { ambiente: 'remoto', threadId: 't-comum', timeoutMs: 600000 },
+    { environment: 'remoto', threadId: 't-comum', timeoutMs: 600000 },
     { assinarImpl: assinaturaFalsa([[5, [snapshot({ runs: [{ ...RUN, status: 'completed' }] })]]]) },
   );
   assert.equal(r.timeoutMs, 5000);
@@ -81,7 +81,7 @@ test('timeoutMs acima do teto é limitado a 5 s', async () => {
 for (const [status, estado] of [['failed', 'falhou'], ['cancelled', 'cancelada'], ['interrupted', 'cancelada'], ['rolled_back', 'cancelada']]) {
   test(`run que termina em ${status} durante a espera vira ${estado}`, async () => {
     const r = await esperar(
-      { ambiente: 'remoto', threadId: 't-comum', timeoutMs: 2000 },
+      { environment: 'remoto', threadId: 't-comum', timeoutMs: 2000 },
       { assinarImpl: assinaturaFalsa([[5, [snapshot()]], [30, [evento('run.updated', { ...RUN, status })]]]) },
     );
     assert.equal(r.estado, estado);
@@ -92,7 +92,7 @@ for (const [status, estado] of [['failed', 'falhou'], ['cancelled', 'cancelada']
 
 test('pedido de aprovação durante a espera retorna como intervenção', async () => {
   const r = await esperar(
-    { ambiente: 'remoto', threadId: 't-comum', timeoutMs: 2000 },
+    { environment: 'remoto', threadId: 't-comum', timeoutMs: 2000 },
     { assinarImpl: assinaturaFalsa([[5, [snapshot()]], [30, [evento('run.updated', { ...RUN, status: 'waiting' }), evento('runtime-request.updated', pedido({ id: 'req-7', kind: 'user_input' }), 12)]]]) },
   );
   assert.equal(r.estado, 'precisa_intervencao');
@@ -104,9 +104,9 @@ test('pedido de aprovação durante a espera retorna como intervenção', async 
 test('run já terminal ou pedido pendente na shell retornam na hora, sem abrir WS', async () => {
   const chamadas = [];
   const nunca = async () => { throw new Error('não deveria abrir WS'); };
-  const llm = await esperar({ ambiente: 'remoto', threadId: 't-llm', timeoutMs: 2000 }, { assinarImpl: nunca }, { chamadas });
+  const llm = await esperar({ environment: 'remoto', threadId: 't-llm', timeoutMs: 2000 }, { assinarImpl: nunca }, { chamadas });
   assert.deepEqual([llm.estado, llm.terminal, llm.timedOut, llm.runId], ['cancelada', true, false, 'run-s3']);
-  const pol = await esperar({ ambiente: 'local', threadId: 't-local', timeoutMs: 2000 }, { assinarImpl: nunca }, { chamadas });
+  const pol = await esperar({ environment: 'local', threadId: 't-local', timeoutMs: 2000 }, { assinarImpl: nunca }, { chamadas });
   assert.equal(pol.estado, 'precisa_intervencao');
   assert.equal(pol.pedidoPendente.runtimeRequestId, 'req-1');
   assert.ok(!chamadas.some((c) => c.endsWith(':ticket')));
@@ -115,13 +115,13 @@ test('run já terminal ou pedido pendente na shell retornam na hora, sem abrir W
 test('thread sem run retorna sem_execucao na hora, sem esperar um run futuro', async () => {
   const d = dadosPadrao();
   d.local.shell.threads.push(thread({ id: 't-idle', projectId: 'proj-app-local', status: 'idle', latestRunId: null }));
-  const r = await esperar({ ambiente: 'local', threadId: 't-idle', timeoutMs: 2000 }, { assinarImpl: async () => { throw new Error('não'); } }, { dados: d });
+  const r = await esperar({ environment: 'local', threadId: 't-idle', timeoutMs: 2000 }, { assinarImpl: async () => { throw new Error('não'); } }, { dados: d });
   assert.deepEqual([r.estado, r.runId, r.timedOut, r.motivoRetorno], ['sem_execucao', null, false, 'sem_execucao']);
 });
 
 test('última resposta vem do run acompanhado, do snapshot e dos eventos', async () => {
   const r = await esperar(
-    { ambiente: 'remoto', threadId: 't-comum', timeoutMs: 2000, incluirUltimaResposta: true },
+    { environment: 'remoto', threadId: 't-comum', timeoutMs: 2000, includeLatestResponse: true },
     { assinarImpl: assinaturaFalsa([
       [5, [snapshot({ messages: [mensagem({ id: 'm-velha', runId: 'run-velho', text: 'De outro run.' })] })]],
       [20, [evento('message.updated', mensagem({ id: 'm-nova', runId: 'run-s1', text: 'Terminei.' })), evento('run.updated', { ...RUN, status: 'completed' }, 12)]],
@@ -135,7 +135,7 @@ test('thread inexistente, de projeto não autorizado ou de outro environment: re
   const chamadas = [];
   for (const [ambiente, threadId] of [['remoto', 'nao-existe'], ['local', 't-alheia'], ['local', 't-llm']]) {
     await assert.rejects(
-      esperar({ ambiente, threadId, timeoutMs: 2000 }, { assinarImpl: async () => { throw new Error('não'); } }, { chamadas }),
+      esperar({ environment: ambiente, threadId, timeoutMs: 2000 }, { assinarImpl: async () => { throw new Error('não'); } }, { chamadas }),
       (e) => e instanceof ForaDoEscopo && e.message.includes(`ambiente ${ambiente}`),
     );
   }
@@ -144,7 +144,7 @@ test('thread inexistente, de projeto não autorizado ou de outro environment: re
 
 test('runId inexistente é erro, não timeout', async () => {
   await assert.rejects(
-    esperar({ ambiente: 'remoto', threadId: 't-comum', timeoutMs: 2000, runId: 'run-x' }, { assinarImpl: assinaturaFalsa([[5, [snapshot()]]]) }),
+    esperar({ environment: 'remoto', threadId: 't-comum', timeoutMs: 2000, runId: 'run-x' }, { assinarImpl: assinaturaFalsa([[5, [snapshot()]]]) }),
     /run run-x não encontrado/,
   );
 });
@@ -155,7 +155,7 @@ test('cancelamento pelo cliente encerra a subscription e não vira resultado', a
   setTimeout(() => ac.abort(), 40);
   const inicio = Date.now();
   await assert.rejects(
-    esperar({ ambiente: 'remoto', threadId: 't-comum', timeoutMs: 5000 }, { signal: ac.signal, assinarImpl: assinaturaFalsa([[5, [snapshot()]]], reg) }),
+    esperar({ environment: 'remoto', threadId: 't-comum', timeoutMs: 5000 }, { signal: ac.signal, assinarImpl: assinaturaFalsa([[5, [snapshot()]]], reg) }),
     (e) => e instanceof Cancelada,
   );
   assert.ok(Date.now() - inicio < 1000);
@@ -164,7 +164,7 @@ test('cancelamento pelo cliente encerra a subscription e não vira resultado', a
 
 test('WS que cai antes do prazo é erro de transporte, não estado inventado', async () => {
   await assert.rejects(
-    esperar({ ambiente: 'remoto', threadId: 't-comum', timeoutMs: 2000 }, { assinarImpl: assinaturaFalsa([[5, [snapshot()]], [20, 'cair']]) }),
+    esperar({ environment: 'remoto', threadId: 't-comum', timeoutMs: 2000 }, { assinarImpl: assinaturaFalsa([[5, [snapshot()]], [20, 'cair']]) }),
     /fechou durante a espera/,
   );
 });
@@ -174,7 +174,7 @@ test('environment que não responde no prazo: erro sem estado observado', async 
   const r = ambientes.resolver('remoto');
   r.transporte.baseUrl = () => new Promise(() => {});
   await assert.rejects(
-    aguardarThread(ambientes, { ambiente: 'remoto', threadId: 't-comum', timeoutMs: 100 }),
+    aguardarThread(ambientes, { environment: 'remoto', threadId: 't-comum', timeoutMs: 100 }),
     /não respondeu em 100 ms; nenhum estado observado/,
   );
 });

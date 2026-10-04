@@ -31,7 +31,7 @@ const ultimoRun = (runs) => [...(runs ?? [])].sort((a, b) => b.ordinal - a.ordin
 
 /**
  * @param ambientes registro de criarAmbientes
- * @param entrada {ambiente, threadId, timeoutMs, runId?, incluirUltimaResposta?, maxCaracteres?}
+ * @param entrada {environment, threadId, timeoutMs, runId?, includeLatestResponse?, maxCharacters?}
  * @param signal cancelamento vindo do cliente MCP
  */
 export async function aguardarThread(ambientes, entrada, opcoes = {}) {
@@ -47,10 +47,10 @@ export async function aguardarThread(ambientes, entrada, opcoes = {}) {
 }
 
 async function aguardar(ambientes, entrada, { signal, agora = Date.now, assinarImpl = assinar }, timeoutMs, prazo) {
-  const { threadId, runId: runPedido = null, incluirUltimaResposta = false, maxCaracteres = 800 } = entrada;
+  const { threadId, runId: runPedido = null, includeLatestResponse: incluirUltimaResposta = false, maxCharacters: maxCaracteres = 800 } = entrada;
   const inicio = agora();
   const sinal = signal ? AbortSignal.any([signal, prazo]) : prazo;
-  const r = ambientes.resolver(entrada.ambiente);
+  const r = ambientes.resolver(entrada.environment);
 
   const obs = { thread: null, run: null, pedido: null, mensagens: null, observadoEm: null };
   const resultado = (motivoRetorno, timedOut) => {

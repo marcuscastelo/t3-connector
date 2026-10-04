@@ -71,9 +71,9 @@ try {
   const token = path.join(tmp, 'local.token');
   writeFileSync(token, 'fictitious-token\n', { mode: 0o600 });
   const config = path.join(tmp, 'config.json');
-  writeFileSync(config, JSON.stringify({ padrao: 'local', ambientes: { local: {
+  writeFileSync(config, JSON.stringify({ default: 'local', environments: { local: {
     environmentId: '00000000-0000-4000-8000-000000000001', url: 'http://127.0.0.1:9', tokenFile: token,
-    projetosPermitidos: ['00000000-0000-4000-8000-0000000000a1'] } } }));
+    allowedProjects: ['00000000-0000-4000-8000-0000000000a1'] } } }));
   const env = { ...process.env, T3_CONNECTOR_CONFIG: config, HOME: tmp };
   const listed = JSON.parse(execFileSync(path.join(binDir, 't3-connector'), ['environments'], { encoding: 'utf8', env }));
   if (listed.padrao !== 'local' || listed.ambientes?.[0]?.disponivel !== false) fail('`t3-connector environments` did not list the unreachable test environment');
@@ -91,9 +91,11 @@ try {
   const expected = ['t3_aguardar_thread', 't3_ambientes', 't3_atencao', 't3_buscar_threads', 't3_mensagens', 't3_projetos', 't3_thread', 't3_threads'];
   if (JSON.stringify(names) !== JSON.stringify(expected)) fail(`tools: ${names.join(', ')}`);
   if (tools.some((t) => t.annotations?.readOnlyHint !== true)) fail('read tool without readOnlyHint');
-  // Public descriptions are in English; tool and parameter names are the stable API and stay as they are.
+  // Public descriptions and parameter names are in English (legacy names are hidden aliases); tool names are unchanged.
   const portuguese = /\b(não|para|com|uma|ou|somente|leitura|padrão|obrigatório)\b/i;
   for (const t of tools) {
+    const legacy = Object.keys(t.inputSchema?.properties ?? {}).filter((k) => ['ambiente', 'busca', 'limite', 'estado', 'incluirSemExecucao', 'correspondencia', 'maxCaracteres', 'incluirUltimaResposta', 'verificar'].includes(k));
+    if (legacy.length) fail(`legacy parameter names listed in ${t.name}: ${legacy.join(', ')}`);
     const texts = [t.title, t.description, ...Object.values(t.inputSchema?.properties ?? {}).map((p) => p.description)];
     for (const text of texts.filter(Boolean)) if (portuguese.test(text)) fail(`non-English description in ${t.name}: ${text.slice(0, 60)}`);
   }

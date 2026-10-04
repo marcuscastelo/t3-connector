@@ -206,7 +206,7 @@ test('cancelamento do cliente encerra a busca em vez de virar falha parcial', as
   d.remoto.shell = nunca;
   const ambientes = ambientesFalsos(d);
   const controle = new AbortController();
-  const busca = buscarThreads(ambientes, { busca: 'comum' }, { signal: controle.signal, resumir: resumoDaThread });
+  const busca = buscarThreads(ambientes, { search: 'comum' }, { signal: controle.signal, resumir: resumoDaThread });
   setTimeout(() => controle.abort(), 20);
   await assert.rejects(busca, Cancelada);
 });
@@ -266,9 +266,9 @@ test('ponte de escrita não ganhou a busca e ações continuam exigindo ambiente
   try {
     const { tools } = await c.listTools();
     assert.equal(tools.some((t) => t.name === 't3_buscar_threads'), false);
-    const comAmbiente = tools.filter((t) => t.inputSchema?.properties?.ambiente);
+    const comAmbiente = tools.filter((t) => t.inputSchema?.properties?.environment);
     assert.ok(comAmbiente.length > 0);
-    for (const t of comAmbiente) assert.ok(t.inputSchema.required?.includes('ambiente'), t.name);
+    for (const t of comAmbiente) assert.ok(t.inputSchema.required?.includes('environment'), t.name);
   } finally {
     await c.close();
     await servidor.close();
