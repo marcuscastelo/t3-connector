@@ -4,8 +4,6 @@
 //   normal         forward and relay
 //   drop-response  forward, wait for the full upstream response, then exit(1) without replying
 //                  (the request reached the server; the response is lost)
-//   die-on-request forward the request, then exit(1) right away (the client sees the connection drop
-//                  while the server keeps processing)
 // Usage: node ingress-proxy.mjs <listenPort> <upstreamPort> <modeFile>
 import { createServer, request } from 'node:http';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -31,6 +29,5 @@ const server = createServer((req, res) => {
   });
   up.on('error', () => { if (!res.headersSent) { res.writeHead(502); res.end(); } });
   req.pipe(up);
-  if (mode === 'die-on-request') req.on('end', () => setTimeout(() => { process.stderr.write('ingress: died during request\n'); process.exit(1); }, 20));
 });
 server.listen(Number(listenPort), '127.0.0.1', () => process.stderr.write(`ingress: listening ${listenPort} -> ${upstreamPort}\n`));

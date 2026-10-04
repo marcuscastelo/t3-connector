@@ -129,12 +129,18 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     let record;
     try { record = journal.get(key); } catch { gate.close(); fail('journal_failed'); }
     if (!record || record.target || record.state !== 'rejected') return null;
-    const status = gate.status(principal.sid);
-    if (!status.active || status.scope.caller !== caller) fail('lease_closed');
-    const grant = grantDoAmbiente(status.scope, { environmentId: c.registro.environmentId, destination: c.registro.destination });
-    if (!grant) fail('ambiente_fora_da_lease');
-    if (!grant.actions.includes(record.action)) fail('scope_denied');
-    gate.audit({ event: 'reconciled_rejected', operationId: redact(operationId), sid: redact(principal.sid), action: record.action });
+    const authorize = () => {
+      const status = gate.status(principal.sid);
+      if (!status.active || status.scope.caller !== caller) fail('lease_closed');
+      const grant = grantDoAmbiente(status.scope, { environmentId: c.registro.environmentId, destination: c.registro.destination });
+      if (!grant) fail('ambiente_fora_da_lease');
+      if (!grant.actions.includes(record.action)) fail('scope_denied');
+    };
+    authorize();
+    // The audit is journal I/O: a failure fails closed like any journal failure.
+    try { gate.audit({ event: 'reconciled_rejected', operationId: redact(operationId), sid: redact(principal.sid), action: record.action }); } catch { gate.close(); fail('journal_failed'); }
+    // The audit sink may be reentrant (e.g. end the session); answer only if authority survived it.
+    authorize();
     return { operationId, state: 'rejected', observation: null, sent: false };
   }
 

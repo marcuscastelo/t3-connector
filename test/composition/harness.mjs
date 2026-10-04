@@ -32,8 +32,9 @@ const results = [];
 const check = (name, ok, detail = '') => { results.push({ name, ok }); log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// Doubled T3 backend: one environment, one project, one thread. Counts every outbound invoke.
-let failNextAfterSend = false;
+// Doubled T3 backend: one environment, one project, one thread. Counts every outbound invoke. In
+// scenario C the next invoke is held on a barrier (sent, no acknowledgement) until released.
+let holdNext = null;
 const sent = [];
 const conexao = {
   registro: { alias: 'local', environmentId: 'env-p', destination: 't3://env-p', acoes: ['thread.send', 'thread.settle'] },
@@ -43,7 +44,7 @@ const conexao = {
     projectForThread: async id => (id === 'thread' ? 'app' : undefined),
     invoke: async (method, payload) => {
       sent.push({ method, commandId: payload.commandId });
-      if (failNextAfterSend) { failNextAfterSend = false; throw new Error('socket closed after write'); }
+      if (holdNext) { const h = holdNext; holdNext = null; h.reached(); await h.released; throw new Error('socket closed after write'); }
       return { sequence: sent.length };
     },
     receipt: r => ({ sequence: r.sequence }),
@@ -64,7 +65,10 @@ const c = await startConnector({
 });
 
 let starts = 0, current = null;
-const ready = () => new Promise(res => { const t = setInterval(async () => { try { const r = await http('GET', `${c.issuer}/.well-known/oauth-protected-resource/mcp`); if (r.status === 200) { clearInterval(t); res(); } } catch {} }, 100); });
+const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout: ${what}`)), ms))]);
+const until = async (cond, ms, what) => { const end = Date.now() + ms; while (!(await cond())) { if (Date.now() > end) throw new Error(`timeout: ${what}`); await sleep(50); } };
+// Readiness: sequential probes, each bounded, overall deadline.
+const ready = (ms = 10_000) => until(async () => { try { return (await withTimeout(http('GET', `${c.issuer}/.well-known/oauth-protected-resource/mcp`), 1000, 'probe')).status === 200; } catch { return false; } }, ms, 'ingress ready');
 const supervisor = supervisionarTransporte({
   iniciar: () => spawn(process.execPath, [join(here, 'ingress-proxy.mjs'), String(proxyPort), String(rsPort), modeFile], { stdio: ['ignore', 'ignore', 'pipe'] }),
   atrasoInicialMs: 500, atrasoMaximoMs: 4000, estabilidadeMs: 2000,
@@ -72,35 +76,37 @@ const supervisor = supervisionarTransporte({
   aoEncerrar: (f, s) => log(`supervisor: ingress exited (code ${s.codigo}, signal ${s.sinal ?? 'none'}, error ${s.erro ?? 'none'})`),
   aoFalhar: ms => log(`supervisor: relaunch in ${ms} ms`),
 });
-await ready();
 
+const issued = [];
+const keep = t => { if (t?.access_token) issued.push(t.access_token, t.refresh_token); return t; };
 const sid = at => c.connector.tokens.resolveAccess(at).sid;
 const sessions = () => c.connector.authority.list();
 const toolText = r => r.data?.result?.content?.[0]?.text ?? '';
 const send = (at, id, text = 'composition') => c.callTool(at, writeToolName('thread.send'), { environment: 'local', operationId: id, input: { threadId: 'thread', text, clientRequestId: id, delivery: 'start_immediately' } });
 const reconcile = (at, id) => c.callTool(at, 't3_reconciliar_escrita', { environment: 'local', operationId: id });
-const outage = async () => { const before = starts; current.kill('SIGKILL'); while (starts === before) await sleep(50); await ready(); };
 
 try {
   log(`dir ${dir}; supervisor sha256:${supervisorSha}; ingress :${proxyPort} -> RS :${rsPort}`);
+  await ready();
 
   // A — ingress outage between calls: supervisor relaunches the ingress; refresh continues the same
   // session; refresh does not renew idle; no new authority.
-  let tok = (await c.signIn()).tokens;
+  let tok = keep((await c.signIn()).tokens);
   const sidA = sid(tok.access_token);
   check('A0 sign-in through supervised ingress', !!sidA);
-  check('A1 read through ingress', !toolText(await c.callTool(tok.access_token, 't3_ambientes', { check: false })).includes('session_expired'));
+  const a1 = await withTimeout(c.callTool(tok.access_token, 't3_ambientes', { check: false }), 10_000, 'A1');
+  check('A1 read through ingress', a1.status === 200 && !a1.data.error && !a1.data.result?.isError && /"environments"/.test(toolText(a1)), `status ${a1.status}`);
   c.advance(10 * 60_000);
   const killedAt = starts;
   current.kill('SIGKILL');
   let refused = false;
   try { await http('GET', `${c.issuer}/.well-known/oauth-protected-resource/mcp`); } catch { refused = true; }
   check('A2 ingress down is observable by the client', refused);
-  while (starts === killedAt) await sleep(50); await ready();
+  await until(() => starts > killedAt, 10_000, 'relaunch'); await ready();
   check('A3 supervisor relaunched the ingress (same port, same issuer)', starts === killedAt + 1);
   const r = await c.refresh(tok.refresh_token);
   check('A4 refresh after the outage succeeds', r.status === 200, `status ${r.status}`);
-  tok = r.data;
+  tok = keep(r.data);
   check('A5 same session after outage + refresh', sid(tok.access_token) === sidA);
   const idleAfterRefresh = sessions().find(s => s.sid === sidA)?.idleSeconds ?? -1;
   check('A6 refresh did not renew idle', idleAfterRefresh >= 600, `idle ${idleAfterRefresh}s`);
@@ -114,35 +120,43 @@ try {
   check('B1 client lost the response of op-b', lost);
   await ready();
   check('B2 backend received op-b exactly once', sent.length === 1, `sends ${sent.length}`);
-  tok = (await c.refresh(tok.refresh_token)).data;
+  tok = keep((await c.refresh(tok.refresh_token)).data);
   const recB = JSON.parse(toolText(await reconcile(tok.access_token, 'op-b')) || '{}');
   check('B3 reconcile before repeating: completed', recB.state === 'completed', JSON.stringify({ state: recB.state, found: recB.observation?.found }));
   const again = JSON.parse(toolText(await send(tok.access_token, 'op-b')) || '{}');
   check('B4 repeating op-b returns completed without a new send', again.state === 'completed' && sent.length === 1, `state ${again.state}, sends ${sent.length}`);
   check('B5 same session throughout', sid(tok.access_token) === sidA);
 
-  // C — the ingress dies while the backend write is ambiguous (sent, no acknowledgement): the
-  // operation becomes uncertain, every OAuth session ends (fail closed), nothing is resent; after a
-  // new passkey sign-in the operation is reconcilable and repeating it does not send again.
-  failNextAfterSend = true;
-  writeFileSync(modeFile, 'die-on-request');
-  try { await send(tok.access_token, 'op-c'); } catch {}
-  await sleep(300); await ready();
-  check('C1 backend received op-c once (ambiguous)', sent.length === 2, `sends ${sent.length}`);
+  // C — the backend write is outstanding (sent, no acknowledgement) when the ingress dies: the
+  // client gets no response; only then the send fails ambiguously. The operation becomes
+  // uncertain, every OAuth session ends (fail closed), nothing is resent; after a new passkey
+  // sign-in the operation is reconcilable and repeating it does not send again.
+  let reached; const reachedP = new Promise(r => { reached = r; });
+  let release; const released = new Promise(r => { release = r; });
+  holdNext = { reached, released };
+  const pendingC = withTimeout(send(tok.access_token, 'op-c'), 15_000, 'op-c client').then(x => ({ status: x.status, body: x.text }), e => ({ error: e.message }));
+  await withTimeout(reachedP, 10_000, 'op-c reached backend');
+  check('C1 backend received op-c (held: sent, not acknowledged)', sent.length === 2, `sends ${sent.length}`);
+  const beforeKill = starts;
+  current.kill('SIGKILL');
+  const clientC = await pendingC;
+  check('C2 client got no response for op-c (connection dropped while the send was outstanding)', !!clientC.error && clientC.status === undefined, clientC.error ?? `status ${clientC.status}`);
+  release();
+  await until(() => c.connector.authority.list().every(s => s.state !== 'active'), 10_000, 'fail closed');
+  await until(() => starts > beforeKill, 10_000, 'relaunch'); await ready();
   const after = await c.mcp(tok.access_token, 'tools/list');
-  check('C2 fail closed: old session refused (401)', after.status === 401);
-  check('C3 refresh of the old session refused', (await c.refresh(tok.refresh_token)).data?.error === 'invalid_grant');
-  const fresh = (await c.signIn()).tokens;
-  check('C4 new passkey sign-in creates a new session', !!fresh && sid(fresh.access_token) !== sidA);
+  check('C3 fail closed: old session refused (401)', after.status === 401);
+  check('C4 refresh of the old session refused', (await c.refresh(tok.refresh_token)).data?.error === 'invalid_grant');
+  const fresh = keep((await c.signIn()).tokens);
+  check('C5 new passkey sign-in creates a new session', !!fresh && sid(fresh.access_token) !== sidA);
   const recC = JSON.parse(toolText(await reconcile(fresh.access_token, 'op-c')) || '{}');
-  check('C5 op-c reconcilable after new sign-in: uncertain', recC.state === 'uncertain', JSON.stringify({ state: recC.state }));
-  const againC = await send(fresh.access_token, 'op-c');
-  const againCState = JSON.parse(toolText(againC) || '{}');
-  check('C6 repeating op-c does not send again', sent.length === 2 && againCState.state === 'uncertain' && againCState.reconciliationRequired === true, `sends ${sent.length}, state ${againCState.state}`);
+  check('C6 op-c reconcilable after new sign-in: uncertain', recC.state === 'uncertain', JSON.stringify({ state: recC.state }));
+  const againCState = JSON.parse(toolText(await send(fresh.access_token, 'op-c')) || '{}');
+  check('C7 repeating op-c does not send again', sent.length === 2 && againCState.state === 'uncertain' && againCState.reconciliationRequired === true, `sends ${sent.length}, state ${againCState.state}`);
 
   check('Z1 total outbound sends = 2 (op-b once, op-c once)', sent.length === 2);
-  const logText = readFileSync(logFile, 'utf8') + readFileSync(join(c.connector.stateDir, 'events.jsonl'), 'utf8');
-  check('Z2 no tokens in harness or server logs', ![tok.access_token, tok.refresh_token, fresh.access_token, fresh.refresh_token].some(v => logText.includes(v)));
+  const logs = ['harness.log', 'ingress.log'].map(f => { try { return readFileSync(join(dir, f), 'utf8'); } catch { return ''; } }).join('') + readFileSync(join(c.connector.stateDir, 'events.jsonl'), 'utf8');
+  check('Z2 none of the tokens issued during the run appear in harness, ingress or server logs', issued.length >= 6 && !issued.some(v => logs.includes(v)), `${issued.length} tokens checked`);
 } catch (e) {
   check('harness error', false, e.stack?.split('\n').slice(0, 3).join(' | '));
 } finally {

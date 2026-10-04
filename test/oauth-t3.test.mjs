@@ -4,7 +4,7 @@ import { startConnector } from './oauth-apoio.mjs';
 import { ambientesFalsos } from './apoio.mjs';
 import { memoryJournal } from './escrita-fixtures.mjs';
 import { t3Tools, parseWriteProjects } from '../src/oauth/t3-tools.mjs';
-import { SessionWriteGate, writeToolName } from '../src/oauth/session-writes.mjs';
+import { SessionWriteGate, writeToolName, sessionWrites } from '../src/oauth/session-writes.mjs';
 import { SessionAuthority } from '../src/oauth/session-authority.mjs';
 import { ACTIONS } from '../src/escrita/adapters.mjs';
 import { identidadeCanal, identidadeSessaoOAuth } from '../src/escrita/identidade.mjs';
@@ -210,4 +210,53 @@ test('lease path unchanged: Dispatcher.reconcile still refuses a targetless reco
   const record = { hash: 'h', state: 'rejected', action: 'thread.send', operationId: 'x', environmentId: 'e', destination: 't3://e' };
   const d = new Dispatcher({ gate: {}, adapter: {}, journal: { reserve: () => true, get: () => record, put() {} }, environmentId: 'e', destination: 't3://e' });
   await assert.rejects(d.reconcile(identidadeCanal({ organization: 'o', tunnelId: 'tunnel_x' }), 'lease', 'x'), /reconciliation_target_unknown/);
+});
+
+// C3 review regressions for the local rejected answer.
+function directWrites({ audit } = {}) {
+  const authority = new SessionAuthority();
+  const grants = { scopeVersion: 2, runtimeMode: 'full-access', environments: [{ alias: 'local', environmentId: 'env-p', label: 'local', destination: 't3://env-p', projects: [{ id: 'app', name: 'app', directory: '/a', workspaceRoots: ['/a'] }], actions: ['thread.send'], readProjectIds: ['app'] }] };
+  const sub = 'local:abcdefghijkl', sid = authority.create({ sub, clientId: 'c', credentialId: 'k', scope: 'connector:write', resource: 'r', grants });
+  const records = new Map(), calls = [];
+  const journal = { reserve: (k, v) => (records.has(k) ? false : (records.set(k, v), true)), get: k => records.get(k), put: (k, v) => records.set(k, v), audit: e => audit?.(e, { authority, sid }) };
+  const conexao = { registro: { alias: 'local', environmentId: 'env-p', destination: 't3://env-p', acoes: ['thread.send'] }, inventario: async () => [], adapter: { projectForThread: async () => undefined, invoke: async () => calls.push('invoke'), receipt: r => r, reconcile: async () => (calls.push('observe'), { found: false }) } };
+  const w = sessionWrites({ conexoes: [conexao], journal, authority, issuer: 'https://as.example', audit: e => journal.audit(e) });
+  return { w, authority, sid, sub, records, calls, principal: { sid, sub } };
+}
+const refuse = async d => { await assert.rejects(d.w.dispatch(d.principal, { environment: 'local', action: 'thread.send', operationId: 'op-r', input: { threadId: 'gone', text: 'x', clientRequestId: 'op-r', delivery: 'start_immediately' } }), /thread_not_found/); };
+
+test('local rejected answer: audit failure fails closed with journal_failed and changes nothing', async () => {
+  const d = directWrites({ audit: e => { if (e.event === 'reconciled_rejected') throw new Error('disk'); } });
+  await refuse(d);
+  const snapshot = JSON.stringify([...d.records]);
+  await assert.rejects(d.w.reconcile(d.principal, { environment: 'local', operationId: 'op-r' }), /journal_failed/);
+  assert.throws(() => d.authority.check(d.sid), /write_path_failure/);
+  assert.equal(JSON.stringify([...d.records]), snapshot);
+  assert.deepEqual(d.calls, []);
+});
+
+test('local rejected answer: a reentrant audit that ends the session withholds the answer', async () => {
+  const d = directWrites({ audit: (e, { authority, sid }) => { if (e.event === 'reconciled_rejected') authority.revoke(sid); } });
+  await refuse(d);
+  await assert.rejects(d.w.reconcile(d.principal, { environment: 'local', operationId: 'op-r' }), /lease_closed/);
+});
+
+test('local rejected answer: revoked session, other issuer/subject, anomalous targetless states keep existing errors', async () => {
+  const d = directWrites();
+  await refuse(d);
+  const snapshot = JSON.stringify([...d.records]);
+  assert.equal((await d.w.reconcile(d.principal, { environment: 'local', operationId: 'op-r' })).sent, false);
+  assert.equal(JSON.stringify([...d.records]), snapshot, 'reconcile does not mutate the journal');
+  // a targetless record in any state other than rejected goes to Dispatcher.reconcile (unchanged error)
+  const [key, rec] = [...d.records][0];
+  for (const state of ['preparing', 'uncertain', 'completed']) {
+    d.records.set(key, { ...rec, state });
+    await assert.rejects(d.w.reconcile(d.principal, { environment: 'local', operationId: 'op-r' }), /reconciliation_target_unknown/);
+  }
+  d.records.set(key, rec);
+  const other = sessionWrites({ conexoes: [{ registro: { alias: 'local', environmentId: 'env-p', destination: 't3://env-p', acoes: ['thread.send'] }, adapter: {} }], journal: { reserve: () => true, get: k => d.records.get(k), put() {}, audit() {} }, authority: d.authority, issuer: 'https://other.example' });
+  await assert.rejects(other.reconcile(d.principal, { environment: 'local', operationId: 'op-r' }), /operation_unknown/);
+  d.authority.revoke(d.sid);
+  await assert.rejects(d.w.reconcile(d.principal, { environment: 'local', operationId: 'op-r' }), /lease_closed/);
+  assert.deepEqual(d.calls, []);
 });
