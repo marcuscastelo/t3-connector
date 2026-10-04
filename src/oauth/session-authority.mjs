@@ -45,7 +45,7 @@ export class SessionAuthority {
   onTerminal(listener) { this.#listeners.add(listener); return () => this.#listeners.delete(listener); }
 
   // A session starts right after a verified passkey ceremony; that instant is its first activity.
-  // `grants` is the write scope frozen at consent time (environments, projects, actions); refresh
+  // `grants` is the policy frozen at consent time (environments/actions; projects only in restricted mode); refresh
   // never changes it.
   create({ sub, clientId, credentialId, scope, resource, grants = null }) {
     if (this.#killed) throw new Error('kill_switch');

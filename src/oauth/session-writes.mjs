@@ -4,21 +4,22 @@ import { grantDoAmbiente } from '../escrita/gate.mjs';
 import { grantFromInventory, escopoDosGrants } from '../escrita/scope.mjs';
 import { identidadeSessaoOAuth, exigirIdentidade } from '../escrita/identidade.mjs';
 import { resolverAmbiente } from '../escrita/config.mjs';
+import { consentAll, consented } from './project-policy.mjs';
 import { redact } from './http.mjs';
 
 // T3 writes authorized by an OAuth session instead of a passkey lease. The existing Dispatcher
 // (journal reservation, target/workspace preflight, uncertainty handling, final synchronous check
-// right before the single outbound call) is reused unchanged; only its structural `gate` is
+// right before the single outbound call) is reused with optional OAuth preflight hooks; its `gate` is
 // replaced by SessionWriteGate, keyed by session id. The lease Gate is never consulted, created or
 // extended here, and a lease id is never accepted as a session id (they live in different stores).
 //
-// Scope: the grants are the inventory frozen when the user approved the sign-in with a passkey
-// (same snapshot rule as the lease). Refresh never changes them; new projects need a new sign-in.
+// OAuth/all consent contains environments, not project IDs. Each operation owns its live context.
+// Restricted mode retains the sign-in snapshot for sandbox compatibility.
 
 const fail = code => { throw new Error(code); };
 
 export class SessionWriteGate {
-  constructor({ authority, issuer, audit = () => {}, onClose = () => {} }) { Object.assign(this, { authority, issuer, auditSink: audit, onClose }); }
+  constructor({ authority, issuer, audit = () => {}, onClose = () => {}, operationGrant = null }) { Object.assign(this, { authority, issuer, auditSink: audit, onClose, operationGrant }); }
   callerFor(session) { return exigirIdentidade(identidadeSessaoOAuth({ issuer: this.issuer, subject: session.sub })); }
   #session(sid) { try { return this.authority.check(sid); } catch { return fail('lease_closed'); } }
   status(sid) {
@@ -31,7 +32,9 @@ export class SessionWriteGate {
     if (this.callerFor(s) !== caller) fail('lease_closed');
     const grant = grantDoAmbiente({ environments: s.grants?.environments ?? [] }, { environmentId, destination });
     if (!grant) fail('ambiente_fora_da_lease');
-    if (!grant.actions.includes(action) || !projectIds.length || projectIds.some(p => !grant.projects.some(g => g.id === p))) fail('scope_denied');
+    const operational = s.grants?.projectPolicy === 'all' ? this.operationGrant : grant;
+    if (!operational || operational.alias !== grant.alias || operational.environmentId !== environmentId || operational.destination !== destination) fail('scope_denied');
+    if (!grant.actions.includes(action) || !projectIds.length || projectIds.some(p => !operational.projects?.some(g => g.id === p))) fail('scope_denied');
     return s;
   }
   dispatch(identity, sid, target, invoke, operationId) {
@@ -70,19 +73,22 @@ const describe = action => action === 'thread.send' ? SEND_DESCRIPTION
   : action;
 export const writeToolName = action => `t3_escrever_${action.replaceAll('.', '_').replaceAll('-', '_')}`;
 
-// `allowedProjects` (optional, Map alias → Set of project ids) narrows the grant offered at sign-in
+// In restricted mode, `allowedProjects` (Map alias → Set of project ids) narrows the sign-in grant
 // to those projects; an environment without an entry gets no grant. Without it the grant is the
 // full inventory, as with the lease.
-export function sessionWrites({ conexoes, journal, authority, issuer, allowedProjects = null, inventoryMs = 15000, audit = e => journal.audit(e) }) {
+export function sessionWrites({ conexoes, journal, authority, issuer, allowedProjects = null, inventoryMs = 15000, projectPolicy = 'restricted', audit = e => journal.audit(e) }) {
+  const all = projectPolicy === 'all';
+  if (all && allowedProjects) throw new Error('OAuth all conflicts with allowedProjects');
   const gate = new SessionWriteGate({ authority, issuer, audit });
   const registros = conexoes.map(c => c.registro);
   const porAlias = new Map(conexoes.map(c => [c.registro.alias, c]));
-  const dispatchers = new Map(conexoes.map(c => [c.registro.alias, new Dispatcher({ gate, adapter: c.adapter, journal, environmentId: c.registro.environmentId, destination: c.registro.destination })]));
+  const dispatchers = new Map(all ? [] : conexoes.map(c => [c.registro.alias, new Dispatcher({ gate, adapter: c.adapter, journal, environmentId: c.registro.environmentId, destination: c.registro.destination })]));
   const identity = principal => identidadeSessaoOAuth({ issuer, subject: principal.sub });
   const resolve = chave => porAlias.get(resolverAmbiente(registros, chave).alias);
 
-  // Inventory of every environment now; unavailable ones get no grant (same rule as the lease).
+  // All-mode consent needs no backend availability; restricted retains the lease snapshot rule.
   async function inventory() {
+    if (all) return { grants: consentAll(registros), unavailable: [] };
     const grants = [], unavailable = [];
     await Promise.all(conexoes.map(async c => {
       const r = c.registro;
@@ -111,10 +117,62 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     if ([...projects].some(p => !grant.projects.some(g => g.id === p))) fail('scope_denied');
   }
 
+  async function liveShell(principal, c) {
+    consented(authority, principal, c.registro);
+    let timer;
+    try {
+      const shell = await Promise.race([(async () => (await c.cliente()).shell({ signal: AbortSignal.timeout(inventoryMs) }))(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('ambiente_indisponivel')), inventoryMs); })]);
+      consented(authority, principal, c.registro);
+      return shell;
+    } finally { clearTimeout(timer); }
+  }
+  function authorizeRecord(principal, c, action) {
+    const s = consented(authority, principal, c.registro);
+    const env = s.grants.environments.find(e => e.alias === c.registro.alias);
+    if (!env.actions.includes(action)) fail('scope_denied');
+  }
   async function dispatch(principal, { environment, action, operationId, input }) {
     const c = resolve(environment);
-    await precheck(principal, c, action, input);
-    return { environment: { alias: c.registro.alias, environmentId: c.registro.environmentId }, ...await dispatchers.get(c.registro.alias).dispatch(identity(principal), principal.sid, { operationId, action, input }) };
+    if (!all) {
+      await precheck(principal, c, action, input);
+      return { environment: { alias: c.registro.alias, environmentId: c.registro.environmentId }, ...await dispatchers.get(c.registro.alias).dispatch(identity(principal), principal.sid, { operationId, action, input }) };
+    }
+    authorizeRecord(principal, c, action);
+    let shell;
+    const opGate = new SessionWriteGate({ authority, issuer, audit });
+    const projectsFrom = s => (s.projects ?? []).filter(p => !p.deletedAt).map(p => ({ id: p.id, name: p.title, directory: p.workspaceRoot ?? p.cwd ?? p.directory, workspaceRoots: p.workspaceRoots }));
+    const grantFrom = s => ({ ...authority.check(principal.sid).grants.environments.find(e => e.alias === c.registro.alias), projects: projectsFrom(s) });
+    const threadProject = (s, id) => s.threads?.find(t => t.id === id && !t.deletedAt)?.projectId;
+    const adapter = { ...c.adapter, projectForThread: async id => threadProject(shell, id) };
+    const d = new Dispatcher({ gate: opGate, adapter, journal, environmentId: c.registro.environmentId, destination: c.registro.destination,
+      authorizeRecorded: target => authorizeRecord(principal, c, target.action),
+      resolveGrant: async () => { shell = await liveShell(principal, c); opGate.operationGrant = grantFrom(shell); return opGate.operationGrant; },
+      validateTarget: async ({ target, input, spec, validateWorkspace }) => {
+        const latest = await liveShell(principal, c);
+        for (const ref of spec.refs) {
+          const p = threadProject(latest, input[ref]);
+          if (!p) fail('thread_not_found');
+          if (p !== threadProject(shell, input[ref])) fail('scope_denied');
+        }
+        opGate.operationGrant = grantFrom(latest);
+        opGate.check(identity(principal), principal.sid, target);
+        await validateWorkspace(opGate.operationGrant);
+        // Filesystem canonicalization can await. Take the final live observation after it.
+        const finalShell = await liveShell(principal, c);
+        const finalGrant = grantFrom(finalShell);
+        for (const ref of spec.refs) {
+          if (threadProject(finalShell, input[ref]) !== threadProject(shell, input[ref])) fail('scope_denied');
+        }
+        for (const id of target.projectIds) {
+          const before = opGate.operationGrant.projects.find(p => p.id === id);
+          const after = finalGrant.projects.find(p => p.id === id);
+          if (!after || JSON.stringify(before) !== JSON.stringify(after)) fail('scope_denied');
+        }
+        opGate.operationGrant = finalGrant;
+        opGate.check(identity(principal), principal.sid, target);
+      },
+    });
+    return { environment: { alias: c.registro.alias, environmentId: c.registro.environmentId }, ...await d.dispatch(identity(principal), principal.sid, { operationId, action, input }) };
   }
   // A write refused before sending (e.g. thread_not_found, workspace_plan_required) is journaled
   // `rejected` without a target, and Dispatcher.reconcile cannot answer for it
@@ -147,6 +205,20 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
   async function reconcile(principal, { environment, operationId }) {
     const c = resolve(environment);
     const env = { alias: c.registro.alias, environmentId: c.registro.environmentId };
+    if (all) {
+      consented(authority, principal, c.registro);
+      const caller = exigirIdentidade(identity(principal));
+      let record;
+      try { record = journal.get(chaveOperacao({ environmentId: c.registro.environmentId, destination: c.registro.destination, caller, operationId })); } catch { gate.close(); fail('journal_failed'); }
+      if (!record) fail('operation_unknown');
+      authorizeRecord(principal, c, record.action);
+      if (!record.target && record.state !== 'rejected') fail('reconciliation_target_unknown');
+      const observation = record.target ? z.object({ found: z.boolean(), sequence: z.number().int().nonnegative().optional(), threadId: z.string().optional(), state: z.enum(['running', 'completed', 'failed', 'unknown']).optional() }).strict().parse(await c.adapter.reconcile(record)) : null;
+      authorizeRecord(principal, c, record.action);
+      try { gate.audit({ event: 'reconciled', operationId: redact(operationId), sid: redact(principal.sid), action: record.action }); } catch { gate.close(); fail('journal_failed'); }
+      authorizeRecord(principal, c, record.action);
+      return { environment: env, operationId, state: record.state, observation, ...(!record.target ? { sent: false } : {}) };
+    }
     const local = rejectedBeforeSend(principal, c, operationId);
     if (local) return { environment: env, ...local };
     return { environment: env, ...await dispatchers.get(c.registro.alias).reconcile(identity(principal), principal.sid, operationId) };
@@ -163,7 +235,7 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     // Strict schemas: an unknown or legacy parameter (e.g. `ambiente`) is refused by the SDK.
     const environment = z.string().min(1).describe(`T3 environment where the thread/project lives (required; alias or environmentId): ${registros.map(r => r.alias).join(', ')}. IDs from one environment are not valid in another.`);
     for (const action of ACTIONS) server.registerTool(writeToolName(action), {
-      description: `${describe(action)} in the chosen environment; authorized by the connector's OAuth session (passkey sign-in), limited to the projects approved at sign-in; the work runs in full-access mode.`,
+      description: `${describe(action)} in the chosen environment; authorized by the connector's OAuth session (passkey sign-in), ${all ? 'all current and future projects of the consented environments' : 'limited to the projects approved at sign-in (restricted mode)'}; the work runs in full-access mode.`,
       inputSchema: z.strictObject({ environment, operationId: z.string(), input: schemaForAction(action) }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     }, ({ environment: env, operationId, input }) => result(() => dispatch(principal, { environment: env, action, operationId, input })));

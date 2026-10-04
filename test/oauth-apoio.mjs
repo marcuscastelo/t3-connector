@@ -77,10 +77,10 @@ export async function startConnector({ config = {}, loginMode = 'button', tools 
 
   // Full first access: /authorize -> local passkey -> /resume -> callback -> /token.
   // tokenResource: resource named at the code exchange (default: the configured one; null omits it).
-  async function signIn({ via = loginMode === 'oob' ? 'oob' : 'handoff', uv = true, tokenResource = resource } = {}) {
+  async function signIn({ via = loginMode === 'oob' ? 'oob' : 'handoff', uv = true, tokenResource = resource, scope = 'connector:read connector:write' } = {}) {
     const verifier = randomBytes(32).toString('base64url'), state = randomBytes(8).toString('hex');
     const challenge = createHash('sha256').update(verifier).digest('base64url');
-    const auth = await http('GET', `${issuer}/authorize?${form({ response_type: 'code', client_id: CLIENT, redirect_uri: 'https://client.example/cb', code_challenge: challenge, code_challenge_method: 'S256', state, resource, scope: 'connector:read connector:write' })}`);
+    const auth = await http('GET', `${issuer}/authorize?${form({ response_type: 'code', client_id: CLIENT, redirect_uri: 'https://client.example/cb', code_challenge: challenge, code_challenge_method: 'S256', state, resource, scope })}`);
     const cookie = auth.headers['set-cookie']?.[0]?.split(';')[0];
     let ref;
     if (via === 'oob') ref = { oob: /class="big">([A-Z0-9]+)</.exec(auth.text)[1] };

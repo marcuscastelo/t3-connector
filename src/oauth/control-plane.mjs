@@ -22,13 +22,14 @@ export function controlPlane({ port, issuer, passkeys, subject, authority, token
   let bundle;
   const newChallenge = key => { const c = randomBytes(32).toString('base64url'); challenges.set(key, { c, at: time.mark() }); return c; };
   const takeChallenge = key => { const v = challenges.get(key); challenges.delete(key); if (!v || time.elapsed(v.at) >= CHALLENGE_MS) throw new Error('challenge_expired'); return v.c; };
-  // Write scope shown on the approval page and frozen into the session: the backend inventory taken
-  // once per sign-in, when the page first shows the transaction (same snapshot rule as the lease).
-  const grantsFor = tx => (tx.grants ??= grantProvider && tx.scope.split(' ').includes('connector:write')
+  // Consent is frozen into the session: environment policy for all, inventory for restricted.
+  const grantsFor = tx => (tx.grants ??= grantProvider && (grantProvider.projectPolicy === 'all' || tx.scope.split(' ').includes('connector:write'))
     ? grantProvider().catch(() => ({ grants: null, unavailable: [{ reason: 'inventory_failed' }] }))
     : Promise.resolve({ grants: null, unavailable: [] }));
   const grantSummary = g => ({
-    environments: (g.grants?.environments ?? []).map(e => ({ alias: e.alias, environmentId: e.environmentId, projects: e.projects.map(p => p.name), actions: e.actions.length })),
+    projectPolicy: g.grants?.projectPolicy ?? 'restricted',
+    consent: g.grants?.projectPolicy === 'all' ? `Read and write access to all current and future projects of ${g.grants.environments.map(e => e.alias).join(' and ')}. New projects in these environments are included automatically. Effective access follows the requested OAuth scopes. Session expires after one hour without activity; it can be revoked locally.` : 'Restricted mode: only the listed projects are approved at sign-in.',
+    environments: (g.grants?.environments ?? []).map(e => ({ alias: e.alias, environmentId: e.environmentId, destination: e.destination, projects: e.projects?.map(p => p.name), actions: e.actions.length })),
     unavailable: g.unavailable,
   });
   const txView = async tx => ({ clientId: tx.clientId, clientName: tx.clientName, returnsTo: new URL(tx.redirectUri).host, scope: tx.scope, resource: tx.resource, mode: tx.mode, writes: grantSummary(await grantsFor(tx)) });
@@ -128,7 +129,7 @@ const loginPage = n => page('Approve sign-in', `<h1>Approve sign-in</h1>
 <script nonce="${n}">${api}
 let ref=null;const frag=new URLSearchParams(location.hash.slice(1)).get('handoff');history.replaceState(null,'',location.pathname);
 function row(k,v){const dt=document.createElement('dt');dt.textContent=k;const dd=document.createElement('dd');dd.textContent=v;$('view').append(dt,dd);}
-async function show(r){ref=r;const v=await api('/api/login/view',r);$('view').textContent='';row('Client',(v.clientName?v.clientName+' ':'')+'('+v.clientId+')');row('Returns to',v.returnsTo);row('Access',v.scope);row('Resource',v.resource);for(const e of v.writes.environments)row('Writes: '+e.alias,e.projects.join(', ')+' ('+e.actions+' actions, full-access)');for(const u of v.writes.unavailable)row('Unavailable',(u.alias||'')+' '+u.reason);$('approve').hidden=false;$('code').hidden=true;say('');}
+async function show(r){ref=r;const v=await api('/api/login/view',r);$('view').textContent='';row('Client',(v.clientName?v.clientName+' ':'')+'('+v.clientId+')');row('Returns to',v.returnsTo);row('Access',v.scope);row('Resource',v.resource);row('Consent',v.writes.consent);for(const e of v.writes.environments)row('Environment: '+e.alias,e.environmentId+' '+e.destination+'; '+(e.projects?e.projects.join(', '):'all current and future projects')+' ('+e.actions+' actions, full-access)');for(const u of v.writes.unavailable)row('Unavailable',(u.alias||'')+' '+u.reason);$('approve').hidden=false;$('code').hidden=true;say('');}
 $('find').onclick=()=>show({oob:$('oob').value}).catch(e=>say('Error: '+e.message));
 $('approve').onclick=async()=>{try{say('Waiting for passkey…');const o=await api('/api/login/options',ref);const response=await SimpleWebAuthnBrowser.startAuthentication({optionsJSON:o});const v=await api('/api/login/verify',{...ref,response});$('approve').hidden=true;
 if(v.via==='oob'){say('Approved. Go back to the sign-in page; it continues by itself. You can close this tab.');}else{say('Approved, returning…');location.replace(v.resume);}}catch(e){say('Error: '+e.message);}};

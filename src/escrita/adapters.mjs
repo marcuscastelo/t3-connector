@@ -90,9 +90,9 @@ const RECUSAS=/^(thread_not_found|scope_denied|lease_closed|ambiente_[a-z_]+|wor
 export const chaveOperacao=({environmentId,destination,caller,operationId})=>digest(['v2',environmentId,destination,caller,operationId]);
 // The journal is retained across restarts. An uncertain result is never resubmitted.
 export class Dispatcher {
- constructor({gate,adapter,journal,environmentId,destination}) {
+ constructor({gate,adapter,journal,environmentId,destination,resolveGrant,validateTarget,authorizeRecorded}) {
   if(!journal.reserve)throw new Error('atomic_journal_required');
-  Object.assign(this,{gate,adapter,journal,environmentId,destination});
+  Object.assign(this,{gate,adapter,journal,environmentId,destination,resolveGrant,validateTarget,authorizeRecorded});
  }
  #store(method,...args) {try{return this.journal[method](...args);}catch{this.gate.close();throw new Error('journal_failed');}}
  #key(caller,operationId) {return chaveOperacao({environmentId:this.environmentId,destination:this.destination,caller,operationId});}
@@ -116,15 +116,16 @@ export class Dispatcher {
   // Initial auth before lookup/dedupe; final auth happens immediately before dispatch.
   const status=this.gate.status(leaseId);
   if(status.scope.caller!==caller || !status.active) throw new Error('lease_closed');
-  const grant=grantDoAmbiente(status.scope,{environmentId:this.environmentId,destination:this.destination});
+  let grant=grantDoAmbiente(status.scope,{environmentId:this.environmentId,destination:this.destination});
   if(!grant) throw new Error('ambiente_fora_da_lease');
   if(!grant.actions.includes(action)) throw new Error('scope_denied');
   const initial={hash,state:'preparing',action,operationId,environmentId:this.environmentId,destination:this.destination};
   const owned=this.#store('reserve',key,initial);
   const old=owned?null:this.#store('get',key);
-  if(old) {if(old.hash!==hash) throw new Error('operation_conflict');if(old.target)this.gate.check(identity,leaseId,old.target);return {state:old.state,operationId,reconciliationRequired:old.state!=='completed'};}
+  if(old) {if(old.hash!==hash) throw new Error('operation_conflict');if(old.target)(this.authorizeRecorded??((target)=>this.gate.check(identity,leaseId,target)))(old.target);return {state:old.state,operationId,reconciliationRequired:old.state!=='completed'};}
   if(!owned)throw new Error('journal_failed');
   try {
+   if(this.resolveGrant) grant=await this.resolveGrant(grant);
    const projects=new Set(parsed.input.projectId?[parsed.input.projectId]:[]);
    for(const ref of parsed.spec.refs) {const p=await this.adapter.projectForThread(parsed.input[ref]);if(!p) throw new Error('thread_not_found');projects.add(p);}
    await this.#workspace(grant,[...projects],action,parsed.input);
@@ -135,6 +136,7 @@ export class Dispatcher {
    // Conexão do environment aberta ainda em 'preparing' (falha aqui não enviou nada) e antes
    // da checagem final: entre a checagem e o envio não há await.
    if(this.adapter.prepare) await this.adapter.prepare();
+   if(this.validateTarget) await this.validateTarget({target,input:parsed.input,spec:parsed.spec,validateWorkspace:g=>this.#workspace(g,[...projects],action,parsed.input)});
    this.#store('put',key,{...initial,state:'uncertain',target,payloadIds});
    const result=await this.gate.dispatch(identity,leaseId,{environmentId:this.environmentId,destination:this.destination,projectIds:[...projects],action},()=>this.adapter.invoke(parsed.spec.method,payload),operationId);
    this.#store('put',key,{...initial,state:'completed',target,payloadIds,receipt:this.adapter.receipt(result)});
