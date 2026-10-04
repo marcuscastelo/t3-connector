@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Experimental OAuth session profile, `t3-connector-oauth` (`serve`, `rehearsal`): MCP over
+  HTTP with an embedded OAuth authorization server (CIMD clients with `private_key_jwt`,
+  code + PKCE S256), passkey sign-in on a local control page, rotating refresh, an idle
+  window counted only on tool calls, immediate revoke and a persistent kill switch. Serves
+  the read tools and, when configured, the write tools authorized by the session. The stdio
+  connectors and the passkey lease are unchanged. See `docs/oauth-session.md`.
+
 ## 0.6.0
 
 - **Breaking: English public contract.** Tool parameters, response fields, state and

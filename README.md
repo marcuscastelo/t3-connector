@@ -362,6 +362,14 @@ MCP SDK with error `-32602` before anything reaches the gate.
 A correction of the current work uses `steer_active`; it is never deferred until after the
 work it is meant to correct. Refused steer/restart requests never fall back to a queue.
 
+## OAuth session profile (experimental)
+
+`t3-connector-oauth` serves the same tools over MCP HTTP behind an embedded OAuth server: the
+client signs in once with a passkey on a local control page, refreshes without interaction while
+it keeps calling tools, and needs a new passkey after an idle window (default 1 h). It runs
+alongside the stdio connectors and does not use the write lease. Design, configuration, threat
+model and rehearsal: [`docs/oauth-session.md`](docs/oauth-session.md).
+
 ## Development
 
 ```sh
