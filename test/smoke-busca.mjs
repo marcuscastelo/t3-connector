@@ -29,7 +29,7 @@ async function abrir() {
     const inicio = performance.now();
     const r = await cliente.callTool({ name, arguments: args });
     const ms = Math.round(performance.now() - inicio);
-    return { ms, ...(r.isError ? { erro: r.content[0].text } : JSON.parse(r.content[0].text)) };
+    return { ms, ...(r.isError ? { error: r.content[0].text } : JSON.parse(r.content[0].text)) };
   };
   return { cliente, chamar };
 }
@@ -39,21 +39,21 @@ function caso(nome, ok, detalhe) {
   if (!ok) falhas++;
   console.log(`${ok ? 'ok  ' : 'FALHA'} ${nome}: ${JSON.stringify(detalhe)}`);
 }
-const resumo = (r) => r.erro ? { erro: r.erro, ms: r.ms } : {
+const resumo = (r) => r.error ? { error: r.error, ms: r.ms } : {
   ms: r.ms,
   total: r.total,
-  completa: r.completa,
-  consultados: r.ambientesConsultados?.map((a) => `${a.alias}:${a.encontradas}`),
-  falhas: r.falhasAmbientes?.map((f) => `${f.alias}:${f.codigo}`),
+  complete: r.complete,
+  consultados: r.queriedEnvironments?.map((a) => `${a.alias}:${a.found}`),
+  falhas: r.environmentFailures?.map((f) => `${f.alias}:${f.code}`),
 };
 
 // 1. Primeira busca de processos novos: conexão e túnel a frio.
 for (let i = 1; i <= rodadasFrias; i++) {
   const { cliente, chamar } = await abrir();
-  const r = await chamar('t3_buscar_threads', { busca: 'a', limite: 1 });
-  caso(`fria ${i}: busca sem ambiente completa`, !r.erro && r.completa === true, resumo(r));
-  const q = await chamar('t3_buscar_threads', { busca: 'a', limite: 1 });
-  caso(`fria ${i}: segunda busca (a quente)`, !q.erro && q.completa === true, resumo(q));
+  const r = await chamar('t3_buscar_threads', { search: 'a', limit: 1 });
+  caso(`fria ${i}: busca sem ambiente completa`, !r.error && r.complete === true, resumo(r));
+  const q = await chamar('t3_buscar_threads', { search: 'a', limit: 1 });
+  caso(`fria ${i}: segunda busca (a quente)`, !q.error && q.complete === true, resumo(q));
   await cliente.close();
 }
 
@@ -63,41 +63,41 @@ const { tools } = await cliente.listTools();
 caso('ferramenta exposta', tools.some((t) => t.name === 't3_buscar_threads'), tools.length);
 
 const amb = await chamar('t3_ambientes', {});
-const aliases = amb.ambientes?.map((a) => a.alias) ?? [];
-caso('t3_ambientes', aliases.length >= 2 && amb.ambientes.every((a) => a.disponivel), amb.ambientes?.map((a) => ({ alias: a.alias, transporte: a.transporte, disponivel: a.disponivel })));
+const aliases = amb.environments?.map((a) => a.alias) ?? [];
+caso('t3_ambientes', aliases.length >= 2 && amb.environments.every((a) => a.available), amb.environments?.map((a) => ({ alias: a.alias, transport: a.transport, available: a.available })));
 
 for (const alias of aliases) {
-  const lista = await chamar('t3_threads', { ambiente: alias, limite: 1, incluirSemExecucao: true });
+  const lista = await chamar('t3_threads', { environment: alias, limit: 1, includeNoRun: true });
   const alvo = lista.threads?.[0];
   if (!alvo) {
-    caso(`${alias}: há thread para procurar`, false, lista.erro ?? { total: lista.total });
+    caso(`${alias}: há thread para procurar`, false, lista.error ?? { total: lista.total });
     continue;
   }
   const porId = await chamar('t3_buscar_threads', { threadId: alvo.threadId });
   const achou = porId.threads?.filter((t) => t.threadId === alvo.threadId) ?? [];
   caso(`${alias}: threadId sem ambiente volta com o environment certo`,
-    !porId.erro && porId.completa && achou.some((t) => t.ambiente.alias === alias && t.ambiente.environmentId === lista.ambiente.environmentId && t.ambiente.nome),
-    { ...resumo(porId), threadId: alvo.threadId, ambientes: achou.map((t) => t.ambiente.alias) });
+    !porId.error && porId.complete && achou.some((t) => t.environment.alias === alias && t.environment.environmentId === lista.environment.environmentId && t.environment.name),
+    { ...resumo(porId), threadId: alvo.threadId, environments: achou.map((t) => t.environment.alias) });
 
-  const exata = await chamar('t3_buscar_threads', { busca: alvo.titulo, correspondencia: 'exata' });
-  caso(`${alias}: título exato inclui a thread`, !exata.erro && exata.threads?.some((t) => t.threadId === alvo.threadId && t.ambiente.alias === alias),
-    { ...resumo(exata), caracteresTitulo: alvo.titulo?.length ?? 0 });
+  const exata = await chamar('t3_buscar_threads', { search: alvo.title, match: 'exact' });
+  caso(`${alias}: título exato inclui a thread`, !exata.error && exata.threads?.some((t) => t.threadId === alvo.threadId && t.environment.alias === alias),
+    { ...resumo(exata), caracteresTitulo: alvo.title?.length ?? 0 });
 
-  const filtrada = await chamar('t3_buscar_threads', { threadId: alvo.threadId, ambiente: alias });
-  caso(`${alias}: filtro por ambiente consulta só ele`, !filtrada.erro && filtrada.ambientesConsultados?.length === 1 && filtrada.total >= 1, resumo(filtrada));
+  const filtrada = await chamar('t3_buscar_threads', { threadId: alvo.threadId, environment: alias });
+  caso(`${alias}: filtro por ambiente consulta só ele`, !filtrada.error && filtrada.queriedEnvironments?.length === 1 && filtrada.total >= 1, resumo(filtrada));
 }
 
-const ampla = await chamar('t3_buscar_threads', { busca: 'a', limite: 50 });
+const ampla = await chamar('t3_buscar_threads', { search: 'a', limit: 50 });
 const ordenada = ampla.threads?.every((t, i, xs) => i === 0
-  || [xs[i - 1].ambiente.environmentId, xs[i - 1].threadId].join('\u0000') < [t.ambiente.environmentId, t.threadId].join('\u0000'));
-caso('busca ampla: ordem por (environmentId, threadId)', !ampla.erro && ordenada, { ...resumo(ampla), retornadas: ampla.retornadas, truncado: ampla.truncado });
-if (ampla.proximoCursor) {
-  const p2 = await chamar('t3_buscar_threads', { busca: 'a', limite: 50, cursor: ampla.proximoCursor });
-  caso('busca ampla: segunda página', !p2.erro && p2.total === ampla.total, { ...resumo(p2), retornadas: p2.retornadas });
+  || [xs[i - 1].environment.environmentId, xs[i - 1].threadId].join('\u0000') < [t.environment.environmentId, t.threadId].join('\u0000'));
+caso('busca ampla: ordem por (environmentId, threadId)', !ampla.error && ordenada, { ...resumo(ampla), returned: ampla.returned, truncated: ampla.truncated });
+if (ampla.nextCursor) {
+  const p2 = await chamar('t3_buscar_threads', { search: 'a', limit: 50, cursor: ampla.nextCursor });
+  caso('busca ampla: segunda página', !p2.error && p2.total === ampla.total, { ...resumo(p2), returned: p2.returned });
 }
 
 const inexistente = await chamar('t3_buscar_threads', { threadId: '00000000-0000-0000-0000-000000000000' });
-caso('ID inexistente: zero com cobertura completa', !inexistente.erro && inexistente.total === 0 && inexistente.completa, resumo(inexistente));
+caso('ID inexistente: zero com cobertura completa', !inexistente.error && inexistente.total === 0 && inexistente.complete, resumo(inexistente));
 
 await cliente.close();
 process.exit(falhas ? 1 : 0);

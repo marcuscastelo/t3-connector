@@ -14,17 +14,17 @@ const TERMINAIS = new Set(['completed', 'failed', 'cancelled', 'interrupted', 'r
 const CANCELADA = new Set(['cancelled', 'interrupted', 'rolled_back']);
 
 export function estadoDoRun(status, pedido) {
-  if (pedido) return 'precisa_intervencao';
-  if (status === 'idle') return 'sem_execucao';
-  if (!status) return 'desconhecido';
-  if (status === 'completed') return 'concluida';
-  if (status === 'failed') return 'falhou';
-  if (CANCELADA.has(status)) return 'cancelada';
-  return 'rodando';
+  if (pedido) return 'needs_intervention';
+  if (status === 'idle') return 'no_run';
+  if (!status) return 'unknown';
+  if (status === 'completed') return 'completed';
+  if (status === 'failed') return 'failed';
+  if (CANCELADA.has(status)) return 'cancelled';
+  return 'running';
 }
 
 function resumoPedido(p) {
-  return p ? { runtimeRequestId: p.id, tipo: p.kind, motivo: motivoDoPedido(p.kind), desde: p.createdAt } : null;
+  return p ? { runtimeRequestId: p.id, kind: p.kind, reason: motivoDoPedido(p.kind), since: p.createdAt } : null;
 }
 
 const ultimoRun = (runs) => [...(runs ?? [])].sort((a, b) => b.ordinal - a.ordinal)[0];
@@ -56,23 +56,23 @@ async function aguardar(ambientes, entrada, { signal, agora = Date.now, assinarI
   const resultado = (motivoRetorno, timedOut) => {
     const status = obs.run ? obs.run.status : 'idle';
     const res = {
-      ambiente: ambientes.identidade(r),
+      environment: ambientes.identidade(r),
       projectId: obs.thread.projectId,
       threadId,
-      titulo: obs.thread.title,
+      title: obs.thread.title,
       runId: obs.run?.id ?? (runPedido || obs.thread.latestRunId || null),
       statusRun: status,
-      estado: estadoDoRun(status, obs.pedido),
+      state: estadoDoRun(status, obs.pedido),
       terminal: TERMINAIS.has(status),
       timedOut,
-      motivoRetorno,
-      pedidoPendente: resumoPedido(obs.pedido),
-      observadoEm: obs.observadoEm,
+      returnReason: motivoRetorno,
+      pendingRequest: resumoPedido(obs.pedido),
+      observedAt: obs.observadoEm,
       elapsedMs: agora() - inicio,
       timeoutMs,
     };
     if (incluirUltimaResposta) {
-      res.ultimaResposta = obs.mensagens ? ultimaResposta({ messages: obs.mensagens.filter((m) => !res.runId || m.runId === res.runId) }, maxCaracteres) : null;
+      res.latestResponse = obs.mensagens ? ultimaResposta({ messages: obs.mensagens.filter((m) => !res.runId || m.runId === res.runId) }, maxCaracteres) : null;
     }
     return res;
   };
@@ -81,7 +81,7 @@ async function aguardar(ambientes, entrada, { signal, agora = Date.now, assinarI
     ambientes.falhou(r, e);
     if (signal?.aborted) throw new Cancelada();
     if (prazo.aborted && !obs.thread) {
-      throw new ErroT3(`ambiente ${r.alias} não respondeu em ${timeoutMs} ms; nenhum estado observado`, { codigo: 'indisponivel' });
+      throw new ErroT3(`environment ${r.alias} did not respond within ${timeoutMs} ms; no state observed`, { codigo: 'indisponivel' });
     }
     throw e;
   };
@@ -99,7 +99,7 @@ async function aguardar(ambientes, entrada, { signal, agora = Date.now, assinarI
   }
 
   const latest = obs.thread.latestRunId;
-  if (!latest && !runPedido) return resultado('sem_execucao', false);
+  if (!latest && !runPedido) return resultado('no_run', false);
   const runDaShell = !runPedido || runPedido === latest;
   if (runDaShell && TERMINAIS.has(obs.thread.status) && !incluirUltimaResposta) {
     obs.run = { id: latest, status: obs.thread.status };
@@ -107,7 +107,7 @@ async function aguardar(ambientes, entrada, { signal, agora = Date.now, assinarI
   }
   if (runDaShell && obs.pedido && !incluirUltimaResposta) {
     obs.run = { id: latest, status: obs.thread.status };
-    return resultado('precisa_intervencao', false);
+    return resultado('needs_intervention', false);
   }
 
   // 2. Subscription: snapshot (runs, pedidos, mensagens) e depois eventos ao vivo.
@@ -119,7 +119,7 @@ async function aguardar(ambientes, entrada, { signal, agora = Date.now, assinarI
     if (!obs.run) return;
     obs.pedido = [...pedidos.values()].find((p) => p.status === 'pending') ?? null;
     if (TERMINAIS.has(obs.run.status)) concluir('terminal');
-    else if (obs.pedido) concluir('precisa_intervencao');
+    else if (obs.pedido) concluir('needs_intervention');
   };
   const aoReceber = (itens) => {
     for (const item of itens) {
@@ -127,7 +127,7 @@ async function aguardar(ambientes, entrada, { signal, agora = Date.now, assinarI
         const p = item.projection ?? {};
         const runs = p.runs ?? [];
         obs.run = runPedido ? runs.find((x) => x.id === runPedido) : (runs.find((x) => x.id === latest) ?? ultimoRun(runs));
-        if (!obs.run) throw new ErroT3(`run ${runPedido ?? latest} não encontrado na thread ${threadId}`, { codigo: 'run_inexistente' });
+        if (!obs.run) throw new ErroT3(`run ${runPedido ?? latest} not found in thread ${threadId}`, { codigo: 'run_inexistente' });
         pedidos.clear();
         for (const q of p.runtimeRequests ?? []) pedidos.set(q.id, q);
         obs.mensagens = [...(p.messages ?? [])];
@@ -138,7 +138,7 @@ async function aguardar(ambientes, entrada, { signal, agora = Date.now, assinarI
         else if (type === 'message.updated' && payload?.id && obs.mensagens) {
           const i = obs.mensagens.findIndex((m) => m.id === payload.id);
           if (i >= 0) obs.mensagens[i] = payload; else obs.mensagens.push(payload);
-        } else if (type === 'thread.deleted') concluir('thread_apagada');
+        } else if (type === 'thread.deleted') concluir('thread_deleted');
       }
     }
     marcar();
@@ -159,7 +159,7 @@ async function aguardar(ambientes, entrada, { signal, agora = Date.now, assinarI
       if (sinal.aborted) return resolve(signal?.aborted ? 'cancelada' : 'prazo');
       sinal.addEventListener('abort', () => resolve(signal?.aborted ? 'cancelada' : 'prazo'), { once: true });
       decidido.then(resolve);
-      sub.fim.then(() => resolve('subscription_encerrada'), reject);
+      sub.fim.then(() => resolve('subscription_closed'), reject);
     });
     if (motivo === 'cancelada') throw new Cancelada();
     if (motivo === 'prazo') {
@@ -167,7 +167,7 @@ async function aguardar(ambientes, entrada, { signal, agora = Date.now, assinarI
         // Shell observada mas snapshot não chegou: devolve o estado da shell.
         obs.run = { id: runPedido ?? latest, status: runDaShell ? obs.thread.status : null };
       }
-      return resultado('prazo', !TERMINAIS.has(obs.run.status));
+      return resultado('timeout', !TERMINAIS.has(obs.run.status));
     }
     return resultado(motivo, false);
   } catch (e) {
@@ -175,7 +175,7 @@ async function aguardar(ambientes, entrada, { signal, agora = Date.now, assinarI
     ambientes.falhou(r, e);
     if (prazo.aborted && obs.thread && !(e instanceof ErroT3 && e.codigo === 'run_inexistente')) {
       obs.run ??= { id: runPedido ?? latest, status: runDaShell ? obs.thread.status : null };
-      return resultado('prazo', !TERMINAIS.has(obs.run.status));
+      return resultado('timeout', !TERMINAIS.has(obs.run.status));
     }
     throw e;
   } finally {

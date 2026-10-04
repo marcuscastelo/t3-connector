@@ -1,4 +1,4 @@
-# ADR 0004: English public contract, with the Portuguese names as deprecated aliases
+# ADR 0004: English public contract, with Portuguese input names as deprecated aliases
 
 Date: 2026-10-04. Status: proposed (not released).
 
@@ -43,8 +43,19 @@ Constraints found in the code (SDK 1.32.0, Zod 4):
 5. **The private relay keeps the previous names** (`ambiente` and the Portuguese read
    parameters). It is not a client contract, and a gate on the previous version still
    understands a new bridge.
-6. **Tool names do not change here.** `t3_projetos`, `t3_escrever_*` and the others are
-   kept. Renaming them is a separate decision (see Open questions).
+6. **Responses are English only.** Response fields, state and return values, search
+   failure codes, write error codes and connector-generated messages are renamed, with no
+   Portuguese duplicate in the payload. This is a breaking change for any client that
+   reads fields by name; it is listed in the changelog and needs a release that says so.
+   Duplicating every field would double payloads that clients already cut when large, and
+   keep two names alive for each value with no way to retire them.
+7. **The bridge translates what the gate returns.** Mutation and reconcile results
+   (`ambiente` → `environment`), the approval summary and the gate's error codes are
+   renamed in the bridge. Leased reads return what the gate's read server produces, so
+   they switch to English when the gate restarts on the new version.
+8. **Tool names do not change here.** `t3_projetos`, `t3_escrever_*` and the others are
+   kept, and `nextAction.tool` keeps naming the existing tool. Renaming them is a separate
+   decision (see Open questions).
 
 ### Parameter migration
 
@@ -80,19 +91,61 @@ Constraints found in the code (SDK 1.32.0, Zod 4):
 CLI flags already had English names (`--environment`, `--projects`, `environments`,
 `diagnose`); the Portuguese ones remain.
 
+### Response migration
+
+| Previous field | English field | Where |
+|---|---|---|
+| `ambiente` | `environment` | envelope of every read and write result; search items; wait result |
+| `padrao`, `ambientes` | `default`, `environments` | `t3_ambientes`, `t3-connector environments` |
+| `transporte`, `projetosAutorizados`, `disponivel`, `nome`, `versao`, `erro` | `transport`, `allowedProjectCount`, `available`, `name`, `version`, `error` | `t3_ambientes` items |
+| `busca`, `retornados`/`retornadas`, `truncado`, `proximoCursor` | `search`, `returned`, `truncated`, `nextCursor` | lists and search |
+| `projetos`, `titulo`, `diretorio`, `threadsRodando`, `threadsPrecisandoIntervencao` | `projects`, `title`, `directory`, `runningThreads`, `threadsNeedingIntervention` | `t3_projetos` |
+| `alteradasDesdeInicio`, `ocultasSemExecucao` | `changedSinceStart`, `hiddenNoRun` | `t3_threads` |
+| `correspondencia`, `completa`, `ambientesConsultados` (`encontradas`), `falhasAmbientes` (`codigo`, `motivo`), `arquivada` | `match`, `complete`, `queriedEnvironments` (`found`), `environmentFailures` (`code`, `reason`), `archived` | `t3_buscar_threads` |
+| `titulo`, `projeto`, `diretorio`, `modelo` (`modelo`, `instancia`, `esforco`), `modoExecucao`, `atualizadaEm`, `encerradaNaLista` | `title`, `project`, `directory`, `model` (`model`, `instanceId`, `effort`), `runtimeMode`, `updatedAt`, `settled` | thread summary |
+| `estado`, `motivo`, `tipo`, `identificador`, `desde`, `liberaEm`, `retomaEm`, `observacao`, `tarefasEmSegundoPlano` (`descricao`), `erro`, `classeErro` | `state`, `reason`, `kind`, `identifier`, `since`, `resetAt`, `resumeAt`, `note`, `backgroundTasks` (`description`), `error`, `errorClass` | thread state |
+| `pedidosPendentes`, `sessaoProvider` (`diretorio`, `modelo`), `ultimoRun`, `ultimaResposta`, `historico` (`completo`, `orcamentoExcedido`) | `pendingRequests`, `providerSession` (`directory`, `model`), `latestRun`, `latestResponse`, `history` (`complete`, `payloadBudgetExceeded`) | `t3_thread` |
+| `texto`, `truncada`, `emAndamento`, `atualizadaEm`, `criadaEm`, `papel`, `mensagens` | `text`, `truncated`, `streaming`, `updatedAt`, `createdAt`, `role`, `messages` | latest response, `t3_mensagens` |
+| `titulo`, `estado`, `motivoRetorno`, `pedidoPendente` (`tipo`, `motivo`, `desde`), `observadoEm`, `ultimaResposta` | `title`, `state`, `returnReason`, `pendingRequest` (`kind`, `reason`, `since`), `observedAt`, `latestResponse` | `t3_aguardar_thread` |
+| `tipo`, `motivo`, `desde`, `detalhe`, `conteudo` (`tipo`), `conteudoDisponivel`, `indisponibilidade`, `threadSendRespondePedido`, `proximaAcao` (`tipo`, `motivo`, `campoResposta`, `requerDecisaoDoUsuario`) | `kind`, `reason`, `since`, `detail`, `content` (`type`), `contentAvailable`, `unavailableReason`, `threadSendAnswersRequest`, `nextAction` (`type`, `reason`, `responseField`, `requiresUserDecision`) | `pendingRequests[]` |
+| `ambientes` (`projetos`, `acoes`), `indisponiveis` (`motivo`) | `environments` (`projectCount`, `actionCount`), `unavailableEnvironments` (`reason`) | `t3_pedir_aprovacao` |
+
+`runtimeRequestId`, `requestId`, `statusRun`, `runId`, `responseCapability`, question and
+option fields, and every field that was already English are unchanged.
+
+| Previous value | English value | Field |
+|---|---|---|
+| `rodando`, `precisa_intervencao`, `concluida`, `falhou`, `cancelada`, `sem_execucao`, `desconhecido` | `running`, `needs_intervention`, `completed`, `failed`, `cancelled`, `no_run`, `unknown` | `state` |
+| `parcial`, `exata` | `partial`, `exact` | `match` |
+| `precisa_intervencao`, `sem_execucao`, `prazo`, `thread_apagada`, `subscription_encerrada` | `needs_intervention`, `no_run`, `timeout`, `thread_deleted`, `subscription_closed` | `returnReason` (`terminal` unchanged) |
+| `consultar_no_t3`, `responder_runtime_request` | `inspect_in_t3`, `respond_runtime_request` | `nextAction.type` |
+| `prazo`, `prazo_global`, `indisponivel`, `environment_divergente`, `conexao_recusada`, `falha` | `timeout`, `global_timeout`, `unavailable`, `environment_mismatch`, `connection_refused`, `failed` | `environmentFailures[].code` (`http_<status>` unchanged) |
+| `ambiente_obrigatorio`, `ambiente_desconhecido`, `ambiente_fora_da_lease`, `ambiente_indisponivel`, `gate_indisponivel`, `sem_projetos` | `environment_required`, `environment_unknown`, `environment_not_in_lease`, `environment_unavailable`, `gate_unavailable`, `no_projects` | write error codes, `unavailableEnvironments[].reason` |
+
+Request kinds (`command`, `user_input`, …), run statuses, `responseCapability.type` and
+the remaining write error codes were already English. Error and reason messages written
+by the connector are English; text that comes from T3 or the user is passed through.
+
 ### New error codes
 
 `parameter_conflict`, `parameter_invalid` (invalid value in a deprecated alias) and
-`parameter_required`. A write call with neither `environment` nor `ambiente` still fails
-with `ambiente_obrigatorio`, before anything reaches the relay.
+`parameter_required`. A write call with neither `environment` nor `ambiente` fails with
+`environment_required`, before anything reaches the relay.
 
 ## Consequences
 
 - Existing calls and configuration files keep working without change. A client that
   re-reads `tools/list` sees only the English names.
+- Clients that read response fields or match error codes by name must move to the English
+  names; the release that ships this is a breaking one. Clients driven by a model read the
+  updated tool descriptions, which name the new fields.
 - An unknown key is still ignored, as before; only the known aliases are inspected.
-- Cursors issued before the change stay valid: their signature uses internal labels, not
-  parameter names.
+- Cursors issued before the change stay valid: their signature keeps the internal labels
+  (`parcial`, `exata`, the previous state values), not parameter names.
+- The private relay is unchanged, so a bridge and a gate on different versions still
+  work; leased reads answer with the previous names until the gate restarts.
+- Operator CLI JSON (`environments`, `diagnose`, write `pair`) uses English keys.
+  Configuration validation messages and other CLI prose remain Portuguese.
 - The aliases are part of the public contract until a release that announces their
   removal. Removing them is a breaking change.
 

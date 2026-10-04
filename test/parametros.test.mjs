@@ -6,7 +6,8 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { criarPonteEscrita } from '../src/escrita/ponte-mcp.mjs';
 import { validarConfig } from '../src/config.mjs';
 import { validarConfigEscrita } from '../src/escrita/config.mjs';
-import { ambientesFalsos, conectarMcp, dados } from './apoio.mjs';
+import { ambientesFalsos, conectarMcp, dados, dadosPadrao, REMOTO } from './apoio.mjs';
+import { thread } from './fixtures.mjs';
 
 const LEGADOS = ['ambiente', 'busca', 'limite', 'estado', 'incluirSemExecucao', 'correspondencia', 'maxCaracteres', 'incluirUltimaResposta', 'verificar'];
 
@@ -49,7 +50,7 @@ test('leitura: chamada com os nomes antigos dá o mesmo resultado que com os nov
   }
   // O alias não é ignorado: o resultado muda de fato com ele.
   const remoto = dados(await c.callTool({ name: 't3_atencao', arguments: { ambiente: 'remoto' } }));
-  assert.equal(remoto.ambiente.alias, 'remoto');
+  assert.equal(remoto.environment.alias, 'remoto');
 });
 
 test('leitura: nome antigo e novo com valores diferentes falham; iguais passam', async () => {
@@ -61,7 +62,7 @@ test('leitura: nome antigo e novo com valores diferentes falham; iguais passam',
   assert.equal(estado.isError, true);
   const iguais = await c.callTool({ name: 't3_threads', arguments: { ambiente: 'remoto', environment: 'remoto', estado: 'rodando', state: 'running' } });
   assert.equal(iguais.isError, undefined);
-  assert.equal(dados(iguais).ambiente.alias, 'remoto');
+  assert.equal(dados(iguais).environment.alias, 'remoto');
 });
 
 test('leitura: valores antigos só no nome antigo, e o valor do alias é validado', async () => {
@@ -82,10 +83,22 @@ test('leitura: valores antigos só no nome antigo, e o valor do alias é validad
 test('leitura: cursor de uma chamada antiga continua na chamada nova', async () => {
   const c = await conectarMcp(ambientesFalsos());
   const p1 = dados(await c.callTool({ name: 't3_buscar_threads', arguments: { busca: 'comum', limite: 1 } }));
-  assert.ok(p1.proximoCursor);
-  const p2 = await c.callTool({ name: 't3_buscar_threads', arguments: { search: 'comum', limit: 1, cursor: p1.proximoCursor } });
+  assert.ok(p1.nextCursor);
+  const p2 = await c.callTool({ name: 't3_buscar_threads', arguments: { search: 'comum', limit: 1, cursor: p1.nextCursor } });
   assert.equal(p2.isError, undefined, p2.content[0].text);
-  assert.notEqual(dados(p2).threads[0].ambiente.environmentId, p1.threads[0].ambiente.environmentId);
+  assert.notEqual(dados(p2).threads[0].environment.environmentId, p1.threads[0].environment.environmentId);
+});
+
+test('leitura: cursor de t3_threads filtrado por estado vale entre o nome antigo e o novo', async () => {
+  const d = dadosPadrao();
+  d.remoto.shell.threads.push(thread({ id: 't-run2', projectId: REMOTO.projeto, title: 'Outra rodando', status: 'running', latestRunId: 'run-s9' }));
+  const c = await conectarMcp(ambientesFalsos(d));
+  const t1 = dados(await c.callTool({ name: 't3_threads', arguments: { ambiente: 'remoto', estado: 'rodando', limite: 1 } }));
+  assert.equal(t1.total, 2);
+  assert.ok(t1.nextCursor);
+  const t2 = await c.callTool({ name: 't3_threads', arguments: { environment: 'remoto', state: 'running', limit: 1, cursor: t1.nextCursor } });
+  assert.equal(t2.isError, undefined, t2.content[0].text);
+  assert.notEqual(dados(t2).threads[0].threadId, t1.threads[0].threadId);
 });
 
 test('escrita: ambiente antigo vai ao relay igual ao novo; conflito e ausência não chegam ao relay', async () => {
@@ -101,7 +114,7 @@ test('escrita: ambiente antigo vai ao relay igual ao novo; conflito e ausência 
   assert.match(conflito.content[0].text, /^parameter_conflict: /);
   const sem = await c.callTool({ name: 't3_escrever_thread_pin', arguments: base });
   assert.equal(sem.isError, true);
-  assert.match(sem.content[0].text, /^ambiente_obrigatorio: pass `environment`/);
+  assert.match(sem.content[0].text, /^environment_required: pass `environment`/);
   const reconcile = await c.callTool({ name: 't3_reconciliar_escrita', arguments: { leaseId: 'l', operationId: 'op', ambiente: 'local', environment: 'remoto' } });
   assert.equal(reconcile.isError, true);
   assert.equal(pedidos.length, 2);
@@ -138,4 +151,25 @@ test('config de escrita: nomes em inglês aceitos; allowlists continuam recusada
   for (const campo of ['allowedProjects', 'projects', 'actions']) {
     assert.throws(() => validarConfigEscrita({ port: 7433, stateDir: '/x', channel: { organization: 'o', tunnelId: 'tunnel_abc' }, environments: { remoto: { ...ambiente, [campo]: ['x'] } } }), /não é suportado/);
   }
+});
+
+test('escrita: respostas e códigos do gate saem com os nomes em inglês', async () => {
+  let resposta = { ambiente: { alias: 'remoto', environmentId: 'env-s' }, state: 'completed', operationId: 'op', receipt: { sequence: 1 } };
+  const c = await ponte(async (req) => {
+    if (req.op === 'request') return resposta;
+    if (req.leaseId === 'velha') throw new Error('ambiente_fora_da_lease');
+    return resposta;
+  });
+  const base = { leaseId: 'l', operationId: 'op', environment: 'remoto' };
+  const escrita = JSON.parse((await c.callTool({ name: 't3_escrever_thread_pin', arguments: { ...base, input: { threadId: 't' } } })).content[0].text);
+  assert.deepEqual(escrita, { environment: { alias: 'remoto', environmentId: 'env-s' }, state: 'completed', operationId: 'op', receipt: { sequence: 1 } });
+  const reconcile = JSON.parse((await c.callTool({ name: 't3_reconciliar_escrita', arguments: base })).content[0].text);
+  assert.equal(reconcile.environment.alias, 'remoto');
+  assert.equal('ambiente' in reconcile, false);
+  const fora = await c.callTool({ name: 't3_escrever_thread_pin', arguments: { ...base, leaseId: 'velha', input: { threadId: 't' } } });
+  assert.match(fora.content[0].text, /^environment_not_in_lease: /);
+  resposta = { active: true, leaseId: 'L', expiresAt: 1, remainingMs: 2, scopeHash: 'h', ambientes: [{ alias: 'local', environmentId: 'p', projetos: 3, acoes: 42 }] };
+  const ativa = JSON.parse((await c.callTool({ name: 't3_pedir_aprovacao', arguments: {} })).content[0].text);
+  assert.deepEqual(ativa, { authorized: true, active: true, leaseId: 'L', expiresAt: 1, remainingMs: 2, scopeHash: 'h',
+    environments: [{ alias: 'local', environmentId: 'p', projectCount: 3, actionCount: 42 }], channelIdentity: true, individualIdentity: false });
 });

@@ -56,15 +56,15 @@ async function diagnostico() {
     try {
       const info = await c.verificar();
       const projetos = await c.inventario();
-      saida.push({ ambiente: { alias: r.alias, environmentId: r.environmentId }, versao: info.versao, escopos: info.escopos, tokenExpiraEm: info.tokenExpiraEm,
-        projetos: projetos.length, acoes: r.acoes.length,
-        ...(temOpcao('--projetos') ? { inventario: projetos.map((p) => ({ projectId: p.id, nome: p.name, diretorio: p.directory })) } : {}) });
+      saida.push({ environment: { alias: r.alias, environmentId: r.environmentId }, version: info.versao, scopes: info.escopos, tokenExpiresAt: info.tokenExpiraEm,
+        projectCount: projetos.length, actionCount: r.acoes.length,
+        ...(temOpcao('--projetos') ? { inventory: projetos.map((p) => ({ projectId: p.id, name: p.name, directory: p.directory })) } : {}) });
     } catch (e) {
-      saida.push({ ambiente: { alias: r.alias, environmentId: r.environmentId }, erro: e.message });
+      saida.push({ environment: { alias: r.alias, environmentId: r.environmentId }, error: e.message });
     } finally { c.fechar(); }
   }
   console.log(JSON.stringify(saida, null, 1));
-  if (saida.some((s) => s.erro)) process.exitCode = 1;
+  if (saida.some((s) => s.error)) process.exitCode = 1;
 }
 
 async function pair() {
@@ -99,7 +99,7 @@ async function pair() {
     await rename(temp, r.tokenFile);
     const c = criarConexaoEscrita(r, { transporte });
     const info = await c.verificar();
-    console.log(JSON.stringify({ salvo: r.tokenFile, ambiente: r.alias, environmentId: info.environmentId, escopos: info.escopos, expiraEm: info.tokenExpiraEm }));
+    console.log(JSON.stringify({ savedTo: r.tokenFile, environment: r.alias, environmentId: info.environmentId, scopes: info.escopos, expiresAt: info.tokenExpiraEm }));
   } finally { transporte.fechar(); }
 }
 

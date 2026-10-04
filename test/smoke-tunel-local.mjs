@@ -41,19 +41,19 @@ try {
   await cliente.connect(new StreamableHTTPClientTransport(new URL(url)));
   const { tools } = await cliente.listTools();
   console.log('ferramentas via túnel local:', tools.map((t) => t.name).join(', '));
-  const dados = (r) => (r.isError ? { erro: r.content[0].text } : JSON.parse(r.content[0].text));
+  const dados = (r) => (r.isError ? { error: r.content[0].text } : JSON.parse(r.content[0].text));
   for (const ambiente of ['local', 'remoto']) {
-    const p = dados(await cliente.callTool({ name: 't3_projetos', arguments: { ambiente } }));
-    console.log(`t3_projetos ${ambiente}:`, JSON.stringify(p.erro ? p : p.projetos.map((x) => [x.projectId, x.diretorio])));
+    const p = dados(await cliente.callTool({ name: 't3_projetos', arguments: { environment: ambiente } }));
+    console.log(`t3_projetos ${ambiente}:`, JSON.stringify(p.error ? p : p.projects.map((x) => [x.projectId, x.directory])));
   }
   if (process.env.SMOKE_THREAD_REMOTO) {
-    const t = dados(await cliente.callTool({ name: 't3_thread', arguments: { ambiente: 'remoto', threadId: process.env.SMOKE_THREAD_REMOTO, maxCaracteres: 200 } }));
-    console.log('t3_thread:', JSON.stringify(t.erro ? t : {
-      titulo: t.titulo, projeto: t.projeto?.titulo, diretorio: t.diretorio, modelo: t.modelo?.modelo,
-      estado: t.estado, statusRun: t.statusRun, caracteresUltimaResposta: t.ultimaResposta?.texto?.length ?? 0,
+    const t = dados(await cliente.callTool({ name: 't3_thread', arguments: { environment: 'remoto', threadId: process.env.SMOKE_THREAD_REMOTO, maxCharacters: 200 } }));
+    console.log('t3_thread:', JSON.stringify(t.error ? t : {
+      title: t.title, project: t.project?.title, directory: t.directory, model: t.model?.model,
+      state: t.state, statusRun: t.statusRun, caracteresUltimaResposta: t.latestResponse?.text?.length ?? 0,
     }));
-    const w = dados(await cliente.callTool({ name: 't3_aguardar_thread', arguments: { ambiente: 'remoto', threadId: process.env.SMOKE_THREAD_REMOTO, timeoutMs: 2000 } }));
-    console.log('t3_aguardar_thread:', JSON.stringify(w.erro ? w : { estado: w.estado, terminal: w.terminal, timedOut: w.timedOut, elapsedMs: w.elapsedMs }));
+    const w = dados(await cliente.callTool({ name: 't3_aguardar_thread', arguments: { environment: 'remoto', threadId: process.env.SMOKE_THREAD_REMOTO, timeoutMs: 2000 } }));
+    console.log('t3_aguardar_thread:', JSON.stringify(w.error ? w : { state: w.state, terminal: w.terminal, timedOut: w.timedOut, elapsedMs: w.elapsedMs }));
   }
   await cliente.close();
 } finally {

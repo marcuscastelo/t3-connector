@@ -19,16 +19,17 @@ environment.
 2. **`environment` is required** (formerly `ambiente`, see
    [ADR 0004](0004-english-contract.md)) on every write tool, guarded read and reconcile (alias or
    environmentId). Writes have no default environment. Missing →
-   `ambiente_obrigatorio`; unknown → `ambiente_desconhecido`. There is never a fallback.
+   `environment_required`; unknown → `environment_unknown` (`ambiente_obrigatorio` and
+   `ambiente_desconhecido` before ADR 0004). There is never a fallback.
 3. **Lease scope v2:** `{scopeVersion: 2, runtimeMode, environments: [grant]}`, one grant
    per environment with `alias`, `environmentId`, `destination` (`t3://<environmentId>`),
    projects, actions and readable projects. The gate authorizes the (environment, project)
-   pair; an environment outside the lease → `ambiente_fora_da_lease`.
+   pair; an environment outside the lease → `environment_not_in_lease`.
 4. **Full inventory in each request.** Every request carries the whole inventory of each
    environment at that moment and every action. The config has no project or action
    allowlist: the control is the passkey holder reviewing the scope shown on the page,
    grouped by environment. Environments that do not respond are left out and listed in
-   `indisponiveis`. A new project or environment only enters with a new request and a new
+   `unavailableEnvironments`. A new project or environment only enters with a new request and a new
    passkey assertion.
 5. **One connection per environment.** Tokens scoped to exactly `orchestration:read` +
    `orchestration:operate` per environment; remote environments use the same SSH
@@ -51,7 +52,7 @@ environment.
 ## Consequences
 
 - A refusal before sending returns the reason (`thread_not_found`, `scope_denied`,
-  `ambiente_*`, `workspace_*`); after sending without an answer it returns
+  `environment_*`, `workspace_*`); after sending without an answer it returns
   `reconciliation_required` and the lease closes, as before.
 - The new journal lives in the `stateDir` (formerly `estado`) directory of the write config. The prototype
   journal is not migrated: its keys included the boot, so they no longer deduplicated

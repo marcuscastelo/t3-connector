@@ -84,7 +84,7 @@ test('pedido leva o inventário completo do environment, sem filtro nem allowlis
  assert.equal(grant.projects.filter(p=>p.name.startsWith('app.example-issue-')).length,30);
  assert.deepEqual(grant.readProjectIds.length,32);
  const lido=JSON.parse((await relay({op:'read',ambiente:'remoto',leaseId:l.leaseId,operation:'t3_projetos',input:{}})).content[0].text);
- assert.ok(lido.projetos.some(p=>p.titulo==='app.example-issue-7@remoto'));
+ assert.ok(lido.projects.some(p=>p.title==='app.example-issue-7@remoto'));
  const w=await relay({op:'dispatch',ambiente:'remoto',leaseId:l.leaseId,action:'thread.settle',operationId:'issue-settle',input:{threadId:'t-issue'}});
  assert.equal(w.state,'completed');assert.equal(remoto.calls.filter(x=>x.m).length,1);
 });
@@ -116,8 +116,8 @@ test('leitura protegida usa o grant e o servidor do environment escolhido',async
  const {aprovar,relay}=await montar();const {l}=await aprovar();
  const r=await relay({op:'read',ambiente:'remoto',leaseId:l.leaseId,operation:'t3_projetos',input:{}});
  const dados=JSON.parse(r.content[0].text);
- assert.equal(dados.ambiente.alias,'remoto');
- assert.ok(dados.projetos.every(p=>p.diretorio.startsWith('/remoto/')));
+ assert.equal(dados.environment.alias,'remoto');
+ assert.ok(dados.projects.every(p=>p.directory.startsWith('/remoto/')));
  await assert.rejects(relay({op:'read',ambiente:'remoto',leaseId:'outra',operation:'t3_projetos',input:{}}),/lease_closed/);
  await assert.rejects(relay({op:'read',ambiente:'remoto',leaseId:l.leaseId,operation:'t3_aguardar_thread',input:{}}),/action_unavailable/);
 });

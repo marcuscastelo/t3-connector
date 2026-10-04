@@ -76,7 +76,7 @@ try {
     allowedProjects: ['00000000-0000-4000-8000-0000000000a1'] } } }));
   const env = { ...process.env, T3_CONNECTOR_CONFIG: config, HOME: tmp };
   const listed = JSON.parse(execFileSync(path.join(binDir, 't3-connector'), ['environments'], { encoding: 'utf8', env }));
-  if (listed.padrao !== 'local' || listed.ambientes?.[0]?.disponivel !== false) fail('`t3-connector environments` did not list the unreachable test environment');
+  if (listed.default !== 'local' || listed.environments?.[0]?.available !== false) fail('`t3-connector environments` did not list the unreachable test environment');
 
   const sdk = (sub) => pathToFileURL(path.join(target, 'node_modules', '@modelcontextprotocol', 'sdk', 'dist', 'esm', sub)).href;
   const { Client } = await import(sdk('client/index.js'));

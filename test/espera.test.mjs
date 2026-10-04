@@ -24,7 +24,7 @@ function assinaturaFalsa(lotes, registro = {}) {
     const fim = new Promise((_, reject) => { falhar = reject; });
     fim.catch(() => {});
     const timers = lotes.map(([ms, itens]) => setTimeout(() => {
-      if (itens === 'cair') return falhar(Object.assign(new Error('WS do T3 fechou durante a espera'), { codigo: 'indisponivel' }));
+      if (itens === 'cair') return falhar(Object.assign(new Error('T3 WS closed during the wait'), { codigo: 'indisponivel' }));
       try { aoReceber(itens); } catch (e) { falhar(e); }
     }, ms));
     return { fim, encerrar() { registro.encerrada = true; timers.forEach(clearTimeout); } };
@@ -40,14 +40,14 @@ test('conclusão normal no Remoto: retorna no evento terminal, sem esperar o pra
     { environment: 'remoto', threadId: 't-comum', timeoutMs: 5000 },
     { assinarImpl: assinaturaFalsa([[5, [snapshot(), { kind: 'synchronized' }]], [40, [evento('run.updated', { ...RUN, status: 'completed' })]]], reg) },
   );
-  assert.deepEqual(r.ambiente, { alias: 'remoto', environmentId: REMOTO.environmentId });
+  assert.deepEqual(r.environment, { alias: 'remoto', environmentId: REMOTO.environmentId });
   assert.equal(r.projectId, REMOTO.projeto);
   assert.equal(r.runId, 'run-s1');
   assert.equal(r.statusRun, 'completed');
-  assert.equal(r.estado, 'concluida');
+  assert.equal(r.state, 'completed');
   assert.equal(r.terminal, true);
   assert.equal(r.timedOut, false);
-  assert.equal(r.motivoRetorno, 'terminal');
+  assert.equal(r.returnReason, 'terminal');
   assert.ok(r.elapsedMs < 1000);
   assert.equal(reg.tag, 'orchestration.subscribeThread');
   assert.deepEqual(reg.payload, { threadId: 't-comum', requestCompletionMarker: true, acceptBoundedSnapshot: true });
@@ -62,11 +62,11 @@ test('timeout: devolve o estado observado com timedOut, sem erro', async () => {
   );
   assert.equal(r.timedOut, true);
   assert.equal(r.terminal, false);
-  assert.equal(r.estado, 'rodando');
+  assert.equal(r.state, 'running');
   assert.equal(r.statusRun, 'running');
-  assert.equal(r.motivoRetorno, 'prazo');
+  assert.equal(r.returnReason, 'timeout');
   assert.ok(r.elapsedMs >= 140 && r.elapsedMs < 1000, `elapsed ${r.elapsedMs}`);
-  assert.ok(r.observadoEm);
+  assert.ok(r.observedAt);
   assert.equal(reg.encerrada, true);
 });
 
@@ -78,13 +78,13 @@ test('timeoutMs acima do teto é limitado a 5 s', async () => {
   assert.equal(r.timeoutMs, 5000);
 });
 
-for (const [status, estado] of [['failed', 'falhou'], ['cancelled', 'cancelada'], ['interrupted', 'cancelada'], ['rolled_back', 'cancelada']]) {
+for (const [status, estado] of [['failed', 'failed'], ['cancelled', 'cancelled'], ['interrupted', 'cancelled'], ['rolled_back', 'cancelled']]) {
   test(`run que termina em ${status} durante a espera vira ${estado}`, async () => {
     const r = await esperar(
       { environment: 'remoto', threadId: 't-comum', timeoutMs: 2000 },
       { assinarImpl: assinaturaFalsa([[5, [snapshot()]], [30, [evento('run.updated', { ...RUN, status })]]]) },
     );
-    assert.equal(r.estado, estado);
+    assert.equal(r.state, estado);
     assert.equal(r.terminal, true);
     assert.equal(r.timedOut, false);
   });
@@ -95,20 +95,20 @@ test('pedido de aprovação durante a espera retorna como intervenção', async 
     { environment: 'remoto', threadId: 't-comum', timeoutMs: 2000 },
     { assinarImpl: assinaturaFalsa([[5, [snapshot()]], [30, [evento('run.updated', { ...RUN, status: 'waiting' }), evento('runtime-request.updated', pedido({ id: 'req-7', kind: 'user_input' }), 12)]]]) },
   );
-  assert.equal(r.estado, 'precisa_intervencao');
-  assert.equal(r.motivoRetorno, 'precisa_intervencao');
+  assert.equal(r.state, 'needs_intervention');
+  assert.equal(r.returnReason, 'needs_intervention');
   assert.equal(r.terminal, false);
-  assert.deepEqual({ id: r.pedidoPendente.runtimeRequestId, motivo: r.pedidoPendente.motivo }, { id: 'req-7', motivo: 'pergunta aguardando resposta' });
+  assert.deepEqual({ id: r.pendingRequest.runtimeRequestId, reason: r.pendingRequest.reason }, { id: 'req-7', reason: 'question waiting for an answer' });
 });
 
 test('run já terminal ou pedido pendente na shell retornam na hora, sem abrir WS', async () => {
   const chamadas = [];
   const nunca = async () => { throw new Error('não deveria abrir WS'); };
   const llm = await esperar({ environment: 'remoto', threadId: 't-llm', timeoutMs: 2000 }, { assinarImpl: nunca }, { chamadas });
-  assert.deepEqual([llm.estado, llm.terminal, llm.timedOut, llm.runId], ['cancelada', true, false, 'run-s3']);
+  assert.deepEqual([llm.state, llm.terminal, llm.timedOut, llm.runId], ['cancelled', true, false, 'run-s3']);
   const pol = await esperar({ environment: 'local', threadId: 't-local', timeoutMs: 2000 }, { assinarImpl: nunca }, { chamadas });
-  assert.equal(pol.estado, 'precisa_intervencao');
-  assert.equal(pol.pedidoPendente.runtimeRequestId, 'req-1');
+  assert.equal(pol.state, 'needs_intervention');
+  assert.equal(pol.pendingRequest.runtimeRequestId, 'req-1');
   assert.ok(!chamadas.some((c) => c.endsWith(':ticket')));
 });
 
@@ -116,7 +116,7 @@ test('thread sem run retorna sem_execucao na hora, sem esperar um run futuro', a
   const d = dadosPadrao();
   d.local.shell.threads.push(thread({ id: 't-idle', projectId: 'proj-app-local', status: 'idle', latestRunId: null }));
   const r = await esperar({ environment: 'local', threadId: 't-idle', timeoutMs: 2000 }, { assinarImpl: async () => { throw new Error('não'); } }, { dados: d });
-  assert.deepEqual([r.estado, r.runId, r.timedOut, r.motivoRetorno], ['sem_execucao', null, false, 'sem_execucao']);
+  assert.deepEqual([r.state, r.runId, r.timedOut, r.returnReason], ['no_run', null, false, 'no_run']);
 });
 
 test('última resposta vem do run acompanhado, do snapshot e dos eventos', async () => {
@@ -127,8 +127,8 @@ test('última resposta vem do run acompanhado, do snapshot e dos eventos', async
       [20, [evento('message.updated', mensagem({ id: 'm-nova', runId: 'run-s1', text: 'Terminei.' })), evento('run.updated', { ...RUN, status: 'completed' }, 12)]],
     ]) },
   );
-  assert.equal(r.ultimaResposta.texto, 'Terminei.');
-  assert.equal(r.ultimaResposta.runId, 'run-s1');
+  assert.equal(r.latestResponse.text, 'Terminei.');
+  assert.equal(r.latestResponse.runId, 'run-s1');
 });
 
 test('thread inexistente, de projeto não autorizado ou de outro environment: recusa, não timeout', async () => {
@@ -136,7 +136,7 @@ test('thread inexistente, de projeto não autorizado ou de outro environment: re
   for (const [ambiente, threadId] of [['remoto', 'nao-existe'], ['local', 't-alheia'], ['local', 't-llm']]) {
     await assert.rejects(
       esperar({ environment: ambiente, threadId, timeoutMs: 2000 }, { assinarImpl: async () => { throw new Error('não'); } }, { chamadas }),
-      (e) => e instanceof ForaDoEscopo && e.message.includes(`ambiente ${ambiente}`),
+      (e) => e instanceof ForaDoEscopo && e.message.includes(`environment ${ambiente}`),
     );
   }
   assert.ok(!chamadas.some((c) => c.endsWith(':ticket')), 'não abre subscription fora do escopo');
@@ -145,7 +145,7 @@ test('thread inexistente, de projeto não autorizado ou de outro environment: re
 test('runId inexistente é erro, não timeout', async () => {
   await assert.rejects(
     esperar({ environment: 'remoto', threadId: 't-comum', timeoutMs: 2000, runId: 'run-x' }, { assinarImpl: assinaturaFalsa([[5, [snapshot()]]]) }),
-    /run run-x não encontrado/,
+    /run run-x not found/,
   );
 });
 
@@ -165,7 +165,7 @@ test('cancelamento pelo cliente encerra a subscription e não vira resultado', a
 test('WS que cai antes do prazo é erro de transporte, não estado inventado', async () => {
   await assert.rejects(
     esperar({ environment: 'remoto', threadId: 't-comum', timeoutMs: 2000 }, { assinarImpl: assinaturaFalsa([[5, [snapshot()]], [20, 'cair']]) }),
-    /fechou durante a espera/,
+    /closed during the wait/,
   );
 });
 
@@ -175,6 +175,6 @@ test('environment que não responde no prazo: erro sem estado observado', async 
   r.transporte.baseUrl = () => new Promise(() => {});
   await assert.rejects(
     aguardarThread(ambientes, { environment: 'remoto', threadId: 't-comum', timeoutMs: 100 }),
-    /não respondeu em 100 ms; nenhum estado observado/,
+    /did not respond within 100 ms; no state observed/,
   );
 });

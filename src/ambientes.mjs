@@ -13,7 +13,7 @@ function comSinal(promessa, signal, alias) {
   return new Promise((resolve, reject) => {
     const aoAbortar = () =>
       reject(signal.reason?.name === 'TimeoutError'
-        ? new ErroT3(`ambiente ${alias} não respondeu no prazo da chamada`, { codigo: 'prazo' })
+        ? new ErroT3(`environment ${alias} did not respond within the call deadline`, { codigo: 'prazo' })
         : new Cancelada());
     if (signal.aborted) return aoAbortar();
     signal.addEventListener('abort', aoAbortar, { once: true });
@@ -31,14 +31,14 @@ export function criarEscopo(alias, projetosPermitidos) {
       shell.threads.filter((t) => permitidos.has(t.projectId) && !t.deletedAt && !t.archivedAt),
     exigirProjeto(projectId) {
       if (!permitidos.has(projectId)) {
-        throw new ForaDoEscopo(`projeto ${projectId} fora dos projetos autorizados no ambiente ${alias}`);
+        throw new ForaDoEscopo(`project ${projectId} is not among the authorized projects of environment ${alias}`);
       }
     },
     exigirThread(shell, threadId) {
       const thread = shell.threads.find((t) => t.id === threadId && !t.deletedAt);
       // Mesma resposta para inexistente e fora do escopo: não revela threads de outros projetos.
       if (!thread || !permitidos.has(thread.projectId)) {
-        throw new ForaDoEscopo(`thread ${threadId} não encontrada nos projetos autorizados do ambiente ${alias}`);
+        throw new ForaDoEscopo(`thread ${threadId} not found in the authorized projects of environment ${alias}`);
       }
       return thread;
     },
@@ -61,7 +61,7 @@ export function criarAmbientes(config, {
     const alvo = chave ?? config.padrao;
     const r = registros.find((x) => x.alias === alvo || x.environmentId === alvo);
     if (!r) {
-      throw new ForaDoEscopo(`ambiente "${alvo}" não configurado; disponíveis: ${registros.map((x) => x.alias).join(', ')}`);
+      throw new ForaDoEscopo(`environment "${alvo}" is not configured; available: ${registros.map((x) => x.alias).join(', ')}`);
     }
     return r;
   }
@@ -127,18 +127,18 @@ export function criarAmbientes(config, {
       return Promise.all(registros.map(async (r) => {
         const item = {
           ...identidade(r),
-          padrao: r.alias === config.padrao,
-          transporte: r.ssh ? `ssh ${r.ssh.host}` : 'url',
-          projetosAutorizados: r.projetosPermitidos.length,
+          default: r.alias === config.padrao,
+          transport: r.ssh ? `ssh ${r.ssh.host}` : 'url',
+          allowedProjectCount: r.projetosPermitidos.length,
         };
         if (!verificar) return item;
         const limite = AbortSignal.timeout(prazoMs);
         try {
           const { info } = await conectar(r, { signal: signal ? AbortSignal.any([signal, limite]) : limite });
-          return { ...item, disponivel: true, nome: info.nome, versao: info.versao };
+          return { ...item, available: true, name: info.nome, version: info.versao };
         } catch (e) {
           if (e instanceof Cancelada) throw e;
-          return { ...item, disponivel: false, erro: e.message };
+          return { ...item, available: false, error: e.message };
         }
       }));
     },

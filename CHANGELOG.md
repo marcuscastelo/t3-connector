@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Breaking: responses are English.** Every response field, state and return value,
+  search failure code and write error code written by the connector is renamed, with no
+  Portuguese duplicate: for example `ambiente` → `environment`, `estado: "rodando"` →
+  `state: "running"`, `proximoCursor` → `nextCursor`, `pedidosPendentes` →
+  `pendingRequests`, `proximaAcao` → `nextAction`, `ambiente_fora_da_lease` →
+  `environment_not_in_lease`. Connector-generated error and reason messages are English.
+  The JSON of `t3-connector environments`, `diagnose` and `t3-connector-write pair` uses
+  English keys. Clients that read fields or codes by name must update; full tables in
+  [ADR 0004](docs/adr/0004-english-contract.md). Restart the write gate after upgrading:
+  until then, leased reads still answer with the previous names. Cursors issued before
+  the upgrade stay valid.
+
 - Tool parameters and configuration keys are now English: `environment`, `search`,
   `limit`, `state` (values `running`, `needs_intervention`, `completed`, `failed`,
   `cancelled`, `no_run`, `unknown`), `includeNoRun`, `match` (`partial`, `exact`),
@@ -11,27 +23,25 @@
   values remain accepted as deprecated aliases, so existing calls and config files keep
   working; both spellings with different values fail with `parameter_conflict` (config:
   refused at start-up). New error codes `parameter_conflict`, `parameter_invalid` and
-  `parameter_required`. Tool names, response fields, error codes and the private
-  bridge-to-gate relay are unchanged. Migration table in
-  [ADR 0004](docs/adr/0004-english-contract.md).
+  `parameter_required`. Tool names and the private bridge-to-gate relay are unchanged.
 
-- `t3_thread.pedidosPendentes` now exposes request IDs, public response capability,
+- `t3_thread.pendingRequests` now exposes request IDs, public response capability,
   full user-input questions/options/field constraints, and approval prompts/provider
   decisions. Exact request-ID joins and field allowlists exclude native/session details
   and prior answers. Missing/invalid details and unsupported kinds have explicit
   fallback codes; shell-only pending requests remain visible. Read scopes and write
   authorization are unchanged.
-  Structured `proximaAcao` recommends the answer/approval tool with target IDs and
+  Structured `nextAction` recommends the answer/approval tool with target IDs and
   response field, or inspection in T3 when it cannot safely recommend a response.
-  `threadSendRespondePedido: false` and tool guidance make explicit that sends do not
+  `threadSendAnswersRequest: false` and tool guidance make explicit that sends do not
   resolve requests. A stateful MCP regression covers a send queued behind user input
   and the existing request's answer resuming the same run.
 
 - New read tool `t3_buscar_threads`: finds threads by title or exact ID without an
-  environment, across every configured environment (or one, with `ambiente`). Each result
-  carries `ambiente: {alias, environmentId, nome}`. Deadlines of 4 s per environment and
-  10 s in total; environments that fail are listed in `falhasAmbientes` with
-  `completa: false` instead of failing the search. Ambiguous matches are all returned,
+  environment, across every configured environment (or one, with `environment`). Each
+  result carries `environment: {alias, environmentId, name}`. Deadlines of 4 s per
+  environment and 10 s in total; environments that fail are listed in
+  `environmentFailures` with `complete: false` instead of failing the search. Ambiguous matches are all returned,
   ordered by environment and thread ID, with a cursor bound to the environments that
   answered. Existing tools and write actions are unchanged and still take one environment.
 

@@ -1,4 +1,4 @@
-// Servidor MCP somente leitura. Cada chamada escolhe o environment (`ambiente`; padrão
+// Servidor MCP somente leitura. Cada chamada escolhe o environment (`environment`; padrão
 // da config, normalmente local) e só enxerga os projectIds autorizados nele: thread de
 // outro projeto é recusada mesmo que o token do T3 alcance o environment inteiro.
 
@@ -19,13 +19,14 @@ import { resumirPedidosRuntime } from './pedidos-runtime.mjs';
 import { esquema, normalizarParametros, ParametroInvalido } from './parametros.mjs';
 
 export const VERSAO = '0.5.0';
-// Estado no filtro de entrada: nome em inglês -> valor interno (ainda o das respostas).
-const ESTADO_INTERNO = {
-  running: 'rodando', needs_intervention: 'precisa_intervencao', completed: 'concluida', failed: 'falhou',
-  cancelled: 'cancelada', no_run: 'sem_execucao', unknown: 'desconhecido',
+const ESTADOS = ['running', 'needs_intervention', 'completed', 'failed', 'cancelled', 'no_run', 'unknown'];
+// Valores antigos do filtro `estado`; a assinatura do cursor de t3_threads usa o valor
+// antigo, para um cursor emitido antes da troca continuar valendo.
+const ESTADO_LEGADO = {
+  rodando: 'running', precisa_intervencao: 'needs_intervention', concluida: 'completed', falhou: 'failed',
+  cancelada: 'cancelled', sem_execucao: 'no_run', desconhecido: 'unknown',
 };
-const ESTADOS = Object.keys(ESTADO_INTERNO);
-const ESTADO_LEGADO = Object.fromEntries(Object.entries(ESTADO_INTERNO).map(([ingles, legado]) => [legado, ingles]));
+const ESTADO_NO_CURSOR = Object.fromEntries(Object.entries(ESTADO_LEGADO).map(([legado, ingles]) => [ingles, legado]));
 const CORRESPONDENCIA_LEGADA = { parcial: 'partial', exata: 'exact' };
 // Nomes antigos dos parâmetros, aceitos sem aparecer no tools/list (ver docs/adr/0004).
 const LEGADO = {
@@ -42,15 +43,15 @@ function projetosPorId(shell) {
 export function resumoDaThread(thread, projeto, pendentes = []) {
   return {
     threadId: thread.id,
-    titulo: thread.title,
-    projeto: projeto ? { projectId: projeto.id, titulo: projeto.title } : { projectId: thread.projectId },
-    diretorio: thread.worktreePath ?? projeto?.workspaceRoot ?? null,
+    title: thread.title,
+    project: projeto ? { projectId: projeto.id, title: projeto.title } : { projectId: thread.projectId },
+    directory: thread.worktreePath ?? projeto?.workspaceRoot ?? null,
     branch: thread.branch ?? null,
-    modelo: resumoModelo(thread.modelSelection),
-    modoExecucao: thread.runtimeMode,
+    model: resumoModelo(thread.modelSelection),
+    runtimeMode: thread.runtimeMode,
     ...estadoDaThread(thread, pendentes),
-    atualizadaEm: thread.updatedAt,
-    encerradaNaLista: Boolean(thread.settledAt),
+    updatedAt: thread.updatedAt,
+    settled: Boolean(thread.settledAt),
   };
 }
 
@@ -61,7 +62,7 @@ function resposta(dados) {
 function erro(e) {
   const mensagem = e instanceof ForaDoEscopo || e instanceof ErroT3 || e instanceof Cancelada || e instanceof CursorInvalido || e instanceof EntradaInvalida || e instanceof ParametroInvalido
     ? e.message
-    : `falha ao consultar o T3: ${e?.message ?? e}`;
+    : `failed to query T3: ${e?.message ?? e}`;
   return { content: [{ type: 'text', text: mensagem }], isError: true };
 }
 
@@ -93,7 +94,7 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
     try {
       const r = ambientes.resolver(args.environment);
       const dados = await ambientes.usar(r, (cliente) => fn({ ...args, r, cliente, signal: extra?.signal }), { signal: extra?.signal });
-      return resposta({ ambiente: ambientes.identidade(r), ...dados });
+      return resposta({ environment: ambientes.identidade(r), ...dados });
     } catch (e) {
       return erro(e);
     }
@@ -112,7 +113,7 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
     },
     async ({ check = true }, extra) => {
       try {
-        return resposta({ padrao: ambientes.padrao, ambientes: await ambientes.listar({ verificar: check, signal: extra?.signal }) });
+        return resposta({ default: ambientes.padrao, environments: await ambientes.listar({ verificar: check, signal: extra?.signal }) });
       } catch (e) {
         return erro(e);
       }
@@ -120,14 +121,14 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
   );
 
   const campoCursor = z.string().min(1).optional()
-    .describe('`proximoCursor` from the previous page, with the same environment and filters; omitted: first page');
+    .describe('`nextCursor` from the previous page, with the same environment and filters; omitted: first page');
 
   registrar(
     't3_projetos',
     {
       title: 'Authorized T3 projects',
       description:
-        'Lists the authorized projects of a T3 environment, with directory and counts of threads running or needing intervention, ordered by title. `total` comes before the list; use `search` (part of the title or projectId) and `limit` in environments with many projects. When `truncado: true`, repeat the call with `cursor` = `proximoCursor` for the next page. Read-only.',
+        'Lists the authorized projects of a T3 environment, with directory and counts of threads running or needing intervention, ordered by title. `total` comes before the list; use `search` (part of the title or projectId) and `limit` in environments with many projects. When `truncated: true`, repeat the call with `cursor` = `nextCursor` for the next page. Read-only.',
       forma: {
         environment: campoAmbiente,
         search: z.string().min(1).optional().describe('Filter by part of the title or projectId, ignoring case and accents'),
@@ -152,22 +153,22 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
         comparar: comparador(),
       });
       const projetos = pagina.map((p) => {
-        const doProjeto = threads.filter((t) => t.projectId === p.id).map((t) => estadoDaThread(t).estado);
+        const doProjeto = threads.filter((t) => t.projectId === p.id).map((t) => estadoDaThread(t).state);
         return {
           projectId: p.id,
-          titulo: p.title,
-          diretorio: p.workspaceRoot,
-          threadsRodando: doProjeto.filter((e) => e === 'rodando').length,
-          threadsPrecisandoIntervencao: doProjeto.filter((e) => e === 'precisa_intervencao').length,
+          title: p.title,
+          directory: p.workspaceRoot,
+          runningThreads: doProjeto.filter((e) => e === 'running').length,
+          threadsNeedingIntervention: doProjeto.filter((e) => e === 'needs_intervention').length,
         };
       });
       return {
         total: casados.length,
-        ...(busca ? { busca } : {}),
-        retornados: projetos.length,
-        truncado,
-        ...(proximoCursor ? { proximoCursor } : {}),
-        projetos,
+        ...(busca ? { search: busca } : {}),
+        returned: projetos.length,
+        truncated: truncado,
+        ...(proximoCursor ? { nextCursor: proximoCursor } : {}),
+        projects: projetos,
       };
     }),
   );
@@ -177,7 +178,7 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
     {
       title: 'T3 threads',
       description:
-        'Lists threads of the authorized projects of an environment with project, directory, model and state, most recently updated first; the `state` filter takes running, needs_intervention, completed, failed, cancelled, no_run or unknown (responses still report it in `estado`: rodando, precisa_intervencao, concluida, falhou, cancelada, sem_execucao, desconhecido). To find a thread by name use `search` (part of the title or threadId): `total` counts every match, not just the page. When `truncado: true`, repeat the call with `cursor` = `proximoCursor` for the next page. Threads without a V2 run (imported history) only appear with includeNoRun; `ocultasSemExecucao` says how many were left out. Read-only.',
+        'Lists threads of the authorized projects of an environment with project, directory, model and state (running, needs_intervention, completed, failed, cancelled, no_run, unknown), most recently updated first. To find a thread by name use `search` (part of the title or threadId): `total` counts every match, not just the page. When `truncated: true`, repeat the call with `cursor` = `nextCursor` for the next page. Threads without a V2 run (imported history) only appear with includeNoRun; `hiddenNoRun` says how many were left out. Read-only.',
       forma: {
         environment: campoAmbiente,
         projectId: z.string().optional().describe('Restrict to one authorized project of this environment'),
@@ -189,8 +190,7 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
       },
       annotations: SO_LEITURA,
     },
-    noAmbiente(async ({ r, cliente, signal, projectId, state, includeNoRun: incluirSemExecucao = false, search: busca, limit: limite = 20, cursor }) => {
-      const estado = state ? ESTADO_INTERNO[state] : undefined;
+    noAmbiente(async ({ r, cliente, signal, projectId, state: estado, includeNoRun: incluirSemExecucao = false, search: busca, limit: limite = 20, cursor }) => {
       if (projectId) r.escopo.exigirProjeto(projectId);
       const shell = await cliente.shell({ signal });
       const projetos = projetosPorId(shell);
@@ -199,27 +199,27 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
         .filter((t) => !projectId || t.projectId === projectId)
         .filter((t) => casaBusca(busca, t.title, t.id))
         .map((t) => resumoDaThread(t, projetos.get(t.projectId)));
-      const lista = candidatas.filter((t) => (estado ? t.estado === estado : incluirSemExecucao || t.estado !== 'sem_execucao'));
+      const lista = candidatas.filter((t) => (estado ? t.state === estado : incluirSemExecucao || t.state !== 'no_run'));
       const ocultas = estado || incluirSemExecucao ? 0 : candidatas.length - lista.length;
-      const chave = (t) => [t.atualizadaEm ?? '', t.threadId];
+      const chave = (t) => [t.updatedAt ?? '', t.threadId];
       const comparar = comparador([true, false]);
       const { pagina, truncado, proximoCursor, alterados } = paginar({
         itens: lista.sort((a, b) => comparar(chave(a), chave(b))),
-        consulta: assinatura(['t3_threads', r.environmentId, projectId ?? null, estado ?? null, incluirSemExecucao, normalizar(busca ?? '')]),
+        consulta: assinatura(['t3_threads', r.environmentId, projectId ?? null, estado ? ESTADO_NO_CURSOR[estado] : null, incluirSemExecucao, normalizar(busca ?? '')]),
         cursor,
         limite,
         chave,
         comparar,
-        versao: (t) => t.atualizadaEm ?? '',
+        versao: (t) => t.updatedAt ?? '',
       });
       return {
         total: lista.length,
-        ...(busca ? { busca } : {}),
-        retornadas: pagina.length,
-        truncado,
-        ...(proximoCursor ? { proximoCursor } : {}),
-        ...(alterados ? { alteradasDesdeInicio: alterados } : {}),
-        ...(ocultas ? { ocultasSemExecucao: ocultas } : {}),
+        ...(busca ? { search: busca } : {}),
+        returned: pagina.length,
+        truncated: truncado,
+        ...(proximoCursor ? { nextCursor: proximoCursor } : {}),
+        ...(alterados ? { changedSinceStart: alterados } : {}),
+        ...(ocultas ? { hiddenNoRun: ocultas } : {}),
         threads: pagina,
       };
     }),
@@ -230,18 +230,18 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
     {
       title: 'Find threads across environments',
       description:
-        'Finds threads by title or ID in every configured environment (or only in `environment`) and returns each candidate with the environment where it lives (`ambiente: {alias, environmentId, nome}`). ' +
+        'Finds threads by title or ID in every configured environment (or only in `environment`) and returns each candidate with the environment where it lives (`environment: {alias, environmentId, name}`). ' +
         'Pass exactly one of `search` (part of the title or ID, or the whole title with `match: "exact"`) or `threadId` (exact ID). ' +
-        `Each environment has ${PRAZO_AMBIENTE_MS} ms and the whole search ${PRAZO_TOTAL_MS} ms; environments that fail or time out are listed in \`falhasAmbientes\` and \`completa\` is false, so zero results then do not prove the thread is missing. ` +
+        `Each environment has ${PRAZO_AMBIENTE_MS} ms and the whole search ${PRAZO_TOTAL_MS} ms; environments that fail or time out are listed in \`environmentFailures\` and \`complete\` is false, so zero results then do not prove the thread is missing. ` +
         'The same title or ID can exist in several environments: never pick one on your own; ask the user when `total` > 1, then call the other tools with the chosen environment (`environment` parameter) and `threadId`. ' +
-        'Includes archived threads (`arquivada`) and threads without a run. Results are ordered by environmentId and threadId; when `truncado: true`, repeat with `cursor` = `proximoCursor`. Read-only.',
+        'Includes archived threads (`archived`) and threads without a run. Results are ordered by environmentId and threadId; when `truncated: true`, repeat with `cursor` = `nextCursor`. Read-only.',
       forma: {
         search: z.string().min(1).optional().describe('Part of the title or threadId, ignoring case and accents; exclusive with threadId'),
         threadId: z.string().min(1).optional().describe('Exact thread ID, compared literally; exclusive with search'),
         match: z.enum(['partial', 'exact']).optional().describe('With search: partial (substring, default) or exact (whole title, or exact ID)'),
         environment: z.string().min(1).optional().describe(`Restrict the search to one environment (alias or environmentId): ${nomes}. Omitted: every configured environment`),
         limit: z.number().int().min(1).max(50).optional().describe('Maximum threads per page; default 20. `total` counts every match in the environments that answered'),
-        cursor: z.string().min(1).optional().describe('`proximoCursor` from the previous page of the same search; omitted: first page'),
+        cursor: z.string().min(1).optional().describe('`nextCursor` from the previous page of the same search; omitted: first page'),
       },
       annotations: SO_LEITURA,
     },
@@ -269,7 +269,7 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
       const itens = r.escopo
         .threadsVisiveis(shell)
         .map((t) => resumoDaThread(t, projetos.get(t.projectId)))
-        .filter((t) => t.estado === 'precisa_intervencao' || (t.estado === 'falhou' && !t.encerradaNaLista));
+        .filter((t) => t.state === 'needs_intervention' || (t.state === 'failed' && !t.settled));
       return { total: itens.length, threads: itens };
     }),
   );
@@ -279,7 +279,7 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
     {
       title: 'Thread state and latest response',
       description:
-        'Detailed state of an authorized thread, latest response and pending runtime requests. pedidosPendentes includes requestId, responseCapability, proximaAcao and conteudo: user_input questions with IDs/options/field constraints, or approval prompt/options. Follow proximaAcao: answer questions with runtime-request.answer (answers keyed by question ID); approvals use runtime-request.approve (decision). thread.send does NOT answer a pending runtime request and can remain queued behind the blocked run. If conteudoDisponivel is false, do not infer an answer: inspect the request in T3. Pass the thread environment. Read-only.',
+        'Detailed state of an authorized thread, latest response and pending runtime requests. pendingRequests includes requestId, responseCapability, nextAction and content: user_input questions with IDs/options/field constraints, or approval prompt/options. Follow nextAction: answer questions with runtime-request.answer (answers keyed by question ID); approvals use runtime-request.approve (decision). thread.send does NOT answer a pending runtime request and can remain queued behind the blocked run. If contentAvailable is false, do not infer an answer: inspect the request in T3. Pass the thread environment. Read-only.',
       forma: {
         environment: campoAmbiente,
         threadId: z.string().min(1),
@@ -299,11 +299,11 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
       const runs = [...(projecao.runs ?? [])].sort((a, b) => a.ordinal - b.ordinal);
       return {
         ...resumoDaThread(thread, projeto, pendentes),
-        pedidosPendentes: resumirPedidosRuntime(projecao, thread),
-        sessaoProvider: sessao ? { status: sessao.status, diretorio: sessao.cwd, modelo: sessao.model } : null,
-        ultimoRun: runs.length ? { runId: runs.at(-1).id, ordinal: runs.at(-1).ordinal, status: runs.at(-1).status } : null,
-        ultimaResposta: ultimaResposta(projecao, maxCaracteres),
-        historico: { completo: !bounded.hasMoreHistory, orcamentoExcedido: Boolean(bounded.payloadBudgetExceeded) },
+        pendingRequests: resumirPedidosRuntime(projecao, thread),
+        providerSession: sessao ? { status: sessao.status, directory: sessao.cwd, model: sessao.model } : null,
+        latestRun: runs.length ? { runId: runs.at(-1).id, ordinal: runs.at(-1).ordinal, status: runs.at(-1).status } : null,
+        latestResponse: ultimaResposta(projecao, maxCaracteres),
+        history: { complete: !bounded.hasMoreHistory, payloadBudgetExceeded: Boolean(bounded.payloadBudgetExceeded) },
       };
     }),
   );
@@ -313,7 +313,7 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
     {
       title: 'Recent thread messages',
       description:
-        'Latest user and assistant messages of an authorized thread, oldest first, with truncated text. They come from the recent window of the thread; `historico.completo` false means older messages exist outside it. Read-only.',
+        'Latest user and assistant messages of an authorized thread, oldest first, with truncated text. They come from the recent window of the thread; `history.complete` false means older messages exist outside it. Read-only.',
       forma: {
         environment: campoAmbiente,
         threadId: z.string().min(1),
@@ -329,16 +329,16 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
       const bounded = await cliente.thread(threadId, { signal });
       const mensagens = (bounded.projection.messages ?? []).filter((m) => m.text).slice(-limite).map((m) => ({
         messageId: m.id,
-        papel: m.role,
-        texto: m.text.length > maxCaracteres ? m.text.slice(0, maxCaracteres) + '…' : m.text,
-        truncada: m.text.length > maxCaracteres,
-        emAndamento: Boolean(m.streaming),
-        criadaEm: m.createdAt,
+        role: m.role,
+        text: m.text.length > maxCaracteres ? m.text.slice(0, maxCaracteres) + '…' : m.text,
+        truncated: m.text.length > maxCaracteres,
+        streaming: Boolean(m.streaming),
+        createdAt: m.createdAt,
       }));
       return {
         threadId,
-        mensagens,
-        historico: { completo: !bounded.hasMoreHistory, orcamentoExcedido: Boolean(bounded.payloadBudgetExceeded) },
+        messages: mensagens,
+        history: { complete: !bounded.hasMoreHistory, payloadBudgetExceeded: Boolean(bounded.payloadBudgetExceeded) },
       };
     }),
   );

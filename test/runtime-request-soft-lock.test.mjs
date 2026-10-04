@@ -78,18 +78,18 @@ test('blocked user_input: concurrent send queues; answering the existing request
   await client.connect(b);
   t.after(async () => { await client.close(); await server.close(); });
   const read = async () => dados(await client.callTool({ name: 't3_thread',
-    arguments: { leaseId: lease.leaseId, ambiente: 'local', threadId } }));
+    arguments: { leaseId: lease.leaseId, environment: 'local', threadId } }));
 
   const before = await read();
-  assert.equal(before.estado, 'precisa_intervencao');
+  assert.equal(before.state, 'needs_intervention');
   assert.equal(before.statusRun, 'waiting');
-  const pending = before.pedidosPendentes[0];
-  assert.deepEqual(pending.conteudo, { tipo: 'user_input', questions });
-  assert.equal(pending.threadSendRespondePedido, false);
-  assert.deepEqual(pending.proximaAcao, {
-    tipo: 'responder_runtime_request', action: 'runtime-request.answer',
+  const pending = before.pendingRequests[0];
+  assert.deepEqual(pending.content, { type: 'user_input', questions });
+  assert.equal(pending.threadSendAnswersRequest, false);
+  assert.deepEqual(pending.nextAction, {
+    type: 'respond_runtime_request', action: 'runtime-request.answer',
     tool: 't3_escrever_runtime_request_answer', input: { threadId, requestId },
-    campoResposta: 'answers', requerDecisaoDoUsuario: true,
+    responseField: 'answers', requiresUserDecision: true,
   });
   const tools = (await client.listTools()).tools;
   assert.match(tools.find(x => x.name === 't3_thread').description, /thread.send does NOT answer/);
@@ -98,28 +98,28 @@ test('blocked user_input: concurrent send queues; answering the existing request
   assert.match(tools.find(x => x.name === 't3_escrever_runtime_request_approve').description, /approval.*decision.*user_input requires runtime-request.answer/);
 
   const [, sent] = await Promise.all([read(), client.callTool({ name: 't3_escrever_thread_send', arguments: {
-    leaseId: lease.leaseId, ambiente: 'local', operationId: 'concurrent-send',
+    leaseId: lease.leaseId, environment: 'local', operationId: 'concurrent-send',
     input: { threadId, text: 'Use option 1', clientRequestId: 'concurrent-send', delivery: 'start_immediately' },
   } })]);
   assert.equal(sent.isError, undefined);
   assert.equal(queue.length, 1);
   const stillBlocked = await read();
   assert.equal(stillBlocked.statusRun, 'waiting');
-  assert.equal(stillBlocked.pedidosPendentes[0].requestId, requestId);
-  assert.equal(stillBlocked.pedidosPendentes[0].proximaAcao.action, 'runtime-request.answer');
-  assert.equal(stillBlocked.pedidosPendentes[0].threadSendRespondePedido, false);
+  assert.equal(stillBlocked.pendingRequests[0].requestId, requestId);
+  assert.equal(stillBlocked.pendingRequests[0].nextAction.action, 'runtime-request.answer');
+  assert.equal(stillBlocked.pendingRequests[0].threadSendAnswersRequest, false);
 
   // Model the user's explicit selection of option 1, using only IDs/values from read.
-  const next = pending.proximaAcao, q = pending.conteudo.questions[0];
+  const next = pending.nextAction, q = pending.content.questions[0];
   const answered = await client.callTool({ name: next.tool, arguments: {
-    leaseId: lease.leaseId, ambiente: 'local', operationId: 'answer-existing-request',
-    input: { ...next.input, [next.campoResposta]: { [q.id]: q.options[0].value } },
+    leaseId: lease.leaseId, environment: 'local', operationId: 'answer-existing-request',
+    input: { ...next.input, [next.responseField]: { [q.id]: q.options[0].value } },
   } });
   assert.equal(answered.isError, undefined);
   assert.equal(dados(answered).state, 'completed');
   const after = await read();
-  assert.deepEqual(after.pedidosPendentes, []);
-  assert.equal(after.estado, 'rodando');
+  assert.deepEqual(after.pendingRequests, []);
+  assert.equal(after.state, 'running');
   assert.equal(after.statusRun, 'running');
   assert.equal(after.runId, runId, 'answer resumes the same run instead of replacing it');
   assert.equal(outbound.length, 2, 'no send, approval or restart is substituted for the answer');
