@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.0
+
 - **Breaking: English public contract.** Tool parameters, response fields, state and
   return values, search failure codes, write error codes, connector messages and
   configuration keys are English, with no Portuguese alias or duplicate. Parameters:
