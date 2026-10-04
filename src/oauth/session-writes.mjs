@@ -47,17 +47,21 @@ export class SessionWriteGate {
   close() { this.onClose(); this.authority.revokeAll('write_path_failure'); }
 }
 
+// Internal codes are the write path's (Portuguese); clients get the English contract of ADR 0004,
+// with the same code mapping as the lease bridge.
+const CODES = { ambiente_obrigatorio: 'environment_required', ambiente_desconhecido: 'environment_unknown', ambiente_fora_da_lease: 'environment_not_in_lease', ambiente_indisponivel: 'environment_unavailable', sem_projetos: 'no_projects' };
+const code = c => CODES[c] ?? c;
 const MESSAGES = {
-  ambiente_obrigatorio: 'pass `ambiente` (alias or environmentId); writes have no default environment',
-  ambiente_desconhecido: 'environment not configured for writes',
-  ambiente_fora_da_lease: 'this environment was not available or not approved when you signed in; reconnect the connector to approve it',
-  ambiente_indisponivel: 'the T3 server of this environment did not respond; nothing was sent',
+  environment_required: 'pass `environment` (alias or environmentId); writes have no default environment',
+  environment_unknown: 'environment not configured for writes',
+  environment_not_in_lease: 'this environment was not available or not approved when you signed in; reconnect the connector to approve it',
+  environment_unavailable: 'the T3 server of this environment did not respond; nothing was sent',
   scope_denied: 'project or action outside the scope approved at sign-in for this environment',
   thread_not_found: 'thread not found in this environment',
   lease_closed: 'the OAuth session expired or was revoked; reconnect the connector (passkey sign-in)',
   dispatch_rejected: 'rejected while the connector prepared the request, before sending it to T3; no mutation was sent',
-  reconciliation_required: 'the connector tried to send to T3 but could not confirm the result. Do not retry; call t3_reconciliar_escrita with the same ambiente and operationId',
-  target_run_id_required: 'targetRunId required: read t3_thread in the same ambiente and pass the active run for steer_active or restart_active',
+  reconciliation_required: 'the connector tried to send to T3 but could not confirm the result. Do not retry; call t3_reconciliar_escrita with the same environment and operationId',
+  target_run_id_required: 'targetRunId required: read t3_thread in the same environment and pass the active run for steer_active or restart_active',
   queue_explicit_intent_required: 'queue_after_active requires an explicit request to defer and deferUntilActiveCompletes=true',
 };
 const describe = action => action === 'thread.send' ? SEND_DESCRIPTION
@@ -83,7 +87,7 @@ export function sessionWrites({ conexoes, journal, authority, issuer, inventoryM
         const projects = await Promise.race([c.inventario(), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), inventoryMs).unref())]);
         if (!projects.length) throw new Error('sem_projetos');
         grants.push(grantFromInventory({ alias: r.alias, environmentId: r.environmentId, label: r.alias, destination: r.destination, projects, actions: r.acoes }));
-      } catch (e) { unavailable.push({ alias: r.alias, environmentId: r.environmentId, reason: /^[a-z_]+$/.test(e.message) ? e.message : 'ambiente_indisponivel' }); }
+      } catch (e) { unavailable.push({ alias: r.alias, environmentId: r.environmentId, reason: /^[a-z_]+$/.test(e.message) ? code(e.message) : 'environment_unavailable' }); }
     }));
     return { grants: grants.length ? escopoDosGrants(grants) : { scopeVersion: 2, runtimeMode: 'full-access', environments: [] }, unavailable };
   }
@@ -102,35 +106,36 @@ export function sessionWrites({ conexoes, journal, authority, issuer, inventoryM
     if ([...projects].some(p => !grant.projects.some(g => g.id === p))) fail('scope_denied');
   }
 
-  async function dispatch(principal, { ambiente, action, operationId, input }) {
-    const c = resolve(ambiente);
+  async function dispatch(principal, { environment, action, operationId, input }) {
+    const c = resolve(environment);
     await precheck(principal, c, action, input);
-    return { ambiente: { alias: c.registro.alias, environmentId: c.registro.environmentId }, ...await dispatchers.get(c.registro.alias).dispatch(identity(principal), principal.sid, { operationId, action, input }) };
+    return { environment: { alias: c.registro.alias, environmentId: c.registro.environmentId }, ...await dispatchers.get(c.registro.alias).dispatch(identity(principal), principal.sid, { operationId, action, input }) };
   }
-  async function reconcile(principal, { ambiente, operationId }) {
-    const c = resolve(ambiente);
-    return { ambiente: { alias: c.registro.alias, environmentId: c.registro.environmentId }, ...await dispatchers.get(c.registro.alias).reconcile(identity(principal), principal.sid, operationId) };
+  async function reconcile(principal, { environment, operationId }) {
+    const c = resolve(environment);
+    return { environment: { alias: c.registro.alias, environmentId: c.registro.environmentId }, ...await dispatchers.get(c.registro.alias).reconcile(identity(principal), principal.sid, operationId) };
   }
 
   const error = e => {
-    const code = /^[a-z_]+$/.test(e.message) ? e.message : 'write_rejected';
-    const extra = code === 'ambiente_desconhecido' ? ` (configured: ${registros.map(r => r.alias).join(', ')})` : '';
-    return { isError: true, content: [{ type: 'text', text: MESSAGES[code] ? `${code}: ${MESSAGES[code]}${extra}` : code }] };
+    const c = /^[a-z_]+$/.test(e.message) ? code(e.message) : 'write_rejected';
+    const extra = c === 'environment_unknown' ? ` (configured: ${registros.map(r => r.alias).join(', ')})` : '';
+    return { isError: true, content: [{ type: 'text', text: MESSAGES[c] ? `${c}: ${MESSAGES[c]}${extra}` : c }] };
   };
   const result = async op => { try { return { content: [{ type: 'text', text: JSON.stringify(await op()) }] }; } catch (e) { return error(e); } };
 
   function registerTools(server, principal) {
-    const ambiente = z.string().min(1).describe(`T3 environment where the thread/project lives (required; alias or environmentId): ${registros.map(r => r.alias).join(', ')}. IDs from one environment are not valid in another.`);
+    // Strict schemas: an unknown or legacy parameter (e.g. `ambiente`) is refused by the SDK.
+    const environment = z.string().min(1).describe(`T3 environment where the thread/project lives (required; alias or environmentId): ${registros.map(r => r.alias).join(', ')}. IDs from one environment are not valid in another.`);
     for (const action of ACTIONS) server.registerTool(writeToolName(action), {
       description: `${describe(action)} in the chosen environment; authorized by the connector's OAuth session (passkey sign-in), limited to the projects approved at sign-in; the work runs in full-access mode.`,
-      inputSchema: { ambiente, operationId: z.string(), input: schemaForAction(action) },
+      inputSchema: z.strictObject({ environment, operationId: z.string(), input: schemaForAction(action) }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
-    }, ({ ambiente: amb, operationId, input }) => result(() => dispatch(principal, { ambiente: amb, action, operationId, input })));
+    }, ({ environment: env, operationId, input }) => result(() => dispatch(principal, { environment: env, action, operationId, input })));
     server.registerTool('t3_reconciliar_escrita', {
       description: 'Looks up the receipt of a write operation in the same environment; never repeats the mutation.',
-      inputSchema: { ambiente, operationId: z.string() },
+      inputSchema: z.strictObject({ environment, operationId: z.string() }),
       annotations: { readOnlyHint: true, destructiveHint: false },
-    }, ({ ambiente: amb, operationId }) => result(() => reconcile(principal, { ambiente: amb, operationId })));
+    }, ({ environment: env, operationId }) => result(() => reconcile(principal, { environment: env, operationId })));
   }
 
   return { gate, inventory, dispatch, reconcile, registerTools, close() { for (const c of conexoes) c.fechar?.(); } };

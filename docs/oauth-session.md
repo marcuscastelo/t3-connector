@@ -145,7 +145,7 @@ Guarantees:
 - The only edit to existing source is the additive `identidadeSessaoOAuth()` export.
 - Both paths may hold connections to the same backend with the same read+operate token if the
   operator points `T3_CONNECTOR_OAUTH_WRITE_CONFIG` at the existing `write.json` (only its
-  `ambientes` are used). Their journals and dedupe namespaces stay separate.
+  `environments` are used). Their journals and dedupe namespaces stay separate.
 - Cut-over (retiring the lease bridge) is a separate, explicitly authorized step.
 
 ## 4. Threat model

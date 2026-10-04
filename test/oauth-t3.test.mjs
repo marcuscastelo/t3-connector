@@ -27,7 +27,7 @@ async function montar({ local = {}, remoto = {}, journal = { ...memoryJournal(),
   const l = conexaoFalsa('local', 'env-p', local), r = conexaoFalsa('remoto', 'env-s', remoto);
   const c = await startConnector({ tools: t3Tools({ ambientes: ambientesFalsos(), conexoes: [l, r], journal }) });
   const data = res => JSON.parse(res.data.result.content[0].text);
-  const send = (at, { ambiente = 'local', id = 'op-1', text = 'hi', threadId = 'thread' } = {}) => c.callTool(at, writeToolName('thread.send'), { ambiente, operationId: id, input: { threadId, text, clientRequestId: id, delivery: 'start_immediately' } });
+  const send = (at, { environment = 'local', id = 'op-1', text = 'hi', threadId = 'thread' } = {}) => c.callTool(at, writeToolName('thread.send'), { environment, operationId: id, input: { threadId, text, clientRequestId: id, delivery: 'start_immediately' } });
   return { c, l, r, data, send, journal };
 }
 
@@ -42,7 +42,8 @@ test('catalog: eight read tools plus the write catalog without leaseId; no lease
   assert.ok(!names.includes('t3_pedir_aprovacao'));
   for (const tool of tools.filter(x => x.name.startsWith('t3_escrever_'))) {
     assert.equal(tool.inputSchema.properties.leaseId, undefined);
-    assert.deepEqual(tool.inputSchema.required.sort(), ['ambiente', 'input', 'operationId']);
+    assert.deepEqual(tool.inputSchema.required.sort(), ['environment', 'input', 'operationId']);
+    assert.equal(tool.inputSchema.additionalProperties, false);
     assert.equal(tool.annotations.readOnlyHint, false);
     assert.doesNotMatch(tool.description, /\blease\b|60.min/i);
   }
@@ -54,12 +55,15 @@ test('sign-in shows and freezes the write scope; reads and writes work in the sa
   const s = await c.signIn();
   assert.deepEqual(s.view.data.writes.environments.map(e => [e.alias, e.projects]), [['local', ['app', 'outro']], ['remoto', ['app', 'outro']]]);
   const at = s.tokens.access_token;
-  const amb = await c.callTool(at, 't3_ambientes', { verificar: false });
+  const amb = await c.callTool(at, 't3_ambientes', { check: false });
   assert.ok(!amb.data.result.isError, amb.text);
   const w = data(await send(at));
-  assert.equal(w.state, 'completed'); assert.equal(w.ambiente.alias, 'local');
+  assert.equal(w.state, 'completed'); assert.equal(w.environment.alias, 'local');
   assert.equal(l.calls.filter(x => x.m).length, 1); assert.equal(r.calls.length, 0);
-  const rec = data(await c.callTool(at, 't3_reconciliar_escrita', { ambiente: 'local', operationId: 'op-1' }));
+  const legacy = await c.callTool(at, writeToolName('thread.send'), { ambiente: 'local', operationId: 'op-legacy', input: { threadId: 'thread', text: 'x', clientRequestId: 'op-legacy', delivery: 'start_immediately' } });
+  assert.ok(legacy.data.error || legacy.data.result?.isError, 'legacy `ambiente` parameter must be refused');
+  assert.equal(l.calls.filter(x => x.m).length, 1);
+  const rec = data(await c.callTool(at, 't3_reconciliar_escrita', { environment: 'local', operationId: 'op-1' }));
   assert.equal(rec.state, 'completed');
 });
 
@@ -79,10 +83,10 @@ test('write dedupe survives refresh and a new sign-in (stable subject), and noth
 test('environment unavailable at sign-in gets no grant; projects added later need a new sign-in', async t => {
   const { c, l, r, send } = await montar({ remoto: { falhaInventario: true } }); t.after(c.close);
   const s = await c.signIn();
-  assert.deepEqual(s.view.data.writes.unavailable.map(u => u.alias), ['remoto']);
+  assert.deepEqual(s.view.data.writes.unavailable.map(u => [u.alias, u.reason]), [['remoto', 'environment_unavailable']]);
   const at = s.tokens.access_token;
-  const denied = await send(at, { ambiente: 'remoto' });
-  assert.match(denied.data.result.content[0].text, /^ambiente_fora_da_lease: .*reconnect/);
+  const denied = await send(at, { environment: 'remoto' });
+  assert.match(denied.data.result.content[0].text, /^environment_not_in_lease: .*reconnect/);
   assert.equal(r.calls.length, 0);
   l.projetos.push({ id: 'novo', name: 'novo', directory: '/local/novo' }); l.threads['t-novo'] = 'novo';
   const late = await send(at, { id: 'op-2', threadId: 't-novo' });
