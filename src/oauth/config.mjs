@@ -59,12 +59,23 @@ export function loadOAuthConfig(env = process.env, { rehearsal = false } = {}) {
   // Tunnel mode: the MCP resource is served on a loopback listener for a Secure MCP Tunnel client,
   // whose hosted discovery names the resource; the issuer stays the public AS origin. The resource
   // is one exact HTTPS URL (compared verbatim everywhere), and both settings go together.
-  const resourceRaw = env.T3_CONNECTOR_OAUTH_RESOURCE;
-  if (resourceRaw !== undefined && resourceRaw !== '') {
+  const exactResource = (name, raw) => {
     let r;
-    try { r = new URL(resourceRaw); } catch { throw new Error('T3_CONNECTOR_OAUTH_RESOURCE must be an absolute https URL'); }
-    if (r.protocol !== 'https:' || r.href !== resourceRaw || /[?#]/.test(resourceRaw) || r.search || r.hash || r.username || r.password || r.pathname === '/') throw new Error('T3_CONNECTOR_OAUTH_RESOURCE must be an exact https URL with a path and no query, fragment or credentials');
-    cfg.resource = resourceRaw;
+    try { r = new URL(raw); } catch { throw new Error(`${name} must be an absolute https URL`); }
+    if (r.protocol !== 'https:' || r.href !== raw || /[?#]/.test(raw) || r.search || r.hash || r.username || r.password || r.pathname === '/') throw new Error(`${name} must be an exact https URL with a path and no query, fragment or credentials`);
+    return raw;
+  };
+  const resourceRaw = env.T3_CONNECTOR_OAUTH_RESOURCE;
+  if (resourceRaw !== undefined && resourceRaw !== '') cfg.resource = exactResource('T3_CONNECTOR_OAUTH_RESOURCE', resourceRaw);
+  // Tunnel mode only: the hosted tunnel rewrites the metadata `resource` to its own endpoint before
+  // a client sees it, but tunnel-client's startup discovery reads the local metadata and must be
+  // able to reach that origin. When the accepted resource is not reachable from here, advertise a
+  // different exact value locally; only T3_CONNECTOR_OAUTH_RESOURCE is ever accepted.
+  const advertisedRaw = env.T3_CONNECTOR_OAUTH_ADVERTISED_RESOURCE;
+  cfg.advertisedResource = null;
+  if (advertisedRaw !== undefined && advertisedRaw !== '') {
+    if (!cfg.resource) throw new Error('T3_CONNECTOR_OAUTH_ADVERTISED_RESOURCE requires tunnel mode (T3_CONNECTOR_OAUTH_RESOURCE)');
+    cfg.advertisedResource = exactResource('T3_CONNECTOR_OAUTH_ADVERTISED_RESOURCE', advertisedRaw);
   }
   if (Boolean(cfg.resource) !== Boolean(cfg.tunnelPort)) throw new Error('T3_CONNECTOR_OAUTH_RESOURCE and T3_CONNECTOR_OAUTH_TUNNEL_PORT go together (tunnel mode)');
   if (cfg.tunnelPort && (cfg.tunnelPort === cfg.publicPort || cfg.tunnelPort === cfg.localPort)) throw new Error('the tunnel port must differ from the public and local ports');

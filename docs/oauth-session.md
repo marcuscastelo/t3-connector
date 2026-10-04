@@ -323,6 +323,7 @@ Guarantees:
 | `T3_CONNECTOR_OAUTH_VERBOSE` | unset | `1` echoes the redacted event log to stderr. |
 | `T3_CONNECTOR_OAUTH_RESOURCE` | unset | Tunnel mode (5.1): the exact canonical MCP resource named by the tunnel service. Exact HTTPS URL with a path; compared verbatim. |
 | `T3_CONNECTOR_OAUTH_TUNNEL_PORT` | unset | Tunnel mode (5.1): loopback listener for the tunnel client. Set together with `T3_CONNECTOR_OAUTH_RESOURCE`. |
+| `T3_CONNECTOR_OAUTH_ADVERTISED_RESOURCE` | unset | Tunnel mode only: exact https URL advertised in the local protected resource metadata instead of `T3_CONNECTOR_OAUTH_RESOURCE`, when the accepted resource (the hosted tunnel endpoint) is not reachable from the tunnel client. Never accepted for authorization or tokens. |
 
 The event log `<state>/events.jsonl` does not receive tokens, codes, cookies, handles or `state`.
 
@@ -361,6 +362,13 @@ configured.
 Read it from the tunnel side (the tunnel client's logged discovery URLs and status UI, or the
 rewritten metadata). Request values are not a source, except for the opt-in diagnostic below, whose
 candidate must be corroborated; restart with the value set.
+
+Observed in production (tunnel-client 0.0.14): the hosted resource ChatGPT sends is an internal
+OpenAI gateway URL (`https://tunnel-service.gateway.<…>.internal.api.openai.org/v1/mcp/<tunnel_id>`)
+that tunnel-client cannot reach; advertising it locally makes tunnel-client's own startup discovery
+time out on that origin and never register the discovery target. Configure it as
+`T3_CONNECTOR_OAUTH_RESOURCE` and advertise a reachable exact URL with
+`T3_CONNECTOR_OAUTH_ADVERTISED_RESOURCE` (the hosted rewrite replaces it before ChatGPT reads it).
 
 Tunnel client profile (`server_urls`, channel `main`): `http://127.0.0.1:<tunnel port>/mcp`.
 

@@ -69,7 +69,7 @@ export function createOAuthConnector({ config, tools, serverInfo, fetch, clock, 
     return !!keys?.current(approval.credentialId, approval.credentialGeneration);
   };
   const as = authorizationServer({ issuer, resource, localOrigin, loginMode: config.loginMode, authority, tokens, clients, transactions, publicLogin: publicFlow, credentialCurrent, captureRejectedResource: resourceCapture(config.resourceCapture ?? null), audit });
-  const rs = resourceServer({ issuer, resource, route: tunnel ? '/mcp' : undefined, scopes: SCOPES, tokens, authority, sources, serverInfo, allowedOrigins: config.allowedOrigins, audit });
+  const rs = resourceServer({ issuer, resource, advertisedResource: tunnel ? (config.advertisedResource ?? null) : null, route: tunnel ? '/mcp' : undefined, scopes: SCOPES, tokens, authority, sources, serverInfo, allowedOrigins: config.allowedOrigins, audit });
   const local = controlPlane({ port: localPort, issuer, passkeys, subject: storage.subject, authority, tokens, transactions, killSwitch, enrollment, consent, admin, clock, wall, audit });
   const publicHost = new URL(issuer).host;
 
