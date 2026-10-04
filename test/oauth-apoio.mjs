@@ -76,6 +76,7 @@ export async function startConnector({ config = {}, loginMode = 'button', tools 
   });
 
   // Full first access: /authorize -> local passkey -> /resume -> callback -> /token.
+  // tokenResource: resource named at the code exchange (default: the configured one; null omits it).
   async function signIn({ via = loginMode === 'oob' ? 'oob' : 'handoff', uv = true, tokenResource = resource } = {}) {
     const verifier = randomBytes(32).toString('base64url'), state = randomBytes(8).toString('hex');
     const challenge = createHash('sha256').update(verifier).digest('base64url');
@@ -97,7 +98,7 @@ export async function startConnector({ config = {}, loginMode = 'button', tools 
     const resume = await http('GET', resumeUrl, { headers: cookie ? { cookie } : {} });
     const cb = resume.headers.location ? new URL(resume.headers.location) : null;
     const code = cb?.searchParams.get('code');
-    const tokens = code ? await token({ grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: 'https://client.example/cb', resource: tokenResource }) : null;
+    const tokens = code ? await token({ grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: 'https://client.example/cb', resource: tokenResource ?? undefined }) : null;
     return { auth, cookie, view, verify, resume, cb, state, verifier, code, statusId, tokens: tokens?.data, tokenResponse: tokens };
   }
 

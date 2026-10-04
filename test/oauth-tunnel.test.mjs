@@ -72,6 +72,7 @@ test('tunnel mode: sign-in, tool call, refresh and audience binding with the tun
   assert.equal(init.status, 200);
   const call = await c.callTool(s.tokens.access_token, 'rehearsal_echo', { text: 'hi' });
   assert.equal(call.status, 200);
+  assert.deepEqual(call.data.result.content, [{ type: 'text', text: 'echo: hi' }]);
   assert.ok(events(c).some(e => e.event === 'tool_call'));
   const r = await c.refresh(s.tokens.refresh_token);
   assert.equal(r.status, 200);
@@ -102,7 +103,7 @@ for (const mode of ['tunnel', 'default']) {
   });
 }
 
-test('tunnel mode: code exchange naming another resource is refused; a token for another resource is wrong_audience', async t => {
+test('tunnel mode: code exchange naming another resource is refused; a same-store token for another resource is wrong_audience; an omitted resource binds the configured one', async t => {
   const c = await tunnelConnector(); t.after(c.close);
   const s = await c.signIn();
   assert.ok(s.tokens?.access_token);
@@ -110,11 +111,24 @@ test('tunnel mode: code exchange naming another resource is refused; a token for
   const other = await c.signIn({ tokenResource: `${c.issuer}/mcp` });
   assert.equal(other.tokenResponse.status, 400);
   assert.equal(other.tokenResponse.data.error, 'invalid_target');
-  const d = await startConnector({ config: { resource: 'https://tunnel.example.com/v1/mcp/tunnel_other', tunnelPort: await freePort() } }); t.after(d.close);
-  const foreign = await d.signIn();
-  const r = await c.mcp(foreign.tokens.access_token, 'initialize', {});
+  // A live token of this same store bound to another resource (minted through the fixture's
+  // internal authority/TokenStore; not a remote capability) is refused for its audience.
+  const other_ = 'https://tunnel.example.com/v1/mcp/tunnel_other';
+  const { authority, tokens } = c.connector;
+  const sid = authority.create({ sub: c.connector.subject, clientId: CLIENT, credentialId: 'fixture', scope: 'connector:read connector:write', resource: other_ });
+  const code = tokens.issueCode({ sid, clientId: CLIENT, redirectUri: 'https://client.example/cb', codeChallenge: 'x', resource: other_, scope: 'connector:read connector:write' });
+  const wrong = tokens.consumeCode(code, { clientId: CLIENT, redirectUri: 'https://client.example/cb', verifyPkce: () => true, resource: other_ });
+  const r = await c.mcp(wrong.access_token, 'initialize', {});
   assert.equal(r.status, 401);
-  assert.match(r.headers['www-authenticate'], /error="invalid_token"/);
+  assert.match(r.headers['www-authenticate'], /error_description="wrong_audience"/);
+  assert.ok(events(c).some(e => e.event === 'mcp_unauthorized' && e.reason === 'wrong_audience'));
+  // An exchange that omits the resource binds the configured one.
+  const omitted = await c.signIn({ tokenResource: null });
+  assert.ok(omitted.tokens?.access_token, JSON.stringify(omitted.tokenResponse?.data));
+  const echoed = await c.callTool(omitted.tokens.access_token, 'rehearsal_echo', { text: 'omitted' });
+  assert.equal(echoed.status, 200);
+  assert.equal(echoed.data.error, undefined);
+  assert.deepEqual(echoed.data.result.content, [{ type: 'text', text: 'echo: omitted' }]);
 });
 
 test('tunnel mode: after a restart with another resource, old tokens are refused and a new sign-in works', async t => {
@@ -135,7 +149,9 @@ test('tunnel mode: after a restart with another resource, old tokens are refused
   assert.ok(fresh.tokens?.access_token, JSON.stringify(fresh.tokenResponse?.data));
   const call = await d.callTool(fresh.tokens.access_token, 'rehearsal_echo', { text: 'after restart' });
   assert.equal(call.status, 200);
-  assert.equal(call.data.result?.isError, undefined);
+  assert.equal(call.data.error, undefined);
+  assert.notEqual(call.data.result.isError, true);
+  assert.deepEqual(call.data.result.content, [{ type: 'text', text: 'echo: after restart' }]);
   const started = events(d).filter(e => e.event === 'started').at(-1);
   assert.equal(started.resource, 'https://tunnel.example.com/v1/mcp/tunnel_new');
   // The old tokens stay refused after the new sign-in.
