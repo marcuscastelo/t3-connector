@@ -346,6 +346,13 @@ With `T3_CONNECTOR_OAUTH_RESOURCE` and `T3_CONNECTOR_OAUTH_TUNNEL_PORT` set:
   `authorize_unknown_resource` with a hash of the requested value only.
 
 The exact resource is the one the tunnel service puts in the rewritten protected resource metadata.
+When that value cannot be read from the tunnel side, a temporary opt-in capture can record it:
+set `T3_CONNECTOR_OAUTH_RESOURCE_CAPTURE_FILE` (absolute path in an owner-only directory) and
+`T3_CONNECTOR_OAUTH_RESOURCE_CAPTURE_MATCH` (the tunnel ID) together. A refused resource is then also
+written to that file (0600, atomic) only when it is a plain https URL — no query, fragment or
+credentials, at most 512 characters — that contains the tunnel ID; anything else stays hash-only.
+The request is refused exactly as before. Remove both settings and the file once the resource is
+configured.
 Read it from the tunnel side (the tunnel client's logged discovery URLs and status UI, or the
 rewritten metadata), never from request values, and restart with it set.
 

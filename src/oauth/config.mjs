@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CHATGPT_CLIENT_ID } from './clients.mjs';
+import { parseResourceCapture } from './resource-capture.mjs';
 import { LOGIN_MODES } from './authorization-server.mjs';
 
 // Configuration of the OAuth session profile, from environment variables (names below). The issuer
@@ -50,6 +51,7 @@ export function loadOAuthConfig(env = process.env, { rehearsal = false } = {}) {
     allowedOrigins: list(env.T3_CONNECTOR_OAUTH_ALLOWED_ORIGINS) ?? DEFAULTS.allowedOrigins,
     verbose: env.T3_CONNECTOR_OAUTH_VERBOSE === '1',
     resource: null,
+    resourceCapture: parseResourceCapture(env),
     tunnelPort: int('T3_CONNECTOR_OAUTH_TUNNEL_PORT', env.T3_CONNECTOR_OAUTH_TUNNEL_PORT, 1, 65535) ?? null,
   };
   if (!['all', 'restricted'].includes(cfg.projectPolicy)) throw new Error('T3_CONNECTOR_OAUTH_PROJECTS must be all or restricted');
