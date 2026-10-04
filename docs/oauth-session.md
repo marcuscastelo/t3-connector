@@ -124,7 +124,12 @@ replacement cannot reset attempt budgets. A second authorize in the same browser
 older public transaction; its older tab fails clearly. Removed keys and canceled references cannot
 resume. `crossOrigin` other than absent/false, and any `topOrigin`, are refused for both RPs.
 UV, UP, signature, challenge, origin, RP and counter checks remain mandatory, including zero-counter
-synced keys. Registration/deletion/counter updates serialize per RP, with generation guards.
+synced keys. Verification, registration and final deletion run in a bounded per-RP queue with
+generation guards. Deletion-intent admission writes immediately outside that queue. Each guarded
+OAuth credential save updates disk, the live Map and its credential generation synchronously
+before returning, so every intent snapshots committed state, including another key's latest
+counter or a just-enrolled key. The unchanged core verifier's later identical Map update finishes
+before queued final deletion; it cannot restore a removed key.
 
 HTTPS cookies are host-only `__Host-t3c_tx` / `__Host-t3c_enroll`, Secure, HttpOnly, SameSite=Lax,
 Path=/, no Domain; duplicate names fail closed. HTTP rehearsal retains `t3c_tx`. Success/error

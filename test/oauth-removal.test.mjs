@@ -119,3 +119,85 @@ test('public storage: malformed durable revocation intent fails closed at boot',
     await assert.rejects(f.reopen(), /credential_storage_invalid/);
   }
 });
+
+// Complete real action-bound local UV, then hold only delivery of its already verified result.
+// Releasing this promise from a public save schedules removal admission before the unchanged
+// crypto wrapper's `await saveCredential` continuation. No proof or verification is bypassed.
+async function heldRemovalProof(f, target) {
+  const local = f.c.passkeys, verify = local.verify.bind(local);
+  let resolve, reject, credentialId;
+  const held = new Promise((ok, ko) => { resolve = ok; reject = ko; }), entered = deferred();
+  local.verify = params => {
+    verify(params).then(id => { credentialId = id; entered.resolve(); }, error => { reject(error); entered.resolve(); });
+    return held;
+  };
+  const removing = f.admin('remove', { rp: 'public', credentialId: target });
+  await entered.promise;
+  return { removing, release() { local.verify = verify; resolve(credentialId); } };
+}
+
+test('public removal N1 A: admission inside survivor counter save preserves disk counter and refuses reuse after restart', async t => {
+  const f = await publicFixture(t); await f.enrollPublic();
+  const other = authenticator({ rpID: 'issuer.example.test' }); await f.enrollPublic(other);
+  const target = other.credential.id, survivor = f.publicAuth.credential.id, proof = await heldRemovalProof(f, target);
+  const keys = f.c.publicPasskeys, persist = keys.persist, save = keys.crypto.saveCredential;
+  let released = false, memoryAtSave, intentCounter, finalWrites = 0;
+  keys.persist = (next, pending) => {
+    if (!next.has(target)) { finalWrites++; throw new Error('disk_failure'); }
+    if (pending.includes(target)) intentCounter = next.get(survivor).counter;
+    return persist(next, pending);
+  };
+  keys.crypto.saveCredential = credential => {
+    const result = save(credential);
+    if (!released && credential.id === survivor && credential.counter === 1) {
+      released = true; memoryAtSave = keys.credentials.get(survivor).counter; proof.release();
+    }
+    return result;
+  };
+  const authentication = await f.authenticate(await f.begin(), f.publicAuth, { counter: 1 }), removed = await proof.removing;
+  assert.equal(released, true); assert.equal(authentication.verify.status, 200, authentication.verify.text);
+  assert.equal(removed.status, 400); assert.equal(removed.data.error, 'disk_failure'); assert.equal(finalWrites, 1);
+  assert.equal(keys.credentials.get(survivor).counter, 1); assert.equal(keys.current(target), false);
+  const stored = storedPublic(f); assert.deepEqual(stored.pendingDeletions, [target]);
+  assert.equal(stored.credentials.find(c => c.id === survivor).counter, 1, 'intent did not roll back the committed counter');
+  assert.equal(memoryAtSave, 1, 'the guarded save updated memory synchronously'); assert.equal(intentCounter, 1);
+  await f.reopen(); assert.equal(f.c.publicPasskeys.current(target), false); assert.equal(f.c.publicPasskeys.current(survivor), true);
+  assert.equal(f.c.publicPasskeys.credentials.get(survivor).counter, 1);
+  const reused = await f.authenticate(await f.begin(), f.publicAuth, { counter: 1 }); assert.equal(reused.verify.status, 400, 'same nonzero counter is rejected on a fresh challenge');
+  const newer = await f.authenticate(await f.begin(), f.publicAuth, { counter: 2 }); assert.equal(newer.verify.status, 200, newer.verify.text);
+  assert.equal((await f.admin('remove', { rp: 'public', credentialId: target })).status, 200, 'fresh local proof completes disabled-target deletion');
+  assert.equal(f.c.publicPasskeys.current(survivor), true); assert.equal(storedPublic(f).credentials.find(c => c.id === survivor).counter, 2);
+  assert.deepEqual(storedPublic(f).pendingDeletions, []);
+});
+
+test('public removal N1 B: admission during enrollment persistence retains the successful new key after failure/restart', async t => {
+  const f = await publicFixture(t); await f.enrollPublic();
+  const target = f.publicAuth.credential.id, enrolled = authenticator({ rpID: 'issuer.example.test' });
+  const enrollment = await f.beginEnrollment(), options = await f.post('/enroll/options', { ticket: enrollment.ticket }, enrollment.cookie);
+  assert.equal(options.status, 200, options.text);
+  const proof = await heldRemovalProof(f, target), keys = f.c.publicPasskeys, persist = keys.persist;
+  let released = false, intentHasNewKey, finalWrites = 0;
+  keys.persist = (next, pending) => {
+    if (!next.has(target)) { finalWrites++; throw new Error('disk_failure'); }
+    const result = persist(next, pending);
+    if (pending.includes(target)) intentHasNewKey = next.has(enrolled.credential.id);
+    // Resolve inside the writer after the actual synchronous save, before the OAuth save
+    // callback returns and before the core's awaited Map.set. This is review probe B's order.
+    if (!released && next.has(enrolled.credential.id)) { released = true; proof.release(); }
+    return result;
+  };
+  const registered = await f.post('/enroll/verify', { ticket: enrollment.ticket, response: enrolled.registration(options.data.challenge, { origin: f.issuer }) }, enrollment.cookie);
+  const removed = await proof.removing;
+  assert.equal(released, true); assert.equal(registered.status, 200, registered.text);
+  assert.equal(removed.status, 400); assert.equal(removed.data.error, 'disk_failure'); assert.equal(finalWrites, 1);
+  assert.equal(keys.current(enrolled.credential.id), true); assert.ok(keys.version(enrolled.credential.id) > 0);
+  assert.equal(keys.current(target), false); assert.equal(f.c.publicEnrollment.active, false, 'successful enrollment consumed its generation');
+  assert.deepEqual(storedPublic(f).pendingDeletions, [target]);
+  assert.ok(storedPublic(f).credentials.some(c => c.id === enrolled.credential.id), 'intent retained the newly committed credential');
+  assert.equal(intentHasNewKey, true);
+  await f.reopen(); assert.equal(f.c.publicPasskeys.current(target), false); assert.equal(f.c.publicPasskeys.current(enrolled.credential.id), true);
+  const login = await f.authenticate(await f.begin(), enrolled, { counter: 1 }); assert.equal(login.verify.status, 200, login.verify.text);
+  assert.equal((await f.admin('remove', { rp: 'public', credentialId: target })).status, 200);
+  assert.equal(f.c.publicPasskeys.current(enrolled.credential.id), true); assert.equal(f.c.passkeys.current(f.localAuth.credential.id), true);
+  assert.ok(storedPublic(f).credentials.some(c => c.id === enrolled.credential.id)); assert.deepEqual(storedPublic(f).pendingDeletions, []);
+});

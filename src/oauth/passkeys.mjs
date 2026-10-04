@@ -6,8 +6,9 @@ export const CEREMONY_MS = 120_000;
 export const MAX_CREDENTIALS = 32;
 export const TRANSPORTS = ['ble', 'cable', 'hybrid', 'internal', 'nfc', 'smart-card', 'usb'];
 
-// The OAuth wrapper keeps the Ponte crypto abstraction unchanged. All credential mutations
-// share one bounded queue per RP; a synchronous guarded save is the only durable commit point.
+// The OAuth wrapper keeps the Ponte crypto abstraction unchanged. Verification, registration
+// and final deletion use one bounded queue per RP; immediate deletion intent snapshots committed
+// state. Every guarded credential save commits disk, generation and Map before yielding.
 export class OAuthPasskeys {
   #chain = Promise.resolve();
   #pending = 0;
@@ -28,6 +29,11 @@ export class OAuthPasskeys {
       // persist must be synchronous: no reset/removal can intervene after the guard.
       this.#persist(next);
       if (!credentials.has(c.id)) this.#versions.set(c.id, ++this.#serial);
+      // The core awaits saveCredential before its own Map.set. Publish the committed value
+      // here, in the same synchronous turn: an immediate deletion admission must never
+      // snapshot the old counter or omit a key already saved successfully. The core's later
+      // identical Map.set precedes queued final deletion and does not restore removed keys.
+      credentials.set(c.id, c);
     } });
   }
   version(id) { return this.#versions.get(id) ?? 0; }

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- OAuth credential saves now publish the persisted key/counter and generation synchronously
+  before deletion-intent admission can snapshot them. Deterministic HTTP interleavings prevent
+  survivor-counter rollback and lost successful enrollment after final deletion failure/restart.
+
 - Credential-removal recovery: bounded queue admission precedes durable per-RP deletion intent
   and immediate revocation. Failed/pending keys remain disabled across restart and support fresh
   local-passkey retry; other credential writes preserve intents. Local listing distinguishes
