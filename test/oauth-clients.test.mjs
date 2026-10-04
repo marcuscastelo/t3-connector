@@ -100,3 +100,15 @@ test('client metadata larger than 64 KiB is refused while streaming, and by Cont
   const declared = async () => new Response('{}', { headers: { 'content-length': String(1024 * 1024) } });
   await assert.rejects(new ClientRegistry({ allowedClients: [CLIENT], fetch: declared }).resolve(CLIENT), /document_too_large/);
 });
+
+test('a rejected response body is cancelled (oversized Content-Length, error status)', async () => {
+  for (const init of [{ headers: { 'content-length': String(1024 * 1024) } }, { status: 500 }]) {
+    let cancelled = false;
+    const body = new ReadableStream({ pull(c) { c.enqueue(new TextEncoder().encode('{')); }, cancel() { cancelled = true; } });
+    await assert.rejects(new ClientRegistry({ allowedClients: [CLIENT], fetch: async () => new Response(body, init) }).resolve(CLIENT), /document_too_large|fetch_status_500/);
+    assert.equal(cancelled, true);
+  }
+  const k = clientKeys(), small = doc([k.jwk], { client_name: 'Ünïcode ✓' });
+  const c = await new ClientRegistry({ allowedClients: [CLIENT], fetch: cimdFetch({ [CLIENT]: small }) }).resolve(CLIENT);
+  assert.equal(c.name, 'Ünïcode ✓');
+});

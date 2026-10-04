@@ -22,17 +22,24 @@ async function fetchJson(fetchImpl, url) {
   const u = new URL(url);
   if (u.protocol !== 'https:') throw new Error('https_required');
   const r = await fetchImpl(u.href, { redirect: 'error', signal: AbortSignal.timeout(5000), headers: { Accept: 'application/json' } });
-  if (!r.ok) throw new Error(`fetch_status_${r.status}`);
-  if (Number(r.headers.get('content-length')) > MAX_DOC_BYTES) throw new Error('document_too_large');
-  // Counts bytes while streaming and stops at the limit, so an oversized body is never buffered.
+  const discard = () => r.body?.cancel().catch(() => {});
+  if (!r.ok) { await discard(); throw new Error(`fetch_status_${r.status}`); }
+  if (Number(r.headers.get('content-length')) > MAX_DOC_BYTES) { await discard(); throw new Error('document_too_large'); }
+  if (!r.body) throw new Error('document_empty');
+  // Counts bytes while streaming and stops at the limit, so an oversized body is not retained.
   const reader = r.body.getReader(), parts = [];
-  let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > MAX_DOC_BYTES) { await reader.cancel().catch(() => {}); throw new Error('document_too_large'); }
-    parts.push(value);
+  let size = 0, finished = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) { finished = true; break; }
+      size += value.byteLength;
+      if (size > MAX_DOC_BYTES) throw new Error('document_too_large');
+      parts.push(value);
+    }
+  } finally {
+    if (!finished) await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
   return JSON.parse(Buffer.concat(parts).toString('utf8'));
 }

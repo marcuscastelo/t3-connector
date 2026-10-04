@@ -314,3 +314,44 @@ test('event log hashes client-controlled strings and identifiers', async t => {
   assert.ok(!log.includes(sid), 'raw session id persisted');
   assert.ok(!log.includes(c.passkey.credential.id), 'raw credential id persisted');
 });
+
+// Regressions from the delta review (REVISAO-CODEX.md, delta 23613fd: F8 residual, F4, in-flight F1).
+test('event log does not reflect syntax-valid secret tool names, grant_type or Sec-Fetch-Site', async t => {
+  const c = await startConnector(); t.after(c.close);
+  const s = await c.signIn();
+  const secret = `secret_${s.state}`;
+  await c.callTool(s.tokens.access_token, secret, {});
+  await http('POST', `${c.issuer}/token`, { headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: `grant_type=${s.tokens.refresh_token}` });
+  await http('GET', `${c.local}/login`, { headers: { 'sec-fetch-site': s.tokens.refresh_token } });
+  const log = readFileSync(join(c.connector.stateDir, 'events.jsonl'), 'utf8');
+  for (const v of [s.state, s.tokens.refresh_token]) assert.ok(!log.includes(v), 'request string reflected into the event log');
+  await c.callTool(s.tokens.access_token, 'rehearsal_now');
+  assert.match(readFileSync(join(c.connector.stateDir, 'events.jsonl'), 'utf8'), /"event":"tool_call","tool":"rehearsal_now"/);
+});
+
+test('token exchange accepts an omitted redirect_uri (PKCE profile) and refuses a different one', async t => {
+  const c = await startConnector(); t.after(c.close);
+  const verifier = 'v'.repeat(43);
+  const { createHash } = await import('node:crypto');
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
+  const issue = () => { const sid = c.connector.authority.create({ sub: c.connector.subject, clientId: CLIENT, credentialId: 'k', scope: 'connector:read', resource: `${c.issuer}/mcp` }); return c.connector.tokens.issueCode({ sid, clientId: CLIENT, redirectUri: 'https://client.example/cb', codeChallenge: challenge, resource: `${c.issuer}/mcp`, scope: 'connector:read' }); };
+  assert.equal((await c.token({ grant_type: 'authorization_code', code: issue(), code_verifier: verifier })).status, 200);
+  const bad = await c.token({ grant_type: 'authorization_code', code: issue(), code_verifier: verifier, redirect_uri: 'https://client.example/other' });
+  assert.equal(bad.data.error_description, 'redirect_uri_mismatch');
+});
+
+test('revoke-all while a passkey verification is in flight cancels that sign-in', async t => {
+  const c = await startConnector(); t.after(c.close);
+  const auth = await http('GET', `${c.issuer}/authorize?response_type=code&client_id=${encodeURIComponent(CLIENT)}&redirect_uri=${encodeURIComponent('https://client.example/cb')}&code_challenge=${'A'.repeat(43)}&code_challenge_method=S256`);
+  const handoff = /#handoff=([^"]+)"/.exec(auth.text)[1];
+  const o = await c.localPost('/api/login/options', { handoff });
+  const real = c.connector.passkeys.verify.bind(c.connector.passkeys);
+  let release;
+  c.connector.passkeys.verify = async p => { const id = await real(p); await new Promise(r => { release = r; }); return id; };
+  const pending = c.localPost('/api/login/verify', { handoff, response: c.passkey.assertion(o.data.challenge, { origin: c.local, counter: c.nextCounter() }) });
+  while (!release) await new Promise(r => setTimeout(r, 5));
+  c.connector.authority.revokeAll('test');
+  release();
+  const v = await pending;
+  assert.equal(v.status, 400); assert.equal(v.data.error, 'transaction_not_found');
+});

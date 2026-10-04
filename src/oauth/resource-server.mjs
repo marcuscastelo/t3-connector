@@ -18,10 +18,10 @@ import { json, readBody, redact } from './http.mjs';
 // connector:write), then admits activity (the only thing that restarts the idle window), forwards,
 // and re-checks the session before releasing the result. initialize, tools/list, ping and
 // notifications never count as activity.
-// Only known MCP methods and tool-like names go to the event log verbatim; anything else a client
-// sends in those positions is logged as a hash, so a misplaced secret is never persisted.
+// Only known MCP methods and names of tools that exist in the catalog go to the event log verbatim;
+// anything else a client sends in those positions is logged as a hash, so a misplaced secret is not
+// persisted. Before the catalog is resolved (request line, 401) tool names are always hashed.
 const KNOWN_METHODS = new Set(['initialize', 'ping', 'tools/list', 'tools/call', 'resources/list', 'resources/templates/list', 'prompts/list', 'logging/setLevel', 'completion/complete', 'server/discover', 'notifications/initialized', 'notifications/cancelled', 'notifications/progress', 'notifications/roots/list_changed']);
-const logName = n => (typeof n === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(n) ? n : `other:${redact(n)}`);
 
 export function protectedResourceMetadata({ issuer, resource, scopes }) {
   return { resource, authorization_servers: [issuer], scopes_supported: scopes, bearer_methods_supported: ['header'], resource_name: 'T3 Connector' };
@@ -73,14 +73,14 @@ export function resourceServer({ issuer, resource, scopes, tokens, authority, so
       const needed = entry.tool.annotations?.readOnlyHint === true ? 'connector:read' : 'connector:write';
       if (!principal.scope.split(' ').includes(needed)) return { isError: true, content: [{ type: 'text', text: `insufficient_scope: ${needed}` }] };
       try { authority.admit(principal.sid); } catch (e) {
-        audit({ event: 'tool_denied', tool: logName(name), reason: e.message, sid: redact(principal.sid) });
+        audit({ event: 'tool_denied', tool: name, reason: e.message, sid: redact(principal.sid) });
         return { isError: true, content: [{ type: 'text', text: 'session_expired: reconnect the connector' }] };
       }
-      audit({ event: 'tool_call', tool: logName(name), sid: redact(principal.sid) });
+      audit({ event: 'tool_call', tool: name, sid: redact(principal.sid) });
       const result = await entry.client.callTool({ name, arguments: req.params.arguments ?? {} }, undefined, { signal: extra.signal, timeout: 15 * 60 * 1000 });
       // Session revoked or expired while the call ran: the fetched result does not leave.
       try { authority.check(principal.sid); } catch (e) {
-        audit({ event: 'tool_result_withheld', tool: logName(name), reason: e.message, sid: redact(principal.sid) });
+        audit({ event: 'tool_result_withheld', tool: name, reason: e.message, sid: redact(principal.sid) });
         return { isError: true, content: [{ type: 'text', text: 'session_expired: reconnect the connector' }] };
       }
       return result;
@@ -97,7 +97,7 @@ export function resourceServer({ issuer, resource, scopes, tokens, authority, so
     let body;
     try { const raw = await readBody(req, 1024 * 1024); body = raw ? JSON.parse(raw) : undefined; } catch (e) { if (e.status === 413) return json(res, 413, { error: 'body_too_large' }); body = null; }
     const msgs = Array.isArray(body) ? body : body ? [body] : [];
-    const rpc = msgs.map(m => (m?.method === 'tools/call' ? `tools/call:${logName(m.params?.name)}` : m?.method === undefined ? 'response' : KNOWN_METHODS.has(m.method) ? m.method : `other:${redact(m.method)}`)).join(',') || 'empty';
+    const rpc = msgs.map(m => (m?.method === 'tools/call' ? `tools/call:${redact(m.params?.name)}` : m?.method === undefined ? 'response' : KNOWN_METHODS.has(m.method) ? m.method : `other:${redact(m.method)}`)).join(',') || 'empty';
     if (!bearer) return unauthorized(res, null, rpc);
     let principal;
     try { principal = tokens.resolveAccess(bearer); } catch (e) { if (e instanceof OAuthError) return unauthorized(res, e, rpc); throw e; }

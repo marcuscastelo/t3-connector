@@ -75,7 +75,7 @@ export function createOAuthConnector({ config, tools, serverInfo, fetch, clock, 
     return json(res, 404, { error: 'not_found' });
   }
 
-  const onError = e => audit({ event: 'handler_error', error: String(e?.message ?? e).slice(0, 120) });
+  const onError = e => audit({ event: 'handler_error', error: /^[a-z_]{1,64}$/.test(e?.message ?? '') ? e.message : 'unexpected' });
   const servers = [];
   const sweeper = setInterval(() => { authority.sweep(); tokens.sweep(); transactions.sweep(); }, 60_000);
   sweeper.unref();

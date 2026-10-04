@@ -10,6 +10,7 @@ export const SCOPES = ['connector:read', 'connector:write'];
 export const LOGIN_MODES = ['button', '302', 'oob'];
 const COOKIE = 't3c_tx';
 const VERIFIER = /^[A-Za-z0-9\-._~]{43,128}$/;
+const GRANT_TYPES = new Set(['authorization_code', 'refresh_token']);
 
 export function asMetadata({ issuer }) {
   return {
@@ -130,7 +131,7 @@ ${loginMode === 'button' ? `<p>Approve this sign-in with your passkey on the loc
       else throw new OAuthError('unsupported_grant_type', 'unsupported_grant_type');
       audit({ event: form.grant_type === 'refresh_token' ? 'token_refreshed' : 'token_issued', clientId: client.clientId, expiresIn: issued.expires_in });
       return json(res, 200, issued);
-    } catch (e) { return oauthError(res, e, { grantType: form?.grant_type ?? null, clientId: client?.clientId ?? null }); }
+    } catch (e) { return oauthError(res, e, { grantType: GRANT_TYPES.has(form?.grant_type) ? form.grant_type : redact(form?.grant_type), clientId: client?.clientId ?? null }); }
   }
 
   async function revoke(req, res) {

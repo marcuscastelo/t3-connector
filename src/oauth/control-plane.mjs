@@ -14,6 +14,7 @@ import { json, html, readBody, page, redact } from './http.mjs';
 const CHALLENGE_MS = 120 * 1000;
 const swaBundle = () => readFileSync(join(dirname(dirname(createRequire(import.meta.url).resolve('@simplewebauthn/browser'))), 'dist/bundle/index.umd.min.js'));
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+const FETCH_SITES = new Set(['cross-site', 'same-origin', 'same-site', 'none']);
 
 export function controlPlane({ port, issuer, passkeys, subject, authority, tokens, transactions, killSwitch, enrollment, grantProvider = null, clock, wall, audit = () => {} }) {
   const origin = `http://localhost:${port}`, host = `localhost:${port}`, time = stopwatch({ clock, wall });
@@ -83,7 +84,7 @@ export function controlPlane({ port, issuer, passkeys, subject, authority, token
     const url = new URL(req.url, origin), p = url.pathname;
     if (req.method === 'GET') {
       if (p === '/vendor/swa.js') { bundle ??= swaBundle(); res.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); return res.end(bundle); }
-      if (p === '/login') { audit({ event: 'local_login_page', fetchSite: req.headers['sec-fetch-site'] ?? null }); return html(res, 200, loginPage); }
+      if (p === '/login') { audit({ event: 'local_login_page', fetchSite: FETCH_SITES.has(req.headers['sec-fetch-site']) ? req.headers['sec-fetch-site'] : null }); return html(res, 200, loginPage); }
       if (p === '/enroll') return html(res, 200, enrollPage);
       if (p === '/') return html(res, 200, adminPage);
       return json(res, 404, { error: 'not_found' });

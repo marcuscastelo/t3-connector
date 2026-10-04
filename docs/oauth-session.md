@@ -15,7 +15,7 @@ immediate.
 
 | Piece | File | Notes |
 |---|---|---|
-| Session authority | `src/oauth/session-authority.mjs` | Server-side source of truth. Idle window, optional max age, revoke, revoke all, kill switch. Monotonic + wall clock (larger elapsed wins); terminal states never revive. |
+| Session authority | `src/oauth/session-authority.mjs` | Server-side source of truth. Idle window, optional max age, revoke, revoke all, kill switch. Monotonic + wall clock: elapsed time accumulates per observation, adding the larger advance of the two clocks and never a negative one, so suspend and wall rollback cannot give back counted time (when the clocks diverge it can count slightly more, expiring early). An interval nobody observed, e.g. suspend and rollback both while idle, cannot be reconstructed. Terminal states never revive. |
 | Token store | `src/oauth/token-store.mjs` | Single-use codes (60 s), opaque access tokens (default 60 s, truncated to the idle deadline), rotating refresh tokens (24 h per generation). Used codes and consumed refresh tokens stay as tombstones until their session ends, so reuse ends the session at any time. Only HMACs of token values are stored. `redirect_uri` at `/token` is checked when sent and may be omitted (OAuth 2.1 with PKCE); the authorization request always requires the exact registered callback. |
 | Client registry | `src/oauth/clients.mjs` | Allowlisted CIMD clients only. `private_key_jwt` verified against the document's JWKS (ES256, RS256, PS256): signature, `iss`=`sub`=client, `aud`, numeric `exp` with at most 10 min of remaining validity, and when `iat` is present (it is optional in RFC 7523) at most 10 min from `iat` to `exp`; malformed time claims refused; `jti` replay cache; key rotation (one refetch on unknown `kid`). Client documents are read as a stream and cut at 64 KiB. No `none`, no secrets, no DCR. |
 | Authorization server | `src/oauth/authorization-server.mjs` | Metadata (also served at `/.well-known/openid-configuration`, which ChatGPT probes), `/authorize` (code + PKCE S256 only, exact callback, single resource, unknown scopes dropped, explicit request with no supported scope refused), `/resume`, `/token`, `/revoke`. RFC 9207 `iss` on every callback. |
@@ -103,8 +103,8 @@ Measured in the spike (ChatGPT web, 04/10/2026):
 
 Consequences built into the defaults:
 
-- **Access tokens are short (60 s)** so that ChatGPT always refreshes before using one. Normal
-  expiry must happen through refresh, never through a 401.
+- **Access tokens are short (60 s)** because the spike saw ChatGPT refresh before each call with
+  that lifetime. The intent is that normal expiry happens through refresh, not through a 401.
 - **A 401 is meant for a dead session** (idle, revocation, kill switch, restart). That costs a
   Reconnect plus a new passkey, which is the intended behaviour after idle. This is a deployment
   condition, not a server guarantee: the server always rejects an expired access token, so if a
@@ -179,9 +179,10 @@ Guarantees:
 | `T3_CONNECTOR_OAUTH_VERBOSE` | unset | `1` echoes the redacted event log to stderr. |
 
 The event log `<state>/events.jsonl` does not receive tokens, codes, cookies, handles or `state`.
-Session and credential ids are written as 8-hex hash prefixes at the sink, and client-controlled
-strings (unknown MCP methods, tool names outside `[a-z][a-z0-9_]*`, unknown client ids, form
-parameter names) are hashed too, so a secret sent in the wrong position is not persisted.
+Session and credential ids are written as 8-hex hash prefixes at the sink. Request-controlled
+values are logged only when they belong to a fixed set (known MCP methods, tools present in the
+catalog, `grant_type` values, `Sec-Fetch-Site` values, allowlisted client ids, our own error
+codes); anything else is logged as a hash, so a secret sent in the wrong position is not persisted.
 
 ## 6. Local rehearsal
 
