@@ -219,8 +219,8 @@ With `T3_CONNECTOR_OAUTH_RESOURCE` and `T3_CONNECTOR_OAUTH_TUNNEL_PORT` set:
   and `/token` accept only that exact resource, and tokens are bound to it;
 - an `/authorize` with another resource is refused (`invalid_target`) and logged as
   `authorize_unknown_resource`, with the requested value only when it is a plain https URL (hashed
-  otherwise). That is how to read the tunnel's resource the first time: connect once with tunnel
-  mode off-target, read the event, set it.
+  otherwise). That is how to read the tunnel's resource the first time: start with a placeholder
+  resource, connect once, read the event, set the exact value and restart.
 
 Tunnel client profile (`server_urls`, channel `main`): `http://127.0.0.1:<tunnel port>/mcp`.
 
