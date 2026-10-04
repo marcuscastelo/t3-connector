@@ -129,9 +129,11 @@ export function pedidosPendentes(projecao) {
     .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
 }
 
-/** Detalhe legível do pedido, a partir do item de turno ligado ao mesmo nó. */
+/** Hint by request ID; legacy node-only items are a display fallback, not an answer contract. */
 export function detalheDoPedido(projecao, pedido) {
-  const item = (projecao.turnItems ?? []).find((i) => i.nodeId === pedido.nodeId);
+  const itens = projecao.turnItems ?? [];
+  const item = itens.find((i) => i.requestId === pedido.id)
+    ?? itens.find((i) => i.requestId == null && pedido.nodeId != null && i.nodeId === pedido.nodeId);
   const texto = item?.title ?? item?.text ?? null;
   return texto ? String(texto).slice(0, 500) : null;
 }

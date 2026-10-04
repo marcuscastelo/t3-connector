@@ -37,7 +37,11 @@ export function criarPonteEscrita({relay,aliases=[],approvalOrigin}) {
    indisponiveis:r.indisponiveis??[],channelIdentity:true,individualIdentity:false};
  }));
 
- for(const action of ACTIONS)server.registerTool(`t3_escrever_${action.replaceAll('.','_').replaceAll('-','_')}`,{description:`${action==='thread.send'?SEND_DESCRIPTION:action} in the chosen environment; requires a 60-min passkey-approved lease that includes this environment; the work runs in full-access mode.`,inputSchema:{leaseId:z.string(),ambiente,operationId:z.string(),input:schemaForAction(action)},annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:false}},
+ const descricaoAcao=action=>action==='thread.send'?SEND_DESCRIPTION
+  :action==='runtime-request.answer'?'Answers a pending user_input runtime request using requestId and answers keyed by question ID from t3_thread.pedidosPendentes; thread.send does NOT answer it.'
+  :action==='runtime-request.approve'?'Responds to a pending approval runtime request using requestId and decision from t3_thread.pedidosPendentes; user_input requires runtime-request.answer instead.'
+  :action;
+ for(const action of ACTIONS)server.registerTool(`t3_escrever_${action.replaceAll('.','_').replaceAll('-','_')}`,{description:`${descricaoAcao(action)} in the chosen environment; requires a 60-min passkey-approved lease that includes this environment; the work runs in full-access mode.`,inputSchema:{leaseId:z.string(),ambiente,operationId:z.string(),input:schemaForAction(action)},annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:false}},
   ({leaseId,ambiente:amb,operationId,input})=>resultado(()=>relay({op:'dispatch',action,leaseId,ambiente:amb,operationId,input})));
 
  const cursor=z.string().min(1).optional();
@@ -45,7 +49,7 @@ export function criarPonteEscrita({relay,aliases=[],approvalOrigin}) {
   t3_threads:{projectId:z.string().optional(),estado:z.enum(['rodando','precisa_intervencao','concluida','falhou','cancelada','sem_execucao','desconhecido']).optional(),incluirSemExecucao:z.boolean().optional(),busca:z.string().min(1).optional(),limite:z.number().int().min(1).max(50).optional(),cursor},
   t3_thread:{threadId:z.string().min(1),maxCaracteres:z.number().int().min(200).max(6000).optional()},
   t3_mensagens:{threadId:z.string().min(1),limite:z.number().int().min(1).max(20).optional(),maxCaracteres:z.number().int().min(100).max(4000).optional()}};
- for(const name of LEITURAS)server.registerTool(name,{description:`${name}: read of the projects approved in the lease, in the chosen environment; requires an active lease and never renews it.`,inputSchema:{leaseId:z.string(),ambiente,...leituras[name]},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true}},
+ for(const name of LEITURAS)server.registerTool(name,{description:`${name}: read of the projects approved in the lease, in the chosen environment; requires an active lease and never renews it.${name==='t3_thread'?' Pending runtime requests include full public content and proximaAcao; thread.send does NOT answer them. Use runtime-request.answer for user_input or runtime-request.approve for approval with the requestId; unavailable detail requires inspection in T3.':''}`,inputSchema:{leaseId:z.string(),ambiente,...leituras[name]},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true}},
   async({leaseId,ambiente:amb,...input})=>{try{return await relay({op:'read',operation:name,leaseId,ambiente:amb,input});}catch(e){return erro(e);}});
 
  server.registerTool('t3_reconciliar_escrita',{description:'Looks up the receipt of an operation in the same environment; never repeats the mutation; requires a lease.',inputSchema:{leaseId:z.string(),ambiente,operationId:z.string()},annotations:{readOnlyHint:true,destructiveHint:false}},

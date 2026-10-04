@@ -5,9 +5,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import {
-  detalheDoPedido,
   estadoDaThread,
-  motivoDoPedido,
   pedidosPendentes,
   resumoModelo,
   ultimaResposta,
@@ -17,6 +15,7 @@ import { aguardarThread, TETO_MS } from './espera.mjs';
 import { buscarThreads, EntradaInvalida, PRAZO_AMBIENTE_MS, PRAZO_TOTAL_MS } from './busca-threads.mjs';
 import { assinatura, casaBusca, comparador, CursorInvalido, normalizar, paginar } from './paginacao.mjs';
 import { Cancelada, ErroT3 } from './t3.mjs';
+import { resumirPedidosRuntime } from './pedidos-runtime.mjs';
 
 export const VERSAO = '0.5.0';
 const ESTADOS = ['rodando', 'precisa_intervencao', 'concluida', 'falhou', 'cancelada', 'sem_execucao', 'desconhecido'];
@@ -248,7 +247,7 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
     {
       title: 'Thread state and latest response',
       description:
-        'Detailed state of an authorized thread: project, directory, model, latest run state, pending requests with reason and identifier, error and the latest assistant response. Pass the `ambiente` where the thread lives. Read-only.',
+        'Detailed state of an authorized thread, latest response and pending runtime requests. pedidosPendentes includes requestId, responseCapability, proximaAcao and conteudo: user_input questions with IDs/options/field constraints, or approval prompt/options. Follow proximaAcao: answer questions with runtime-request.answer (answers keyed by question ID); approvals use runtime-request.approve (decision). thread.send does NOT answer a pending runtime request and can remain queued behind the blocked run. If conteudoDisponivel is false, do not infer an answer: inspect the request in T3. Pass the thread ambiente. Read-only.',
       inputSchema: {
         ambiente: campoAmbiente,
         threadId: z.string().min(1),
@@ -267,14 +266,7 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
       const runs = [...(projecao.runs ?? [])].sort((a, b) => a.ordinal - b.ordinal);
       return {
         ...resumoDaThread(thread, projeto, pendentes),
-        pedidosPendentes: pendentes.map((p) => ({
-          runtimeRequestId: p.id,
-          tipo: p.kind,
-          motivo: motivoDoPedido(p.kind),
-          nodeId: p.nodeId,
-          desde: p.createdAt,
-          detalhe: detalheDoPedido(projecao, p),
-        })),
+        pedidosPendentes: resumirPedidosRuntime(projecao, thread),
         sessaoProvider: sessao ? { status: sessao.status, diretorio: sessao.cwd, modelo: sessao.model } : null,
         ultimoRun: runs.length ? { runId: runs.at(-1).id, ordinal: runs.at(-1).ordinal, status: runs.at(-1).status } : null,
         ultimaResposta: ultimaResposta(projecao, maxCaracteres),

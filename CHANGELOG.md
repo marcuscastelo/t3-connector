@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- `t3_thread.pedidosPendentes` now exposes request IDs, public response capability,
+  full user-input questions/options/field constraints, and approval prompts/provider
+  decisions. Exact request-ID joins and field allowlists exclude native/session details
+  and prior answers. Missing/invalid details and unsupported kinds have explicit
+  fallback codes; shell-only pending requests remain visible. Read scopes and write
+  authorization are unchanged.
+  Structured `proximaAcao` recommends the answer/approval tool with target IDs and
+  response field, or inspection in T3 when it cannot safely recommend a response.
+  `threadSendRespondePedido: false` and tool guidance make explicit that sends do not
+  resolve requests. A stateful MCP regression covers a send queued behind user input
+  and the existing request's answer resuming the same run.
+
 - New read tool `t3_buscar_threads`: finds threads by title or exact ID without an
   environment, across every configured environment (or one, with `ambiente`). Each result
   carries `ambiente: {alias, environmentId, nome}`. Deadlines of 4 s per environment and

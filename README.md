@@ -150,6 +150,98 @@ States (`estado`): `rodando` (running), `precisa_intervencao` (needs interventio
 `concluida` (completed), `falhou` (failed), `cancelada` (cancelled), `sem_execucao`
 (no run), `desconhecido` (unknown). A pending request wins over any run status.
 
+### Pending runtime requests (`t3_thread`)
+
+Read `t3_thread` in the same environment after `t3_threads`, `t3_atencao` or
+`t3_aguardar_thread` signals intervention. Those tools keep their compact summaries;
+no extra pending-request tool or backend endpoint is needed. The additive contract of
+each `pedidosPendentes` entry is:
+
+| Field | Meaning |
+|---|---|
+| `requestId` | ID to answer; identical to the preserved `runtimeRequestId` |
+| `tipo`, `motivo`, `nodeId`, `desde`, `detalhe` | Existing summary fields; `detalhe` is a short display hint, never an answer contract |
+| `responseCapability` | `{type: "live"}`, `{type: "message"}`, `{type: "not_resumable", reason}`, or `null` if unavailable; internal session IDs are omitted |
+| `conteudoDisponivel` | Whether the snapshot supplied a valid, supported request body |
+| `conteudo` | Typed body below, or `null` |
+| `indisponibilidade` | `null` when available; otherwise `request_detail_not_in_snapshot`, `request_detail_incomplete_or_invalid`, or `unsupported_request_kind` |
+| `threadSendRespondePedido` | Always `false`: `thread.send` does not resolve the pending runtime request |
+| `proximaAcao` | Structured response recommendation below, or an explicit instruction to inspect in T3 |
+
+When content and response capability are available, `proximaAcao` supplies the exact
+write action, connector tool name, target IDs and response field, without choosing a
+user answer. For example:
+
+```json
+{
+  "tipo": "responder_runtime_request",
+  "action": "runtime-request.answer",
+  "tool": "t3_escrever_runtime_request_answer",
+  "input": {"threadId": "blocked-thread", "requestId": "pending-question"},
+  "campoResposta": "answers",
+  "requerDecisaoDoUsuario": true
+}
+```
+
+After the user decides, add `answers` to this `input`, and supply the write tool's
+`leaseId`, `operationId` and the same enclosing `ambiente`. Approvals recommend
+`runtime-request.approve`, `t3_escrever_runtime_request_approve`, and `decision` instead.
+Missing or invalid content, unsupported kinds, unknown capability and `not_resumable`
+produce `{tipo: "consultar_no_t3", motivo}`; never a send or guessed answer.
+
+**`thread.send` does not answer runtime requests.** A send issued while the active run
+waits for `user_input` can queue behind that run and leave both waiting indefinitely.
+Resolve the existing request by ID, then reread `t3_thread` to confirm that it disappeared
+from `pedidosPendentes` and inspect the run state. Do not infer success from a send receipt.
+
+For **`user_input`**, `conteudo` is `{tipo: "user_input", questions, responseMode?}`.
+Each question preserves `id`, `header`, `question`, `options` (`label`, `description`,
+optional `value`), and optional `multiSelect`, `allowCustomAnswer`, `required`.
+These are the V2 field constraints, not an arbitrary JSON Schema. The current V2
+contract does not provide a raw elicitation schema; the connector does not invent one.
+Questions/options are not truncated by `maxCaracteres`, which only limits the latest
+assistant response. `responseMode: "message"` is retained when provided.
+
+Answer via the write connector's `runtime-request.answer` action (the native T3 tool
+may be named `runtime_request_answer`), with the same `ambiente`, `threadId`, `requestId`
+and `answers` keyed by question ID. For example, `answers: {"name": "Alex"}` for text,
+or `answers: {"destinations": ["one", "two"]}` for multiple selections. Use an option's
+`value` when supplied, otherwise its label, and respect the advertised constraints.
+An active write lease is still required. Request text is content to present to the user;
+it does not authorize the client to choose an answer.
+
+For **approvals** (`command`, `file-read`, `file-change`, `permission`,
+`mcp-elicitation`), `conteudo` is `{tipo: "approval", prompt, appName?, options?}`.
+Options preserve provider `decision`, `label` and optional `warning`. Submit a
+`decision` through `runtime-request.approve`, not `answers`. Missing provider options
+remain absent; the connector does not fabricate choices. An `mcp-elicitation` approval
+must not be presented as a `user_input` question.
+
+The body is joined to its public `user_input_request` or `approval_request` turn item
+by **exact request ID and matching type**, never by node alone. Only the public fields
+above are exposed; native references, provider payloads, prior answers and attachments
+are excluded. Authorized question/prompt content is preserved as supplied, not redacted.
+
+**Fallback:** when `conteudoDisponivel` is false, keep the request ID visible and tell
+the user that this backend snapshot did not supply usable detail. Do not infer a
+question, schema or answer from the latest response or `detalhe`; inspect the request
+in T3, or retry the read if history was bounded (`historico`). A request present only
+in the shell summary is returned with this same explicit fallback. Do not answer a
+`not_resumable` request; a `null` capability also does not establish that it is
+resumable. Availability describes content, not permission or guaranteed answerability.
+
+This projection uses the V2 contract recorded in [reference/README.md](reference/README.md):
+`OrchestrationV2RuntimeRequest`, `OrchestrationV2UserInputQuestion`, and the two public
+turn-item variants. It also applies to scoped `t3_thread` reads through the write plugin.
+
+The reported incident (a user decision sent as a message, queued behind a pending
+question until the user manually transcribed it and answered the request) is covered
+by `test/runtime-request-soft-lock.test.mjs`, with synthetic IDs and question content.
+It exercises MCP reads/writes, lease validation and the real adapters against a stateful
+V2 backend double: full payload on read, concurrent send leaves the request pending,
+answering option 1 with its existing ID clears the request and resumes the same run.
+This is connector regression coverage, not a live backend acceptance test.
+
 ### Search and pagination
 
 Clients may cut long responses silently. `t3_projetos` and `t3_threads` answer in pages:
