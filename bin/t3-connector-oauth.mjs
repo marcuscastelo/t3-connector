@@ -10,6 +10,8 @@
 //                                  backend). Use it to rehearse a client such as ChatGPT.
 //   t3-connector-oauth --version
 //
+// While running, SIGUSR2 prints a new single-use passkey enrollment ticket to stderr.
+//
 // Configuration: T3_CONNECTOR_OAUTH_* environment variables, see docs/oauth-session.md.
 import { VERSAO } from '../src/servidor.mjs';
 import { loadOAuthConfig } from '../src/oauth/config.mjs';
@@ -41,6 +43,9 @@ async function start({ config, tools, serverName, banner }) {
     lines.push(`  enroll a passkey at ${connector.localOrigin}/enroll with ticket: ${ticket} (single use, 15 min)`);
   }
   process.stderr.write(lines.join('\n') + '\n');
+  // A new enrollment ticket without restarting (a restart would end every session). Only a local
+  // process of the same user can send the signal; the ticket goes to stderr only.
+  process.on('SIGUSR2', () => process.stderr.write(`  enroll a passkey at ${connector.localOrigin}/enroll with ticket: ${connector.enrollment.issue()} (single use, 15 min)\n`));
 }
 
 async function rehearsal() {
