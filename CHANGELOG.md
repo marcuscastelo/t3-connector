@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.0
+
 - OAuth credential saves now publish the persisted key/counter and generation synchronously
   before deletion-intent admission can snapshot them. Deterministic HTTP interleavings prevent
   survivor-counter rollback and lost successful enrollment after final deletion failure/restart.
