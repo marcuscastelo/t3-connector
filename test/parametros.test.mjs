@@ -27,7 +27,7 @@ test('tools/list: só nomes em inglês e nenhum parâmetro extra aceito, na leit
   for (const { tools } of [await leitura.listTools(), await escrita.listTools()]) {
     for (const t of tools) {
       assert.deepEqual(Object.keys(t.inputSchema.properties ?? {}).filter((n) => LEGADOS.includes(n)), [], t.name);
-      if (Object.keys(t.inputSchema.properties ?? {}).length) assert.equal(t.inputSchema.additionalProperties, false, t.name);
+      assert.equal(t.inputSchema.additionalProperties, false, t.name);
     }
   }
 });
@@ -69,6 +69,10 @@ test('leitura: cursor de t3_threads filtrado por estado continua na página segu
   assert.notEqual(p2.threads[0].threadId, p1.threads[0].threadId);
   const outro = await c.callTool({ name: 't3_threads', arguments: { environment: 'remoto', state: 'failed', limit: 1, cursor: p1.nextCursor } });
   assert.match(outro.content[0].text, /^invalid cursor/);
+  // Cursor do formato anterior (v1), mesma consulta e mesma chave: recusado.
+  const v1 = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(p1.nextCursor, 'base64url').toString()), v: 1 })).toString('base64url');
+  const antigo = await c.callTool({ name: 't3_threads', arguments: { environment: 'remoto', state: 'running', limit: 1, cursor: v1 } });
+  assert.match(antigo.content[0].text, /^invalid cursor/);
 });
 
 test('escrita: `ambiente` ou falta de environment não chegam ao relay; leitura sob lease vai em inglês', async () => {
@@ -90,6 +94,20 @@ test('escrita: `ambiente` ou falta de environment não chegam ao relay; leitura 
   const antigo = await c.callTool({ name: 't3_threads', arguments: { leaseId: 'l', environment: 'local', estado: 'rodando' } });
   assert.equal(antigo.isError, true);
   assert.equal(pedidos.length, 2);
+});
+
+test('escrita: pedido de aprovação não aceita parâmetro nenhum e não chama o relay com um', async () => {
+  const pedidos = [];
+  const c = await ponte(async (req) => { pedidos.push(req); return { active: true, leaseId: 'L', ambientes: [] }; });
+  for (const args of [{ ambiente: 'remoto' }, { environment: 'remoto' }, { qualquer: 1 }]) {
+    const r = await c.callTool({ name: 't3_pedir_aprovacao', arguments: args });
+    assert.equal(r.isError, true);
+    assert.match(r.content[0].text, /-32602.*Unrecognized key/s);
+  }
+  assert.equal(pedidos.length, 0);
+  const ok = await c.callTool({ name: 't3_pedir_aprovacao', arguments: {} });
+  assert.equal(ok.isError, undefined);
+  assert.equal(pedidos.length, 1);
 });
 
 test('escrita: respostas e códigos do gate saem com os nomes em inglês', async () => {

@@ -42,7 +42,7 @@ export function criarPonteEscrita({relay,aliases=[],approvalOrigin}) {
  // recusado pelo SDK antes de chegar ao relay; `environment` é obrigatório, sem padrão.
  const registrar=(nome,{forma,...config},fn)=>server.registerTool(nome,{...config,inputSchema:z.strictObject(forma)},fn);
 
- server.registerTool('t3_pedir_aprovacao',{description:'Requests passkey approval on the local machine to write for 60 min in the available environments (the per-environment scope is shown on the page), or returns the lease already approved. Never renews.',inputSchema:{},annotations:{readOnlyHint:false,destructiveHint:false}},()=>resultado(async()=>{
+ registrar('t3_pedir_aprovacao',{description:'Requests passkey approval on the local machine to write for 60 min in the available environments (the per-environment scope is shown on the page), or returns the lease already approved. Never renews.',forma:{},annotations:{readOnlyHint:false,destructiveHint:false}},()=>resultado(async()=>{
   const r=await relay({op:'request'});
   if(r.active){const {ambientes,...lease}=r;return {authorized:true,...lease,environments:ambientesDaLease(ambientes??[]),channelIdentity:true,individualIdentity:false};}
   return {authorized:false,requestId:r.requestId,scopeHash:r.scopeHash,approvalUrl:`${approvalOrigin}/#request=${r.requestId}`,durationMinutes:60,

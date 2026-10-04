@@ -41,8 +41,9 @@ Constraints found in the code (SDK 1.32.0, Zod 4):
    and summary fields; the bridge returns `environment`, the English approval summary and
    English error codes. Leased-read parameters travel in English, so bridge and gate must
    run the same version (they ship in one package and restart together).
-5. **Cursors are rebuilt.** Cursor signatures use the English labels; a cursor issued by a
-   previous version is refused as invalid and the query restarts without a cursor.
+5. **Cursors are rebuilt.** The cursor format moves to version 2 and its signatures use
+   the English labels; any cursor issued by a previous version is refused as invalid and
+   the query restarts without a cursor.
 6. **Tool names do not change here.** `t3_projetos`, `t3_escrever_*` and the others are
    kept, and `nextAction.tool` keeps naming the existing tool (see Open questions).
 

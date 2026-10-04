@@ -5,6 +5,9 @@
 // O cursor é opaco para o cliente, mas não é segredo: base64url de JSON com a consulta
 // (environment + filtros) e a chave do último item. Usado em outra consulta, é recusado.
 
+// Versão do formato: 2 desde o contrato em inglês (ADR 0004); cursores anteriores são recusados.
+const VERSAO_CURSOR = 2;
+
 export class CursorInvalido extends Error {
   constructor() {
     super('invalid cursor, or a cursor from another query (different environment, tool or filters); repeat the query without a cursor');
@@ -38,7 +41,7 @@ function decodificar(cursor, consulta) {
   } catch {
     throw new CursorInvalido();
   }
-  if (dados?.v !== 1 || dados.q !== consulta || !Array.isArray(dados.k)) throw new CursorInvalido();
+  if (dados?.v !== VERSAO_CURSOR || dados.q !== consulta || !Array.isArray(dados.k)) throw new CursorInvalido();
   return dados;
 }
 
@@ -71,7 +74,7 @@ export function paginar({ itens, consulta, cursor, limite, chave, comparar, vers
   return {
     pagina,
     truncado,
-    proximoCursor: truncado ? codificar({ v: 1, q: consulta, k: chave(pagina.at(-1)), ...(corte !== null ? { c: corte } : {}) }) : null,
+    proximoCursor: truncado ? codificar({ v: VERSAO_CURSOR, q: consulta, k: chave(pagina.at(-1)), ...(corte !== null ? { c: corte } : {}) }) : null,
     alterados: alterados.length,
   };
 }
