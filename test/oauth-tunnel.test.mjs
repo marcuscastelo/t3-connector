@@ -128,4 +128,16 @@ test('tunnel mode: after a restart with another resource, old tokens are refused
   const rt = await d.refresh(s.tokens.refresh_token);
   assert.equal(rt.status, 400);
   assert.equal(rt.data.error, 'invalid_grant');
+  // Valid resumption: a new sign-in binds to the new resource and its token works on the tunnel
+  // listener (this fixture's software authenticator is new, so it enrolls first; passkeys persist).
+  await d.enrollPasskey();
+  const fresh = await d.signIn();
+  assert.ok(fresh.tokens?.access_token, JSON.stringify(fresh.tokenResponse?.data));
+  const call = await d.callTool(fresh.tokens.access_token, 'rehearsal_echo', { text: 'after restart' });
+  assert.equal(call.status, 200);
+  assert.equal(call.data.result?.isError, undefined);
+  const started = events(d).filter(e => e.event === 'started').at(-1);
+  assert.equal(started.resource, 'https://tunnel.example.com/v1/mcp/tunnel_new');
+  // The old tokens stay refused after the new sign-in.
+  assert.equal((await d.mcp(s.tokens.access_token, 'initialize', {})).status, 401);
 });
