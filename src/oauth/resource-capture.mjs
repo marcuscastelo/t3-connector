@@ -1,4 +1,4 @@
-import { writeFileSync, renameSync, lstatSync, rmSync } from 'node:fs';
+import { openSync, writeSync, closeSync, renameSync, lstatSync, rmSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
@@ -35,23 +35,28 @@ export function capturableResource(value, match) {
   return u.pathname.split('/').includes(match) ? value : null;
 }
 
-export function resourceCapture(settings, { now = () => new Date() } = {}) {
+export function resourceCapture(settings, { now = () => new Date(), random = randomBytes } = {}) {
   if (!settings) return () => false;
   return value => {
     const resource = capturableResource(value, settings.match);
     if (!resource) return false;
-    let tmp = null;
+    let owned = null, fd = null;
     try {
       const dir = dirname(settings.file), d = lstatSync(dir);
       if (!d.isDirectory() || d.isSymbolicLink() || d.uid !== process.getuid() || (d.mode & 0o077)) return false;
-      tmp = join(dir, `.resource-capture-${randomBytes(6).toString('hex')}`);
-      writeFileSync(tmp, JSON.stringify({ t: now().toISOString(), resource }) + '\n', { mode: 0o600, flag: 'wx' });
-      renameSync(tmp, settings.file);
-      tmp = null;
+      const tmp = join(dir, `.resource-capture-${random(6).toString('hex')}`);
+      fd = openSync(tmp, 'wx', 0o600);   // exclusive: an existing file is never ours to remove
+      owned = tmp;
+      writeSync(fd, JSON.stringify({ t: now().toISOString(), resource }) + '\n');
+      closeSync(fd); fd = null;
+      renameSync(owned, settings.file);
+      owned = null;
       return true;
     } catch { return false; } finally {
-      // Never leave a partial or unpublished capture behind.
-      if (tmp) try { rmSync(tmp, { force: true }); } catch {}
+      // Best effort: remove only the temporary file this attempt created and did not publish. An
+      // interrupted process or a failed unlink can still leave one; see docs/oauth-session.md.
+      if (fd !== null) try { closeSync(fd); } catch {}
+      if (owned) try { rmSync(owned, { force: true }); } catch {}
     }
   };
 }

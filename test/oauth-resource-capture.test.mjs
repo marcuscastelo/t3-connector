@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync, statSync, readdirSync, chmodSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, statSync, readdirSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startConnector, http, freePort } from './oauth-apoio.mjs';
@@ -60,6 +60,13 @@ test('resource capture: writes one 0600 file atomically, refuses an unsafe direc
   const cap2 = resourceCapture({ file: join(d2, 'resource.json'), match: T });
   for (let i = 0; i < 3; i++) assert.equal(cap2(`https://edge.example.com/v1/mcp/${T}`), false);
   assert.deepEqual(readdirSync(d2), ['resource.json']);
+  // A preexisting file at the temporary name (EEXIST) is never removed (review N1).
+  const d3 = mkdtempSync(join(tmpdir(), 't3c-cap-')); chmodSync(d3, 0o700);
+  const pre = join(d3, '.resource-capture-a1b2c3d4e5f6'); writeFileSync(pre, 'not ours', { mode: 0o600 });
+  const rc = resourceCapture({ file: join(d3, 'resource.json'), match: T }, { random: () => Buffer.from('a1b2c3d4e5f6', 'hex') });
+  assert.equal(rc(`https://edge.example.com/v1/mcp/${T}`), false);
+  assert.equal(readFileSync(pre, 'utf8'), 'not ours');
+  assert.deepEqual(readdirSync(d3).sort(), ['.resource-capture-a1b2c3d4e5f6']);
   assert.equal(resourceCapture(null)(`https://edge.example.com/v1/mcp/${T}`), false);
 });
 
