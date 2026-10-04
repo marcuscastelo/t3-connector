@@ -16,6 +16,7 @@ import { authorizationServer, SCOPES } from './authorization-server.mjs';
 import { resourceServer } from './resource-server.mjs';
 import { controlPlane, enrollmentTicket } from './control-plane.mjs';
 import { json, wrap } from './http.mjs';
+import { resourceCapture } from './resource-capture.mjs';
 
 // `tools({ authority, issuer, stateDir, audit })` returns { sources, capabilities?, grantProvider?, close? }: the
 // MCP catalogs behind the resource server and, for writes, the policy approved at sign-in.
@@ -67,7 +68,7 @@ export function createOAuthConnector({ config, tools, serverInfo, fetch, clock, 
     const keys = approval.credentialOrigin ? (approval.credentialOrigin === localOrigin ? passkeys : approval.credentialOrigin === issuer ? publicPasskeys : null) : (approval.credentialRp ?? 'localhost') === 'localhost' ? passkeys : publicPasskeys;
     return !!keys?.current(approval.credentialId, approval.credentialGeneration);
   };
-  const as = authorizationServer({ issuer, resource, localOrigin, loginMode: config.loginMode, authority, tokens, clients, transactions, publicLogin: publicFlow, credentialCurrent, audit });
+  const as = authorizationServer({ issuer, resource, localOrigin, loginMode: config.loginMode, authority, tokens, clients, transactions, publicLogin: publicFlow, credentialCurrent, captureRejectedResource: resourceCapture(config.resourceCapture ?? null), audit });
   const rs = resourceServer({ issuer, resource, route: tunnel ? '/mcp' : undefined, scopes: SCOPES, tokens, authority, sources, serverInfo, allowedOrigins: config.allowedOrigins, audit });
   const local = controlPlane({ port: localPort, issuer, passkeys, subject: storage.subject, authority, tokens, transactions, killSwitch, enrollment, consent, admin, clock, wall, audit });
   const publicHost = new URL(issuer).host;

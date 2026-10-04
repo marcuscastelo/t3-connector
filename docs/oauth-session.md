@@ -346,8 +346,21 @@ With `T3_CONNECTOR_OAUTH_RESOURCE` and `T3_CONNECTOR_OAUTH_TUNNEL_PORT` set:
   `authorize_unknown_resource` with a hash of the requested value only.
 
 The exact resource is the one the tunnel service puts in the rewritten protected resource metadata.
+When that value cannot be read from the tunnel side, a temporary opt-in capture can record it:
+set `T3_CONNECTOR_OAUTH_RESOURCE_CAPTURE_FILE` (absolute path in an owner-only directory) and
+`T3_CONNECTOR_OAUTH_RESOURCE_CAPTURE_MATCH` (the tunnel ID) together. A refused resource is then also
+written to that file (0600, atomic; temporary files removed on a best-effort basis) only when it is already a canonical https
+URL — lowercase host, optional port, a path of unreserved characters only (no percent encoding,
+query, fragment or credentials), the tunnel ID as a whole path segment, at most 512 characters;
+anything else stays hash-only. This is a request-supplied candidate, not trusted discovery: its hash
+matching the refused request's `requestedHash` only correlates it with that request; corroborate it
+before configuring it. After disabling, remove the capture file and any `.resource-capture-*`
+remnant in that directory (only those). The request is refused exactly as before. Use a private
+directory reserved for this diagnostic under trusted ancestors. Remove both settings and the file once the resource is
+configured.
 Read it from the tunnel side (the tunnel client's logged discovery URLs and status UI, or the
-rewritten metadata), never from request values, and restart with it set.
+rewritten metadata). Request values are not a source, except for the opt-in diagnostic below, whose
+candidate must be corroborated; restart with the value set.
 
 Tunnel client profile (`server_urls`, channel `main`): `http://127.0.0.1:<tunnel port>/mcp`.
 
