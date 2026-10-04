@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.0
+
 - Experimental OAuth session profile, `t3-connector-oauth` (`serve`, `rehearsal`): MCP over
   HTTP with an embedded OAuth authorization server (CIMD clients with `private_key_jwt`,
   code + PKCE S256), passkey sign-in on a local control page, rotating refresh, an idle
