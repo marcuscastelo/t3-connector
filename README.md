@@ -365,7 +365,7 @@ work it is meant to correct. Refused steer/restart requests never fall back to a
 ## OAuth session profile (experimental)
 
 `t3-connector-oauth` serves the same tools over MCP HTTP behind an embedded OAuth server: the
-client signs in once with a passkey on a local control page, refreshes without interaction while
+client signs in with a passkey at the HTTPS issuer, explicitly consents, refreshes while
 it keeps calling tools, and needs a new passkey after an idle window (default 1 h). It runs
 alongside the stdio connectors and does not use the write lease. Design, configuration, threat
 model and rehearsal: [`docs/oauth-session.md`](docs/oauth-session.md).
@@ -377,7 +377,16 @@ environment ID and logical destination. The OAuth-only loader ignores `allowedPr
 changing the shared file; the stdio read ACL and Ponte lease snapshot remain unchanged. The
 consent page shows environments, effective scopes, one-hour idle expiry and local revoke.
 
-The default `restricted` mode preserves the sandbox read ACL and write snapshot at sign-in.
+HTTPS login defaults to `public` (`T3_CONNECTOR_OAUTH_LOGIN_MODE`), with no localhost navigation.
+The public RP is the issuer hostname, stored separately from the original local RP under the
+same canonical subject. On the loopback control page, a fresh action-bound local passkey proof
+issues a browser-bound enrollment link/QR (128 bits, single use, at most 15 minutes) or removes
+a selected credential and its sessions. All public enrollment routes return 404 without an
+active capability. GET never approves or enrolls. `button`, `302`, `oob` and the original local
+passkey remain available; HTTP localhost rehearsal defaults to `button`. Public mode requires
+HTTPS. Mobile, Bitwarden sync and hosted ChatGPT E2E still require separate deployment validation.
+
+The default `restricted` project policy preserves the sandbox read ACL and write snapshot at sign-in.
 `T3_CONNECTOR_OAUTH_WRITE_PROJECTS` is available only in that mode and conflicts with `all`.
 See [`examples/oauth-all-projects.env`](examples/oauth-all-projects.env) for configuration.
 

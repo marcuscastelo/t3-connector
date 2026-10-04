@@ -23,7 +23,7 @@ Of particular interest:
   for reads; `orchestration:read` + `orchestration:operate` for writes);
 - leaking tokens, pairing codes, the relay capability or message text into logs, MCP
   stdout or tool responses;
-- the approval page reachable outside `localhost`, or the relay accepted without the
+- the lease approval/local administrative page reachable outside `localhost`, or the relay accepted without the
   capability;
 - injection through the configured SSH host.
 
@@ -52,3 +52,26 @@ kill checks. Live inventory, thread ownership, current workspace roots, configur
 identity/destination and journal semantics remain enforced per operation. The final GET and
 mutation RPC are not atomic; stronger ownership guarantees need backend support. The shared
 stdio config and Ponte lease behavior are unaffected.
+
+OAuth public sign-in uses a second RP fixed to the HTTPS issuer origin/hostname, separate tagged
+credential storage and the existing canonical subject. The original local credential remains
+administrative. UV precedes private inventory and explicit consent. Cookie-bound live
+transactions, purpose-bound ≤120 s single-use challenges, exact Origin/JSON and Fetch Metadata
+checks, counter/UP/UV/signature checks and crossOrigin/topOrigin refusal apply to ceremonies.
+GET never approves or enrolls; existing OAuth navigation effects remain.
+
+Public enrollment exposes a distinct remote ceremony only during a locally authorized window.
+Action-bound local UV issues a digest-only ephemeral 128-bit capability; the first valid claim
+binds one browser/generation, ≤15 min. Replacement, kill, revoke-all, restart and success cancel
+it; guarded synchronous persistence prevents late commit. All public enrollment paths are 404
+otherwise. A stolen link authorizes adding a credential, so protect links/QRs. Public credentials
+cannot administer enrollment/removal; no public SIGUSR2 or automatic bootstrap. Per-RP deletion
+ends that key's sessions/tokens and pending approvals and blocks in-flight counter restoration.
+
+CSP/nonces, frame denial, no-referrer/no-store/nosniff and host-only Secure/HttpOnly/Lax cookies
+protect issuer pages; app maps/queues/verification/body/connection limits and deadlines are finite.
+Audit rotation and rejection aggregation never retain ticket/cookie/assertion/code/token values.
+See [OAuth limits and ingress policy](docs/oauth-session.md#52-admission-resource-bounds-and-ingress-requirements):
+the edge must enforce client throttles, path isolation, TLS, deadlines and secret-free logging.
+Application budgets use the socket peer and trust no forwarded identity. The software-authenticator
+tests do not establish Cloudflare, Android/Bitwarden or hosted ChatGPT compatibility.

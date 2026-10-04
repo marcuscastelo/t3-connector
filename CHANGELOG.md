@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Public issuer passkey login (HTTPS default, `T3_CONNECTOR_OAUTH_LOGIN_MODE=public`): independent
+  issuer RP/storage sharing the canonical local subject, UV then explicit scope-aware consent,
+  cookie/purpose/epoch-bound ≤120 s ceremonies and existing PKCE callback/resume semantics.
+  Original local passkey and `button`/`302`/`oob` modes remain; HTTP rehearsal defaults to `button`.
+- Local action-bound passkey administration issues temporary browser-bound public enrollment
+  links/QRs and removes selected RP credentials with immediate token/session/pending approval
+  invalidation. Enrollment is 128-bit, one generation, ≤15 min; all public routes are 404 otherwise;
+  replacement/reset/restart/success cancel it, with guarded serialized credential persistence.
+- Public ceremony headers/cookies/cross-origin checks, bounded admission/maps/queues/credentials,
+  request/crypto/CIMD deadlines, session/token capacity, audit rotation/rejection aggregation and
+  software-authenticator race/negative tests. Hosted/mobile deployment remains separately unverified.
+
 - OAuth `T3_CONNECTOR_OAUTH_PROJECTS=all`: environment-based read/write consent for all current
   and future projects, live inventories and isolated scopes per call, final ownership/workspace
   validation before sending, and historical reconciliation without requiring deleted projects.
