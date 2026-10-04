@@ -15,13 +15,15 @@ import { clientKeys, cimdFetch, CLIENT } from './oauth-fixtures.mjs';
 // client (CIMD + private_key_jwt) and a software passkey (UV) for the control-plane.
 export const freePort = () => new Promise((ok, ko) => { const s = createServer(); s.once('error', ko); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => ok(port)); }); });
 
-// Optional per-request deadline for every helper call (the composition harness sets it). On expiry
-// the request is destroyed and the promise rejects with a `timeout:` error.
+// Optional wall-clock deadline for every helper call (the composition harness sets it): on expiry
+// the request is destroyed and the promise rejects with a `timeout:` error, however much data is
+// still trickling in. 0 (default) means no deadline.
 let defaultTimeoutMs = 0;
 export const setHttpTimeout = ms => { defaultTimeoutMs = ms; };
 
 export function http(method, url, { headers = {}, body, host, timeoutMs = defaultTimeoutMs } = {}) {
   const u = new URL(url);
+  let timer;
   return new Promise((ok, ko) => {
     const req = httpRequest({ host: '127.0.0.1', port: u.port, method, path: u.pathname + u.search, headers: { host: host ?? u.host, ...headers } }, res => {
       const parts = []; res.on('data', c => parts.push(c));
@@ -33,11 +35,11 @@ export function http(method, url, { headers = {}, body, host, timeoutMs = defaul
         ok({ status: res.statusCode, headers: res.headers, text, data });
       });
     });
-    if (timeoutMs) req.setTimeout(timeoutMs, () => req.destroy(new Error(`timeout: ${method} ${u.pathname}`)));
+    if (timeoutMs) timer = setTimeout(() => req.destroy(new Error(`timeout: ${method} ${u.pathname}`)), timeoutMs);
     req.on('error', ko);
     if (body !== undefined) req.write(body);
     req.end();
-  });
+  }).finally(() => clearTimeout(timer));
 }
 
 export async function startConnector({ config = {}, loginMode = 'button', tools = () => ({ sources: [perRequestSource(rehearsalTools())] }), enroll = true } = {}) {

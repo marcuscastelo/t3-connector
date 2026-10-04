@@ -69,8 +69,8 @@ const c = await startConnector({
 let starts = 0, current = null;
 const withTimeout = (p, ms, what) => { let t; return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`timeout: ${what}`)), ms); })]).finally(() => clearTimeout(t)); };
 const until = async (cond, ms, what) => { const end = Date.now() + ms; while (!(await cond())) { if (Date.now() > end) throw new Error(`timeout: ${what}`); await sleep(50); } };
-// Readiness: sequential probes, each bounded, overall deadline.
-const ready = (ms = 10_000) => until(async () => { try { return (await withTimeout(http('GET', `${c.issuer}/.well-known/oauth-protected-resource/mcp`), 1000, 'probe')).status === 200; } catch { return false; } }, ms, 'ingress ready');
+// Readiness: sequential probes, each destroyed after 1 s (wall clock), overall deadline.
+const ready = (ms = 10_000) => until(async () => { try { return (await http('GET', `${c.issuer}/.well-known/oauth-protected-resource/mcp`, { timeoutMs: 1000 })).status === 200; } catch { return false; } }, ms, 'ingress ready');
 const supervisor = supervisionarTransporte({
   iniciar: () => spawn(process.execPath, [join(here, 'ingress-proxy.mjs'), String(proxyPort), String(rsPort), modeFile], { stdio: ['ignore', 'ignore', 'pipe'] }),
   atrasoInicialMs: 500, atrasoMaximoMs: 4000, estabilidadeMs: 2000,
