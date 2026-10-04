@@ -16,24 +16,9 @@ import { buscarThreads, EntradaInvalida, PRAZO_AMBIENTE_MS, PRAZO_TOTAL_MS } fro
 import { assinatura, casaBusca, comparador, CursorInvalido, normalizar, paginar } from './paginacao.mjs';
 import { Cancelada, ErroT3 } from './t3.mjs';
 import { resumirPedidosRuntime } from './pedidos-runtime.mjs';
-import { esquema, normalizarParametros, ParametroInvalido } from './parametros.mjs';
 
 export const VERSAO = '0.5.0';
 const ESTADOS = ['running', 'needs_intervention', 'completed', 'failed', 'cancelled', 'no_run', 'unknown'];
-// Valores antigos do filtro `estado`; a assinatura do cursor de t3_threads usa o valor
-// antigo, para um cursor emitido antes da troca continuar valendo.
-const ESTADO_LEGADO = {
-  rodando: 'running', precisa_intervencao: 'needs_intervention', concluida: 'completed', falhou: 'failed',
-  cancelada: 'cancelled', sem_execucao: 'no_run', desconhecido: 'unknown',
-};
-const ESTADO_NO_CURSOR = Object.fromEntries(Object.entries(ESTADO_LEGADO).map(([legado, ingles]) => [ingles, legado]));
-const CORRESPONDENCIA_LEGADA = { parcial: 'partial', exata: 'exact' };
-// Nomes antigos dos parâmetros, aceitos sem aparecer no tools/list (ver docs/adr/0004).
-const LEGADO = {
-  ambiente: 'environment', busca: 'search', limite: 'limit', estado: 'state', incluirSemExecucao: 'includeNoRun',
-  correspondencia: 'match', maxCaracteres: 'maxCharacters', incluirUltimaResposta: 'includeLatestResponse', verificar: 'check',
-};
-const VALORES_LEGADOS = { estado: ESTADO_LEGADO, correspondencia: CORRESPONDENCIA_LEGADA };
 const SO_LEITURA = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
 function projetosPorId(shell) {
@@ -60,8 +45,7 @@ function resposta(dados) {
 }
 
 function erro(e) {
-  const mensagem = e instanceof ParametroInvalido ? `${e.codigo}: ${e.message}`
-    : e instanceof ForaDoEscopo || e instanceof ErroT3 || e instanceof Cancelada || e instanceof CursorInvalido || e instanceof EntradaInvalida
+  const mensagem = e instanceof ForaDoEscopo || e instanceof ErroT3 || e instanceof Cancelada || e instanceof CursorInvalido || e instanceof EntradaInvalida
     ? e.message
     : `failed to query T3: ${e?.message ?? e}`;
   return { content: [{ type: 'text', text: mensagem }], isError: true };
@@ -74,21 +58,12 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
     .describe(`T3 environment (alias or environmentId): ${nomes}. Default when omitted: ${ambientes.padrao}. Project and thread IDs are only valid inside their own environment.`);
 
   /**
-   * Registra a ferramenta com os parâmetros de `forma` (inglês) e os aliases legados que
-   * ela aceita; `fn` recebe só os campos conhecidos, já com o nome em inglês.
+   * Registra a ferramenta com schema estrito: um parâmetro desconhecido (por exemplo um
+   * nome antigo, como `ambiente`) é recusado pelo SDK, em vez de ser descartado e a
+   * chamada cair no environment padrão. Ver docs/adr/0004.
    */
-  const registrar = (nome, { forma, obrigatorios = [], ...config }, fn) => {
-    const aliases = Object.fromEntries(Object.entries(LEGADO).filter(([, ingles]) => ingles in forma));
-    servidor.registerTool(nome, { ...config, inputSchema: esquema(forma, obrigatorios) }, async (args, extra) => {
-      let entrada;
-      try {
-        entrada = normalizarParametros(args, forma, { aliases, valores: VALORES_LEGADOS, obrigatorios });
-      } catch (e) {
-        return erro(e);
-      }
-      return fn(entrada, extra);
-    });
-  };
+  const registrar = (nome, { forma, ...config }, fn) =>
+    servidor.registerTool(nome, { ...config, inputSchema: z.strictObject(forma) }, fn);
 
   /** Executa a ferramenta no environment escolhido, com o sinal de cancelamento do cliente. */
   const noAmbiente = (fn) => async (args, extra) => {
@@ -206,7 +181,7 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
       const comparar = comparador([true, false]);
       const { pagina, truncado, proximoCursor, alterados } = paginar({
         itens: lista.sort((a, b) => comparar(chave(a), chave(b))),
-        consulta: assinatura(['t3_threads', r.environmentId, projectId ?? null, estado ? ESTADO_NO_CURSOR[estado] : null, incluirSemExecucao, normalizar(busca ?? '')]),
+        consulta: assinatura(['t3_threads', r.environmentId, projectId ?? null, estado ?? null, incluirSemExecucao, normalizar(busca ?? '')]),
         cursor,
         limite,
         chave,
@@ -286,7 +261,6 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
         threadId: z.string().min(1),
         maxCharacters: z.number().int().min(200).max(6000).optional().describe('Maximum length of the latest response; default 1500'),
       },
-      obrigatorios: ['threadId'],
       annotations: SO_LEITURA,
     },
     noAmbiente(async ({ r, cliente, signal, threadId, maxCharacters: maxCaracteres = 1500 }) => {
@@ -321,7 +295,6 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
         limit: z.number().int().min(1).max(20).optional().describe('Number of messages; default 6'),
         maxCharacters: z.number().int().min(100).max(4000).optional().describe('Maximum characters per message; default 800'),
       },
-      obrigatorios: ['threadId'],
       annotations: SO_LEITURA,
     },
     noAmbiente(async ({ r, cliente, signal, threadId, limit: limite = 6, maxCharacters: maxCaracteres = 800 }) => {
@@ -360,7 +333,6 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
         includeLatestResponse: z.boolean().optional().describe('Include the latest assistant response of that run; default false'),
         maxCharacters: z.number().int().min(100).max(4000).optional().describe('Maximum length of the latest response; default 800'),
       },
-      obrigatorios: ['environment', 'threadId', 'timeoutMs'],
       annotations: SO_LEITURA,
     },
     async (args, extra) => {

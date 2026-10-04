@@ -68,14 +68,14 @@ test('prazo do chamador vira erro "prazo", não "indisponivel"', async () => {
 });
 
 test('config: exige environmentId, um transporte, token e ACL não vazia por environment', () => {
-  const base = { environmentId: 'e1', url: 'http://127.0.0.1:3773', tokenFile: '~/t', projetosPermitidos: ['p'] };
-  assert.equal(validarConfig({ ambientes: { local: base } }).padrao, 'local');
-  assert.throws(() => validarConfig({ ambientes: { local: { ...base, projetosPermitidos: [] } } }), /allowedProjects vazio/);
-  assert.throws(() => validarConfig({ ambientes: { local: { ...base, environmentId: undefined } } }), /environmentId/);
-  assert.throws(() => validarConfig({ ambientes: { local: { ...base, ssh: { host: 'remoto' } } } }), /exatamente um/);
-  assert.throws(() => validarConfig({ ambientes: { local: { ...base, url: 'http://remoto.example.com:3773' } } }), /loopback/);
-  assert.throws(() => validarConfig({ padrao: 'inexistente', ambientes: { local: base } }), /default "inexistente"/);
-  assert.throws(() => validarConfig({ ambientes: { a: base, b: base } }), /environmentId repetido/);
+  const base = { environmentId: 'e1', url: 'http://127.0.0.1:3773', tokenFile: '~/t', allowedProjects: ['p'] };
+  assert.equal(validarConfig({ environments: { local: base } }).padrao, 'local');
+  assert.throws(() => validarConfig({ environments: { local: { ...base, allowedProjects: [] } } }), /allowedProjects vazio/);
+  assert.throws(() => validarConfig({ environments: { local: { ...base, environmentId: undefined } } }), /environmentId/);
+  assert.throws(() => validarConfig({ environments: { local: { ...base, ssh: { host: 'remoto' } } } }), /exatamente um/);
+  assert.throws(() => validarConfig({ environments: { local: { ...base, url: 'http://remoto.example.com:3773' } } }), /loopback/);
+  assert.throws(() => validarConfig({ default: 'inexistente', environments: { local: base } }), /default "inexistente"/);
+  assert.throws(() => validarConfig({ environments: { a: base, b: base } }), /environmentId repetido/);
 });
 
 test('túnel SSH: argumentos fechados, porta de loopback, reuso e recriação após queda', async () => {

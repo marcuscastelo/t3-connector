@@ -12,8 +12,8 @@
 //   }
 // }
 //
-// Os nomes antigos (porta, estado, canal, ambientes, portaRemota) continuam aceitos; o
-// nome antigo e o novo com valores diferentes no mesmo objeto são recusados.
+// Os nomes antigos (porta, estado, canal, ambientes, portaRemota) são recusados com o nome
+// novo na mensagem.
 //
 // A config não limita projetos nem ações: cada pedido leva o inventário completo de cada
 // environment naquele momento e todas as ações, e quem decide é a passkey sobre o escopo

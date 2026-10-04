@@ -2,28 +2,22 @@
 
 ## Unreleased
 
-- **Breaking: responses are English.** Every response field, state and return value,
-  search failure code and write error code written by the connector is renamed, with no
-  Portuguese duplicate: for example `ambiente` → `environment`, `estado: "rodando"` →
-  `state: "running"`, `proximoCursor` → `nextCursor`, `pedidosPendentes` →
+- **Breaking: English public contract.** Tool parameters, response fields, state and
+  return values, search failure codes, write error codes, connector messages and
+  configuration keys are English, with no Portuguese alias or duplicate. Parameters:
+  `environment`, `search`, `limit`, `state` (`running`, `needs_intervention`,
+  `completed`, `failed`, `cancelled`, `no_run`, `unknown`), `includeNoRun`, `match`
+  (`partial`, `exact`), `maxCharacters`, `includeLatestResponse`, `check`. Responses: for
+  example `ambiente` → `environment`, `proximoCursor` → `nextCursor`, `pedidosPendentes` →
   `pendingRequests`, `proximaAcao` → `nextAction`, `ambiente_fora_da_lease` →
-  `environment_not_in_lease`. Connector-generated error and reason messages are English.
-  The JSON of `t3-connector environments`, `diagnose` and `t3-connector-write pair` uses
-  English keys. Clients that read fields or codes by name must update; full tables in
-  [ADR 0004](docs/adr/0004-english-contract.md). Restart the write gate after upgrading:
-  until then, leased reads still answer with the previous names. Cursors issued before
-  the upgrade stay valid.
-
-- Tool parameters and configuration keys are now English: `environment`, `search`,
-  `limit`, `state` (values `running`, `needs_intervention`, `completed`, `failed`,
-  `cancelled`, `no_run`, `unknown`), `includeNoRun`, `match` (`partial`, `exact`),
-  `maxCharacters`, `includeLatestResponse`, `check`; config keys `default`,
-  `environments`, `allowedProjects`, `ssh.remotePort`, `port`, `stateDir`, `channel`.
-  `tools/list` advertises only the English names. The previous Portuguese names and
-  values remain accepted as deprecated aliases, so existing calls and config files keep
-  working; both spellings with different values fail with `parameter_conflict` (config:
-  refused at start-up). New error codes `parameter_conflict`, `parameter_invalid` and
-  `parameter_required`. Tool names and the private bridge-to-gate relay are unchanged.
+  `environment_not_in_lease`. Config: `default`, `environments`, `allowedProjects`,
+  `ssh.remotePort`, `port`, `stateDir`, `channel`. Tool inputs are now strict: an old or
+  unknown parameter fails with `-32602` instead of being ignored (an ignored `ambiente`
+  used to fall back to the default environment). Old config keys stop start-up naming
+  their replacement. CLI JSON (`environments`, `diagnose`, write `pair`) uses English
+  keys. Cursors from earlier versions are refused; restart the query. Bridge and gate
+  must be upgraded and restarted together. Tool names are unchanged. Full tables in
+  [ADR 0004](docs/adr/0004-english-contract.md).
 
 - Release pipeline: pushing a tag `vX.Y.Z` on `main` checks that version, lock, `VERSAO`,
   `VERSAO_ESCRITA` and CHANGELOG agree, runs CI, packs once, checks that exact artifact

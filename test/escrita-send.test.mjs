@@ -46,7 +46,7 @@ for(const [i,c] of unsafeSendCases.entries())test(`unsafe send ${i}: ${c.error} 
 test('MCP schema rejects missing run and implicit queue with useful messages before relay',async()=>{
  let calls=0;const p=await ponte(async()=>{calls++;return {};});try {
   for(const [delivery,message] of [['steer_active',/targetRunId required/],['restart_active',/targetRunId required/],['queue_after_active',/queue_after_active requires explicit intent/]]) {
-   const r=await p.client.callTool({name:'t3_escrever_thread_send',arguments:{leaseId:'l',ambiente:'remoto',operationId:'op',input:{threadId:'t',text:'fix',clientRequestId:'op',delivery}}});
+   const r=await p.client.callTool({name:'t3_escrever_thread_send',arguments:{leaseId:'l',environment:'remoto',operationId:'op',input:{threadId:'t',text:'fix',clientRequestId:'op',delivery}}});
    assert.equal(r.isError,true);assert.match(r.content[0].text,message);
   }
   assert.equal(calls,0);
@@ -54,11 +54,11 @@ test('MCP schema rejects missing run and implicit queue with useful messages bef
 });
 test('safe validation codes survive relay as actionable messages, without rejected input text',async()=>{
  const p=await ponte(async()=>{throw new Error('target_run_id_required');});try {
-  const r=await p.client.callTool({name:'t3_escrever_thread_send',arguments:{leaseId:'l',ambiente:'remoto',operationId:'op',input:sendCases[0].input}});
+  const r=await p.client.callTool({name:'t3_escrever_thread_send',arguments:{leaseId:'l',environment:'remoto',operationId:'op',input:sendCases[0].input}});
   assert.equal(r.isError,true);assert.match(r.content[0].text,/targetRunId required.*t3_thread/);
  } finally {await p.close();}
  const q=await ponte(async()=>{throw new Error('queue_explicit_intent_required');});try {
-  const r=await q.client.callTool({name:'t3_escrever_thread_send',arguments:{leaseId:'l',ambiente:'remoto',operationId:'op',input:sendCases[4].input}});
+  const r=await q.client.callTool({name:'t3_escrever_thread_send',arguments:{leaseId:'l',environment:'remoto',operationId:'op',input:sendCases[4].input}});
   assert.equal(r.isError,true);assert.match(r.content[0].text,/explicit request to defer.*steer_active/);
  } finally {await q.close();}
 });

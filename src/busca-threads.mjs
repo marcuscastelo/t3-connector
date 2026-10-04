@@ -55,17 +55,15 @@ function validar({ search: busca, threadId, match }) {
   if (temId && match !== undefined) throw new EntradaInvalida('`match` only applies to `search`; `threadId` is always exact');
 }
 
-// As partes da assinatura do cursor mantêm os rótulos antigos (parcial/exata): um cursor
-// emitido antes da troca dos nomes dos parâmetros continua valendo.
 function criterio({ search: busca, threadId, match = 'partial' }) {
   if (threadId !== undefined) {
     return { casa: (t) => t.id === threadId, partes: ['threadId', threadId] };
   }
   if (match === 'exact') {
     const alvo = normalizar(busca);
-    return { casa: (t) => normalizar(t.title) === alvo || t.id === busca, partes: ['exata', busca] };
+    return { casa: (t) => normalizar(t.title) === alvo || t.id === busca, partes: ['exact', busca] };
   }
-  return { casa: (t) => casaBusca(busca, t.title, t.id), partes: ['parcial', normalizar(busca)] };
+  return { casa: (t) => casaBusca(busca, t.title, t.id), partes: ['partial', normalizar(busca)] };
 }
 
 /**

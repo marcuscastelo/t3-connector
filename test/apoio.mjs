@@ -14,10 +14,10 @@ export const PROJETO_ALHEIO = 'proj-alheio';
 
 export function config() {
   return validarConfig({
-    padrao: 'local',
-    ambientes: {
-      local: { environmentId: LOCAL.environmentId, url: LOCAL.url, tokenFile: '/tmp/x', projetosPermitidos: [LOCAL.projeto] },
-      remoto: { environmentId: REMOTO.environmentId, ssh: { host: 'remoto' }, tokenFile: '/tmp/y', projetosPermitidos: [REMOTO.projeto] },
+    default: 'local',
+    environments: {
+      local: { environmentId: LOCAL.environmentId, url: LOCAL.url, tokenFile: '/tmp/x', allowedProjects: [LOCAL.projeto] },
+      remoto: { environmentId: REMOTO.environmentId, ssh: { host: 'remoto' }, tokenFile: '/tmp/y', allowedProjects: [REMOTO.projeto] },
     },
   });
 }

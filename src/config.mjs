@@ -11,8 +11,8 @@
 //   }
 // }
 //
-// Os nomes antigos (padrao, ambientes, projetosPermitidos, portaRemota) continuam aceitos;
-// o nome antigo e o novo com valores diferentes no mesmo objeto são recusados.
+// Os nomes antigos (padrao, ambientes, projetosPermitidos, portaRemota) são recusados com o
+// nome novo na mensagem: ignorá-los mudaria o environment padrão ou a porta em silêncio.
 
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -25,22 +25,13 @@ export const expandir = (p) => (p.startsWith('~/') ? path.join(homedir(), p.slic
 
 export class ErroConfig extends Error {}
 
-/** JSON com as chaves dos objetos em ordem: a ordem das propriedades não muda o valor. */
-const canonico = (v) => JSON.stringify(v, (_, x) => (x && typeof x === 'object' && !Array.isArray(x)
-  ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]]))
-  : x));
-
-/** Valor de `ingles` ou do nome antigo `legado`; os dois com valores diferentes são erro. */
+/** Valor de `ingles`; o nome antigo `legado` é recusado, com o nome novo na mensagem. */
 export function campoConfig(obj, ingles, legado, falha, onde = '') {
-  const novo = obj?.[ingles];
-  const antigo = obj?.[legado];
-  if (novo !== undefined && antigo !== undefined && canonico(novo) !== canonico(antigo)) {
-    falha(`${onde}"${ingles}" e o nome antigo "${legado}" têm valores diferentes; use só "${ingles}"`);
-  }
-  return novo ?? antigo;
+  if (obj?.[legado] !== undefined) falha(`${onde}"${legado}" foi renomeado para "${ingles}"`);
+  return obj?.[ingles];
 }
 
-/** `ssh` com `remotePort` (ou o antigo `portaRemota`), padrão 3773. */
+/** `ssh` com `remotePort`, padrão 3773. */
 export function sshConfig(ssh, falha, onde) {
   return ssh ? { host: ssh.host, portaRemota: campoConfig(ssh, 'remotePort', 'portaRemota', falha, `${onde}ssh.`) ?? 3773 } : null;
 }

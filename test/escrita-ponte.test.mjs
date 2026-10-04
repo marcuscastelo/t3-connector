@@ -25,11 +25,11 @@ test('repassa o ambiente ao relay e explica erros de roteamento',async()=>{
  const pedidos=[];
  const c=await ponte(async req=>{pedidos.push(req);if(req.ambiente==='inexistente')throw new Error('ambiente_desconhecido');if(req.ambiente==='remoto'&&req.leaseId==='velha')throw new Error('ambiente_fora_da_lease');return {ambiente:{alias:req.ambiente},state:'completed'};});
  const args={leaseId:'l',operationId:'op',input:{threadId:'t',text:'oi',clientRequestId:'op',delivery:'start_immediately'}};
- const ok=await c.callTool({name:'t3_escrever_thread_send',arguments:{...args,ambiente:'remoto'}});
+ const ok=await c.callTool({name:'t3_escrever_thread_send',arguments:{...args,environment:'remoto'}});
  assert.equal(ok.isError,undefined);assert.equal(pedidos[0].ambiente,'remoto');assert.equal(pedidos[0].op,'dispatch');
- const inexistente=await c.callTool({name:'t3_escrever_thread_send',arguments:{...args,ambiente:'inexistente'}});
+ const inexistente=await c.callTool({name:'t3_escrever_thread_send',arguments:{...args,environment:'inexistente'}});
  assert.match(inexistente.content[0].text,/^environment_unknown: .*configured: local, remoto/);
- const fora=await c.callTool({name:'t3_escrever_thread_send',arguments:{...args,leaseId:'velha',ambiente:'remoto'}});
+ const fora=await c.callTool({name:'t3_escrever_thread_send',arguments:{...args,leaseId:'velha',environment:'remoto'}});
  assert.match(fora.content[0].text,/^environment_not_in_lease: /);
  const sem=await c.callTool({name:'t3_escrever_thread_send',arguments:args});
  assert.equal(sem.isError,true,'sem ambiente o schema recusa');

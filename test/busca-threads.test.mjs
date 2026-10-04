@@ -105,7 +105,7 @@ test('ACL e universo: projeto alheio e deletadas nunca aparecem; arquivadas e se
 test('ambiente (alias ou ID) restringe a busca sem conectar nos outros', async () => {
   for (const ambiente of ['remoto', REMOTO.environmentId]) {
     const chamadas = [];
-    const r = dados(await buscar({ threadId: 't-comum', ambiente }, { chamadas }));
+    const r = dados(await buscar({ threadId: 't-comum', environment: ambiente }, { chamadas }));
     assert.deepEqual(pares(r), ['remoto:t-comum']);
     assert.deepEqual(r.queriedEnvironments.map((a) => a.alias), ['remoto']);
     assert.equal(chamadas.some((c) => c.startsWith('local:')), false);
@@ -226,7 +226,7 @@ test('paginação agregada: ordem por (environmentId, threadId) estável, IDs re
   let cursor;
   let limite = 20;
   do {
-    const p = dados(await c.callTool({ name: 't3_buscar_threads', arguments: { search: 'lote', limite, ...(cursor ? { cursor } : {}) } }));
+    const p = dados(await c.callTool({ name: 't3_buscar_threads', arguments: { search: 'lote', limit: limite, ...(cursor ? { cursor } : {}) } }));
     assert.equal(p.total, 60);
     vistos.push(...pares(p));
     cursor = p.nextCursor;

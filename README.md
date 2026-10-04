@@ -21,10 +21,10 @@ SSH), chosen on every call. Architecture decisions:
 [ADR 0004, English contract](docs/adr/0004-english-contract.md).
 
 > **API naming.** Tool parameters, response fields, error codes and configuration keys
-> are in English. The original Portuguese parameter and configuration names (`ambiente`,
-> `busca`, `limite`, `estado`, `projetosPermitidos`, …) are still accepted as deprecated
-> aliases and are no longer listed in `tools/list`; sending both names with different
-> values is an error. Responses use only the English names. Tool names are unchanged
+> are in English. The names used up to 0.5.0 (`ambiente`, `busca`, `limite`, `estado`,
+> `projetosPermitidos`, …) are refused: tool inputs are strict, so an unknown or old
+> parameter fails with a validation error instead of being ignored, and an old
+> configuration key stops start-up naming its replacement. Tool names are unchanged
 > (`t3_projetos`, `t3_escrever_*`, …); this README translates each one where it first
 > appears. See [ADR 0004](docs/adr/0004-english-contract.md) for the migration tables.
 
@@ -68,9 +68,8 @@ See [examples/config.json](examples/config.json).
   - `allowedProjects`: per-environment ACL. An empty list prevents start-up. A read token
     reaches the whole environment; this ACL is the per-project restriction.
 
-Files with the previous keys (`padrao`, `ambientes`, `projetosPermitidos`,
-`ssh.portaRemota`) keep working; the same key in both spellings with different values
-is refused at start-up.
+A file with a key from 0.5.0 or earlier (`padrao`, `ambientes`, `projetosPermitidos`,
+`ssh.portaRemota`) is refused at start-up with the new name in the message.
 
 ### Pairing an environment
 
@@ -119,9 +118,8 @@ The connector speaks MCP over stdio. With the Secure MCP Tunnel `tunnel-client`,
 profile whose `mcp-command` is `t3-connector serve` (read) or `t3-connector-write bridge`
 (write, with the gate running alongside), and follow the tunnel documentation for the
 runtime key. Keep that key outside the repository. After upgrading the connector,
-restart the tunnel and the write gate, and refresh the tool list in the client. Until the
-gate restarts, leased reads through the write plugin still answer with the previous
-response names.
+restart the tunnel and the write gate together (bridge and gate must run the same
+version), and refresh the tool list in the client.
 
 ## How a client should read
 
@@ -318,8 +316,8 @@ Local configuration in `~/.config/t3-connector/write.json` (or
 }
 ```
 
-The previous keys (`porta`, `estado`, `canal`, `ambientes`, `ssh.portaRemota`) keep
-working; both spellings with different values are refused at start-up.
+Keys from 0.5.0 or earlier (`porta`, `estado`, `canal`, `ambientes`, `ssh.portaRemota`)
+are refused at start-up with the new name in the message.
 
 - One token per environment, scoped to exactly `orchestration:read` +
   `orchestration:operate`, paired with `t3-connector-write pair --environment <alias>`.
@@ -349,9 +347,8 @@ working; both spellings with different values are refused at start-up.
 Write results carry `environment: {alias, environmentId}`. Routing errors:
 `environment_required`, `environment_unknown`, `environment_not_in_lease`,
 `environment_unavailable` (nothing was sent), `gate_unavailable` and `thread_not_found`.
-Parameter errors, in both connectors, start the error text with the code: `parameter_conflict` (an English name and
-its deprecated alias with different values), `parameter_invalid` (invalid value in a
-deprecated alias) and `parameter_required`.
+A missing, invalid or unknown parameter (including a name from 0.5.0) is refused by the
+MCP SDK with error `-32602` before anything reaches the gate.
 
 ### `thread.send` timing contract
 

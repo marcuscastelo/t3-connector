@@ -35,7 +35,7 @@ tunnel keeps that rule and reuses the SSH identity the operator already has
 - The config lists environments by alias. Each has an expected `environmentId`, a
   transport (loopback/HTTPS `url` or `ssh: {host, remotePort}`), its own token file and
   its own `allowedProjects`. (Key and parameter names as renamed by
-  [ADR 0004](0004-english-contract.md); the original Portuguese names remain aliases.)
+  [ADR 0004](0004-english-contract.md).)
 - Every tool accepts `environment` (alias or environmentId). When omitted, the config
   `default` applies. Waiting requires `environment`.
 - There is no mutable global selector: the environment is chosen on every call.

@@ -4,7 +4,6 @@ import {McpServer} from '@modelcontextprotocol/sdk/server/mcp.js';
 import {z} from 'zod';
 import {ACTIONS,schemaForAction,SEND_DESCRIPTION} from './adapters.mjs';
 import {LEITURAS} from './read-guarded.mjs';
-import {esquema,normalizarParametros,ParametroInvalido} from '../parametros.mjs';
 
 export const VERSAO_ESCRITA='0.5.0';
 
@@ -23,16 +22,9 @@ const MENSAGENS={
  reconciliation_required:'the connector tried to send to T3 but could not confirm the result (RPC, transport or acknowledgement failure); this does not prove the thread was not created nor that the model is invalid. Do not retry and do not create with another provider as a fallback; call t3_reconciliar_escrita with the same environment and operationId',
 };
 
-// Nomes antigos (português) aceitos sem aparecer no tools/list (ver docs/adr/0004). O
-// relay privado até o gate continua com os nomes antigos: um gate ainda na versão
-// anterior entende o que esta ponte manda.
-const LEGADO={ambiente:'environment',busca:'search',limite:'limit',estado:'state',incluirSemExecucao:'includeNoRun',maxCaracteres:'maxCharacters'};
-const ESTADO_LEGADO={rodando:'running',precisa_intervencao:'needs_intervention',concluida:'completed',falhou:'failed',cancelada:'cancelled',sem_execucao:'no_run',desconhecido:'unknown'};
-const PARA_RELAY=Object.fromEntries(Object.entries(LEGADO).map(([legado,ingles])=>[ingles,legado]));
-const ESTADO_RELAY=Object.fromEntries(Object.entries(ESTADO_LEGADO).map(([legado,ingles])=>[ingles,legado]));
-const entradaDoRelay=input=>Object.fromEntries(Object.entries(input).map(([k,v])=>[PARA_RELAY[k]??k,k==='state'?ESTADO_RELAY[v]:v]));
-
-// O gate responde com os nomes antigos; esta ponte entrega ao cliente os nomes em inglês.
+// Os códigos e campos internos do gate são os antigos; esta ponte entrega ao cliente os
+// nomes em inglês (ver docs/adr/0004). O relay privado leva os parâmetros de leitura já em
+// inglês: ponte e gate sobem juntos, da mesma versão.
 const CODIGOS={ambiente_obrigatorio:'environment_required',ambiente_desconhecido:'environment_unknown',ambiente_fora_da_lease:'environment_not_in_lease',
  ambiente_indisponivel:'environment_unavailable',gate_indisponivel:'gate_unavailable',sem_projetos:'no_projects'};
 const codigo=c=>CODIGOS[c]??c;
@@ -42,24 +34,13 @@ const comAmbiente=({ambiente,...r})=>ambiente?{environment:ambiente,...r}:r;
 
 export function criarPonteEscrita({relay,aliases=[],approvalOrigin}) {
  const lista=aliases.length?aliases.join(', '):'see t3_pedir_aprovacao';
- const erro=e=>{if(e instanceof ParametroInvalido)return {isError:true,content:[{type:'text',text:`${e.codigo}: ${e.message}`}]};const code=/^[a-z_]+$/.test(e.message)?codigo(e.message):'gate_rejected';const extra=code==='environment_unknown'?` (configured: ${lista})`:'';return {isError:true,content:[{type:'text',text:MENSAGENS[code]?`${code}: ${MENSAGENS[code]}${extra}`:code}]};};
+ const erro=e=>{const code=/^[a-z_]+$/.test(e.message)?codigo(e.message):'gate_rejected';const extra=code==='environment_unknown'?` (configured: ${lista})`:'';return {isError:true,content:[{type:'text',text:MENSAGENS[code]?`${code}: ${MENSAGENS[code]}${extra}`:code}]};};
  const resultado=async op=>{try{return {content:[{type:'text',text:JSON.stringify(await op())}]};}catch(e){return erro(e);}};
  const environment=z.string().min(1).describe(`T3 environment where the thread/project lives (required; alias or environmentId): ${lista}. IDs from one environment are not valid in another.`);
  const server=new McpServer({name:'t3-connector-write',version:VERSAO_ESCRITA});
- // Ferramenta com parâmetros em inglês e aliases legados; `fn` recebe os campos normalizados.
- // Sem `environment` (nem `ambiente`) falha com environment_required: escrita não tem padrão.
- const registrar=(nome,{forma,...config},fn)=>{
-  const aliases=Object.fromEntries(Object.entries(LEGADO).filter(([,ingles])=>ingles in forma));
-  const obrigatorios=Object.entries(forma).filter(([,s])=>!s.safeParse(undefined).success).map(([k])=>k);
-  server.registerTool(nome,{...config,inputSchema:esquema(forma,obrigatorios)},async(args,extra)=>{
-   let entrada;
-   try {
-    entrada=normalizarParametros(args,forma,{aliases,valores:{estado:ESTADO_LEGADO},obrigatorios:obrigatorios.filter(k=>k!=='environment')});
-    if(entrada.environment===undefined)throw new Error('environment_required');
-   } catch(e) {return erro(e);}
-   return fn(entrada,extra);
-  });
- };
+ // Schema estrito: parâmetro desconhecido (inclusive um nome antigo, como `ambiente`) é
+ // recusado pelo SDK antes de chegar ao relay; `environment` é obrigatório, sem padrão.
+ const registrar=(nome,{forma,...config},fn)=>server.registerTool(nome,{...config,inputSchema:z.strictObject(forma)},fn);
 
  server.registerTool('t3_pedir_aprovacao',{description:'Requests passkey approval on the local machine to write for 60 min in the available environments (the per-environment scope is shown on the page), or returns the lease already approved. Never renews.',inputSchema:{},annotations:{readOnlyHint:false,destructiveHint:false}},()=>resultado(async()=>{
   const r=await relay({op:'request'});
@@ -78,11 +59,11 @@ export function criarPonteEscrita({relay,aliases=[],approvalOrigin}) {
 
  const cursor=z.string().min(1).optional();
  const leituras={t3_projetos:{search:z.string().min(1).optional(),limit:z.number().int().min(1).optional(),cursor},t3_atencao:{},
-  t3_threads:{projectId:z.string().optional(),state:z.enum(Object.values(ESTADO_LEGADO)).optional(),includeNoRun:z.boolean().optional(),search:z.string().min(1).optional(),limit:z.number().int().min(1).max(50).optional(),cursor},
+  t3_threads:{projectId:z.string().optional(),state:z.enum(['running','needs_intervention','completed','failed','cancelled','no_run','unknown']).optional(),includeNoRun:z.boolean().optional(),search:z.string().min(1).optional(),limit:z.number().int().min(1).max(50).optional(),cursor},
   t3_thread:{threadId:z.string().min(1),maxCharacters:z.number().int().min(200).max(6000).optional()},
   t3_mensagens:{threadId:z.string().min(1),limit:z.number().int().min(1).max(20).optional(),maxCharacters:z.number().int().min(100).max(4000).optional()}};
  for(const name of LEITURAS)registrar(name,{description:`${name}: read of the projects approved in the lease, in the chosen environment; requires an active lease and never renews it.${name==='t3_thread'?' Pending runtime requests include full public content and nextAction; thread.send does NOT answer them. Use runtime-request.answer for user_input or runtime-request.approve for approval with the requestId; unavailable detail requires inspection in T3.':''}`,forma:{leaseId:z.string(),environment,...leituras[name]},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true}},
-  async({leaseId,environment:amb,...input})=>{try{return await relay({op:'read',operation:name,leaseId,ambiente:amb,input:entradaDoRelay(input)});}catch(e){return erro(e);}});
+  async({leaseId,environment:amb,...input})=>{try{return await relay({op:'read',operation:name,leaseId,ambiente:amb,input});}catch(e){return erro(e);}});
 
  registrar('t3_reconciliar_escrita',{description:'Looks up the receipt of an operation in the same environment; never repeats the mutation; requires a lease.',forma:{leaseId:z.string(),environment,operationId:z.string()},annotations:{readOnlyHint:true,destructiveHint:false}},
   ({leaseId,environment:amb,operationId})=>resultado(async()=>comAmbiente(await relay({op:'reconcile',leaseId,ambiente:amb,operationId}))));

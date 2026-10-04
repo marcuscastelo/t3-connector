@@ -131,17 +131,17 @@ test('reconcile fica no environment da operação',async()=>{
 });
 
 test('config de escrita: destino lógico estável, ações válidas e sem environment padrão',()=>{
- const base={porta:7433,estado:'~/x',canal:{organization:'my-org',tunnelId:'tunnel_abc'},ambientes:{remoto:{environmentId:'env-s',ssh:{host:'remoto'},tokenFile:'~/t'}}};
+ const base={port:7433,stateDir:'~/x',channel:{organization:'my-org',tunnelId:'tunnel_abc'},environments:{remoto:{environmentId:'env-s',ssh:{host:'remoto'},tokenFile:'~/t'}}};
  const c=validarConfigEscrita(base);
  assert.equal(c.ambientes[0].destination,'t3://env-s');
- for(const campo of ['projetos','acoes'])assert.throws(()=>validarConfigEscrita({...base,ambientes:{remoto:{...base.ambientes.remoto,[campo]:['x']}}}),/não é suportado/);
+ for(const campo of ['projetos','acoes'])assert.throws(()=>validarConfigEscrita({...base,environments:{remoto:{...base.environments.remoto,[campo]:['x']}}}),/não é suportado/);
  assert.equal(c.ambientes[0].acoes.length,42);
- assert.throws(()=>validarConfigEscrita({...base,ambientes:{remoto:{...base.ambientes.remoto,url:'http://127.0.0.1:1'}}}),/exatamente um/);
- assert.throws(()=>validarConfigEscrita({...base,canal:{organization:'x',tunnelId:'nope'}}),/channel/);
+ assert.throws(()=>validarConfigEscrita({...base,environments:{remoto:{...base.environments.remoto,url:'http://127.0.0.1:1'}}}),/exatamente um/);
+ assert.throws(()=>validarConfigEscrita({...base,channel:{organization:'x',tunnelId:'nope'}}),/channel/);
 });
 
 test('config de escrita: rótulos da passkey são opcionais e validados',()=>{
- const base={porta:7433,estado:'~/x',canal:{organization:'my-org',tunnelId:'tunnel_abc'},ambientes:{remoto:{environmentId:'env-s',ssh:{host:'remoto'},tokenFile:'~/t'}}};
+ const base={port:7433,stateDir:'~/x',channel:{organization:'my-org',tunnelId:'tunnel_abc'},environments:{remoto:{environmentId:'env-s',ssh:{host:'remoto'},tokenFile:'~/t'}}};
  assert.deepEqual(validarConfigEscrita(base).passkey,{});
  assert.deepEqual(validarConfigEscrita({...base,passkey:{rpName:'Minha ponte',userName:'eu'}}).passkey,{rpName:'Minha ponte',userName:'eu'});
  assert.throws(()=>validarConfigEscrita({...base,passkey:{rpName:''}}),/passkey.rpName/);
