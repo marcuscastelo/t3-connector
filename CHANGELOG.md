@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Release pipeline: pushing a tag `vX.Y.Z` on `main` checks that version, lock, `VERSAO`,
+  `VERSAO_ESCRITA` and CHANGELOG agree, runs CI, packs once, checks that exact artifact
+  and publishes it with a `.sha256` as a GitHub Release. `npm run release:dry-run` does
+  the same locally without publishing. Updating a running connector stays manual; see
+  `docs/releasing.md`.
+
 - `t3_thread.pedidosPendentes` now exposes request IDs, public response capability,
   full user-input questions/options/field constraints, and approval prompts/provider
   decisions. Exact request-ID joins and field allowlists exclude native/session details

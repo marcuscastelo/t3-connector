@@ -14,7 +14,7 @@
     "src/",
     "web/",
     "examples/",
-    "docs/",
+    "docs/adr/",
     "README.md",
     "LICENSE",
     "SECURITY.md",
@@ -26,6 +26,8 @@
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "test:package": "node scripts/check-package.mjs",
+    "release:check": "node scripts/release.mjs check",
+    "release:dry-run": "node scripts/release.mjs dry-run",
     "smoke": "node test/smoke-ao-vivo.mjs"
   },
   "dependencies": {

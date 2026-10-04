@@ -1,0 +1,85 @@
+name: release
+
+# Pushing a tag vX.Y.Z publishes a GitHub Release with the npm pack artifact and its
+# checksum. Nothing here installs or updates a running connector: see docs/releasing.md.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      - name: Tag points at a commit on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - name: Version, tag, CHANGELOG and VERSAO agree
+        run: node scripts/release.mjs check --tag "$GITHUB_REF_NAME"
+
+  ci:
+    needs: verify
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  package:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Pack once, with checksum and release notes
+        run: node scripts/release.mjs pack --tag "$GITHUB_REF_NAME" --out dist
+      - name: Check the exact artifact that will be published
+        run: node scripts/check-package.mjs --tgz "dist/t3-connector-${GITHUB_REF_NAME#v}.tgz"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: release
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: release
+          path: dist
+      - name: Verify checksum
+        working-directory: dist
+        run: sha256sum -c "t3-connector-${GITHUB_REF_NAME#v}.tgz.sha256"
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          prerelease=()
+          [[ "$version" == *-* ]] && prerelease=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" --verify-tag "${prerelease[@]}" \
+            --title "$GITHUB_REF_NAME" --notes-file dist/release-notes.md \
+            "dist/t3-connector-$version.tgz" "dist/t3-connector-$version.tgz.sha256"

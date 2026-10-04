@@ -347,7 +347,10 @@ work it is meant to correct. Refused steer/restart requests never fall back to a
 ```sh
 npm test               # unit tests (no network, no real T3)
 npm run test:package   # npm pack + file allowlist + isolated install + MCP handshake
+npm run release:dry-run  # release checks and packaging, without publishing
 ```
+
+Releases are GitHub Releases built from a `vX.Y.Z` tag; see [docs/releasing.md](docs/releasing.md).
 
 `reference/` holds a copy of the T3 Code contract used only by tests; see
 [reference/README.md](reference/README.md) for its origin and license. Source comments
