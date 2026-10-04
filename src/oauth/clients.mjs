@@ -23,9 +23,18 @@ async function fetchJson(fetchImpl, url) {
   if (u.protocol !== 'https:') throw new Error('https_required');
   const r = await fetchImpl(u.href, { redirect: 'error', signal: AbortSignal.timeout(5000), headers: { Accept: 'application/json' } });
   if (!r.ok) throw new Error(`fetch_status_${r.status}`);
-  const text = await r.text();
-  if (text.length > MAX_DOC_BYTES) throw new Error('document_too_large');
-  return JSON.parse(text);
+  if (Number(r.headers.get('content-length')) > MAX_DOC_BYTES) throw new Error('document_too_large');
+  // Counts bytes while streaming and stops at the limit, so an oversized body is never buffered.
+  const reader = r.body.getReader(), parts = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_DOC_BYTES) { await reader.cancel().catch(() => {}); throw new Error('document_too_large'); }
+    parts.push(value);
+  }
+  return JSON.parse(Buffer.concat(parts).toString('utf8'));
 }
 
 export class ClientRegistry {
@@ -81,10 +90,15 @@ export class ClientRegistry {
     if (!ok) throw new OAuthError('invalid_client', 'assertion_signature_invalid', 401);
     const now = Math.floor(this.wall() / 1000), aud = [].concat(claims.aud ?? []);
     if (!aud.some(a => audiences.includes(a))) throw new OAuthError('invalid_client', 'assertion_audience_invalid', 401);
-    if (typeof claims.exp !== 'number' || claims.exp + SKEW_S <= now) throw new OAuthError('invalid_client', 'assertion_expired', 401);
+    const time = v => v === undefined || Number.isFinite(v);
+    if (!Number.isFinite(claims.exp) || !time(claims.iat) || !time(claims.nbf)) throw new OAuthError('invalid_client', 'assertion_time_claims_invalid', 401);
+    if (claims.exp + SKEW_S <= now) throw new OAuthError('invalid_client', 'assertion_expired', 401);
+    // Freshness: at most 10 minutes of remaining validity and, when iat is present (RFC 7523 makes it
+    // optional), at most 10 minutes from issuance to expiry.
     if (claims.exp - now > MAX_ASSERTION_LIFETIME_S) throw new OAuthError('invalid_client', 'assertion_lifetime_too_long', 401);
-    if (typeof claims.iat === 'number' && claims.iat - SKEW_S > now) throw new OAuthError('invalid_client', 'assertion_issued_in_future', 401);
-    if (typeof claims.nbf === 'number' && claims.nbf - SKEW_S > now) throw new OAuthError('invalid_client', 'assertion_not_yet_valid', 401);
+    if (claims.iat !== undefined && (claims.exp <= claims.iat || claims.exp - claims.iat > MAX_ASSERTION_LIFETIME_S)) throw new OAuthError('invalid_client', 'assertion_lifetime_too_long', 401);
+    if (claims.iat !== undefined && claims.iat - SKEW_S > now) throw new OAuthError('invalid_client', 'assertion_issued_in_future', 401);
+    if (claims.nbf !== undefined && claims.nbf - SKEW_S > now) throw new OAuthError('invalid_client', 'assertion_not_yet_valid', 401);
     if (typeof claims.jti !== 'string' || !claims.jti) throw new OAuthError('invalid_client', 'assertion_jti_missing', 401);
     this.#pruneJti(now);
     const jtiKey = `${clientId} ${claims.jti}`;

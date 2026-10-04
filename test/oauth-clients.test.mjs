@@ -76,3 +76,27 @@ test('jwks_uri is supported and an unknown kid triggers one refetch (key rotatio
   await reg.authenticate(form(rotated.assertion()), { audiences: [TOKEN] });
   assert.equal(f.calls.filter(u => u === 'https://client.example/jwks').length, 2);
 });
+
+// Regressions from the independent review (REVISAO-CODEX.md F5, P1).
+test('assertion lifetime is bounded from iat; malformed time claims are refused', async () => {
+  const k = clientKeys(), reg = new ClientRegistry({ allowedClients: [CLIENT], fetch: cimdFetch({ [CLIENT]: doc([k.jwk]) }) });
+  const now = Math.floor(Date.now() / 1000);
+  for (const [claims, re] of [
+    [{ iat: now - 86400, exp: now + 60 }, /lifetime_too_long/],
+    [{ iat: now + 30, exp: now + 20 }, /lifetime_too_long/],
+    [{ iat: 'yesterday' }, /time_claims_invalid/],
+    [{ nbf: 'soon' }, /time_claims_invalid/],
+    [{ exp: String(now + 60) }, /time_claims_invalid/],
+  ]) await assert.rejects(reg.authenticate(form(k.assertion(claims)), { audiences: [TOKEN] }), re);
+  await reg.authenticate(form(k.assertion({ iat: undefined })), { audiences: [TOKEN] });
+});
+
+test('client metadata larger than 64 KiB is refused while streaming, and by Content-Length', async () => {
+  const big = { client_id: CLIENT, pad: 'x'.repeat(70 * 1024) };
+  let pulled = 0;
+  const streaming = async () => new Response(new ReadableStream({ pull(c) { pulled++; if (pulled > 100) return c.close(); c.enqueue(new TextEncoder().encode(JSON.stringify(big).slice(0, 8192))); } }));
+  await assert.rejects(new ClientRegistry({ allowedClients: [CLIENT], fetch: streaming }).resolve(CLIENT), /document_too_large/);
+  assert.ok(pulled < 20, 'stopped reading at the limit');
+  const declared = async () => new Response('{}', { headers: { 'content-length': String(1024 * 1024) } });
+  await assert.rejects(new ClientRegistry({ allowedClients: [CLIENT], fetch: declared }).resolve(CLIENT), /document_too_large/);
+});

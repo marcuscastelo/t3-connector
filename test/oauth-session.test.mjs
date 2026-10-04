@@ -172,3 +172,48 @@ test('no token value is stored or audited in clear', () => {
   const dump = JSON.stringify(s.audit) + JSON.stringify(s.tokens.counts());
   for (const v of [t.access_token, t.refresh_token]) assert.ok(!dump.includes(v));
 });
+
+// Regressions from the independent review (REVISAO-CODEX.md F2, F3).
+test('suspend then wall rollback never gives back observed idle time', () => {
+  const s = setup(), sid = s.session();
+  s.moveWall(IDLE - 100_000);
+  assert.equal(s.authority.remainingMs(sid), 100_000);
+  s.moveWall(-(IDLE - 100_000));
+  assert.ok(s.authority.remainingMs(sid) <= 100_000, 'remaining idle must not grow without activity');
+  s.moveMono(100_000);
+  assert.throws(() => s.authority.check(sid), /idle_expired/);
+});
+
+test('max age cannot be extended by suspend + rollback either', () => {
+  const s = setup({ maxAgeMs: 2 * IDLE }), sid = s.session();
+  s.moveWall(IDLE - 10); s.authority.admit(sid);
+  s.moveWall(IDLE - 10); s.authority.admit(sid);
+  s.moveWall(-(2 * IDLE - 20));
+  s.moveMono(20);
+  assert.throws(() => s.authority.check(sid), /session_max_age/);
+});
+
+test('a used code stays a tombstone after sweep: replay still ends the session', () => {
+  const s = setup(), sid = s.session();
+  const code = s.tokens.issueCode({ sid, clientId: 'c', redirectUri: 'r', codeChallenge: 'C', resource: 'x', scope: 'a' });
+  const opts = { clientId: 'c', redirectUri: 'r', verifyPkce: () => true, resource: 'x' };
+  const t = s.tokens.consumeCode(code, opts);
+  s.advance(10 * 60_000); s.tokens.sweep();
+  assert.throws(() => s.tokens.consumeCode(code, opts), /code_reused/);
+  assert.throws(() => s.authority.check(sid), /session_code_reuse/);
+  assert.throws(() => s.tokens.resolveAccess(t.access_token));
+});
+
+test('sweep ends sessions whose code was never exchanged', () => {
+  const s = setup(), sid = s.session();
+  s.tokens.issueCode({ sid, clientId: 'c', redirectUri: 'r', codeChallenge: 'C', resource: 'x', scope: 'a' });
+  s.advance(60_000); s.tokens.sweep();
+  assert.throws(() => s.authority.check(sid), /code_expired_unused/);
+});
+
+test('revoke-all and kill increment the authority epoch', () => {
+  const s = setup(), e0 = s.authority.epoch;
+  s.authority.revokeAll(); assert.equal(s.authority.epoch, e0 + 1);
+  s.authority.kill(); assert.equal(s.authority.epoch, e0 + 2);
+  s.authority.release(); assert.equal(s.authority.epoch, e0 + 2);
+});

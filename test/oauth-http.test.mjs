@@ -251,3 +251,66 @@ test('event log never contains tokens, codes or cookies', async t => {
   for (const v of [s.code, s.tokens.access_token, s.tokens.refresh_token, r.data.access_token, r.data.refresh_token, s.cookie.split('=')[1], s.state]) assert.ok(!log.includes(v), 'secret leaked into the event log');
   assert.match(log, /"event":"tool_call"/);
 });
+
+// Regressions from the independent review (REVISAO-CODEX.md F1, F6, F8).
+async function approveWithoutResume(c) {
+  const auth = await http('GET', `${c.issuer}/authorize?response_type=code&client_id=${encodeURIComponent(CLIENT)}&redirect_uri=${encodeURIComponent('https://client.example/cb')}&code_challenge=${'A'.repeat(43)}&code_challenge_method=S256&state=s`);
+  const cookie = auth.headers['set-cookie'][0].split(';')[0], handoff = /#handoff=([^"]+)"/.exec(auth.text)[1];
+  const o = await c.localPost('/api/login/options', { handoff });
+  const v = await c.localPost('/api/login/verify', { handoff, response: c.passkey.assertion(o.data.challenge, { origin: c.local, counter: c.nextCounter() }) });
+  return { cookie, handoff, resume: v.data.resume };
+}
+
+test('a sign-in approved before the kill switch cannot create a session after release', async t => {
+  const c = await startConnector(); t.after(c.close);
+  const pending = await approveWithoutResume(c);
+  await c.localPost('/api/kill', {});
+  const o = await c.localPost('/api/release/options', {});
+  assert.equal((await c.localPost('/api/release/verify', { response: c.passkey.assertion(o.data.challenge, { origin: c.local, counter: c.nextCounter() }) })).status, 200);
+  const r = await http('GET', pending.resume, { headers: { cookie: pending.cookie } });
+  assert.equal(r.status, 302);
+  const cb = new URL(r.headers.location);
+  assert.equal(cb.searchParams.get('code'), null);
+  assert.equal(cb.searchParams.get('error'), 'access_denied');
+  const fresh = (await c.signIn()).tokens;
+  assert.equal((await c.mcp(fresh.access_token, 'tools/list')).status, 200);
+});
+
+test('revoke-all cancels pending sign-ins, including one whose passkey options were already issued', async t => {
+  const c = await startConnector(); t.after(c.close);
+  const pending = await approveWithoutResume(c);
+  const auth = await http('GET', `${c.issuer}/authorize?response_type=code&client_id=${encodeURIComponent(CLIENT)}&redirect_uri=${encodeURIComponent('https://client.example/cb')}&code_challenge=${'A'.repeat(43)}&code_challenge_method=S256`);
+  const handoff = /#handoff=([^"]+)"/.exec(auth.text)[1];
+  const o = await c.localPost('/api/login/options', { handoff });
+  await c.localPost('/api/sessions/revoke-all', {});
+  assert.equal((await c.localPost('/api/login/verify', { handoff, response: c.passkey.assertion(o.data.challenge, { origin: c.local, counter: c.nextCounter() }) })).status, 400);
+  const r = await http('GET', pending.resume, { headers: { cookie: pending.cookie } });
+  assert.equal(new URL(r.headers.location).searchParams.get('error'), 'access_denied');
+});
+
+test('scope: absent → default, mixed → supported subset, explicit unsupported-only → invalid_scope', async t => {
+  const c = await startConnector(); t.after(c.close);
+  const go = scope => http('GET', `${c.issuer}/authorize?${new URLSearchParams({ response_type: 'code', client_id: CLIENT, redirect_uri: 'https://client.example/cb', code_challenge: 'A'.repeat(43), code_challenge_method: 'S256', ...(scope === undefined ? {} : { scope }) })}`);
+  const view = async r => (await c.localPost('/api/login/view', { handoff: /#handoff=([^"]+)"/.exec(r.text)[1] })).data.scope;
+  assert.equal(await view(await go(undefined)), 'connector:read connector:write');
+  assert.equal(await view(await go('openid connector:read')), 'connector:read');
+  for (const s of ['not-supported', '']) {
+    const r = await go(s);
+    assert.equal(r.status, 302);
+    assert.equal(new URL(r.headers.location).searchParams.get('error'), 'invalid_scope');
+  }
+});
+
+test('event log hashes client-controlled strings and identifiers', async t => {
+  const c = await startConnector(); t.after(c.close);
+  const s = await c.signIn();
+  await c.callTool(s.tokens.access_token, s.tokens.refresh_token, {});
+  await c.mcp(s.tokens.access_token, `x-${s.tokens.refresh_token}`);
+  await http('POST', `${c.issuer}/token`, { headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: `${s.tokens.refresh_token}=1&${s.tokens.refresh_token}=2` });
+  await http('GET', `${c.issuer}/authorize?client_id=${encodeURIComponent(s.tokens.refresh_token)}`);
+  const log = readFileSync(join(c.connector.stateDir, 'events.jsonl'), 'utf8');
+  assert.ok(!log.includes(s.tokens.refresh_token), 'client-controlled secret persisted');
+  const sid = c.connector.tokens.resolveAccess(s.tokens.access_token).sid;
+  assert.ok(!log.includes(sid), 'raw session id persisted');
+  assert.ok(!log.includes(c.passkey.credential.id), 'raw credential id persisted');
+});

@@ -4,6 +4,7 @@ import { grantDoAmbiente } from '../escrita/gate.mjs';
 import { grantFromInventory, escopoDosGrants } from '../escrita/scope.mjs';
 import { identidadeSessaoOAuth, exigirIdentidade } from '../escrita/identidade.mjs';
 import { resolverAmbiente } from '../escrita/config.mjs';
+import { redact } from './http.mjs';
 
 // T3 writes authorized by an OAuth session instead of a passkey lease. The existing Dispatcher
 // (journal reservation, target/workspace preflight, uncertainty handling, final synchronous check
@@ -35,7 +36,7 @@ export class SessionWriteGate {
   }
   dispatch(identity, sid, target, invoke, operationId) {
     this.check(identity, sid, target);
-    this.audit({ event: 'dispatch', operationId, sid, action: target.action, projects: target.projectIds, authority: 'oauth_session' });
+    this.audit({ event: 'dispatch', operationId, sid: redact(sid), action: target.action, projects: target.projectIds, authority: 'oauth_session' });
     // No await between final authorization and the one outbound invocation.
     this.check(identity, sid, target);
     return invoke();

@@ -6,19 +6,30 @@ import { randomBytes } from 'node:crypto';
 //
 // Time: every interval is measured on two clocks and the larger elapsed value wins. A monotonic
 // clock that stops during suspend cannot rejuvenate a session, and a wall clock moved backwards
-// cannot either. A terminal session never becomes active again.
+// cannot either. Elapsed time is accumulated per observation, so a wall rollback after a suspend
+// cannot give back time that was already counted (it errs on the side of counting more when the
+// clocks diverge). An interval never observed, e.g. suspend and rollback both while nobody asked,
+// cannot be reconstructed by any two-clock scheme. A terminal session never becomes active again.
 export const IDLE_MS = 60 * 60 * 1000;
 const deepFreeze = o => { if (o && typeof o === 'object') { for (const v of Object.values(o)) deepFreeze(v); Object.freeze(o); } return o; };
 
 export function stopwatch({ clock = () => performance.now(), wall = () => Date.now() } = {}) {
-  const mark = () => ({ mono: clock(), wall: wall() });
-  const elapsed = from => Math.max(clock() - from.mono, wall() - from.wall, 0);
+  // A mark accumulates elapsed time observation by observation: each read adds the larger of the
+  // two clocks' advances since the previous read (never a negative advance).
+  const mark = () => ({ mono: clock(), wall: wall(), acc: 0 });
+  const elapsed = m => {
+    const mono = clock(), w = wall();
+    m.acc += Math.max(mono - m.mono, w - m.wall, 0);
+    m.mono = Math.max(m.mono, mono); m.wall = Math.max(m.wall, w);
+    return m.acc;
+  };
   return { mark, elapsed };
 }
 
 export class SessionAuthority {
   #sessions = new Map();
   #killed = false;
+  #epoch = 0;
   #listeners = new Set();
   constructor({ idleMs = IDLE_MS, maxAgeMs = 0, clock, wall, audit = () => {} } = {}) {
     if (!(idleMs > 0)) throw new Error('invalid_idle');
@@ -26,6 +37,10 @@ export class SessionAuthority {
     Object.assign(this, { idleMs, maxAgeMs, audit, time: stopwatch({ clock, wall }) });
   }
   get killed() { return this.#killed; }
+  // Increments on revoke-all and on the kill switch. Pending sign-ins record it and are refused at
+  // approval and at resume when it changed, so authorization approved before a global reset cannot
+  // create a session afterwards.
+  get epoch() { return this.#epoch; }
   // Called with (sid, reason) once, when a session becomes terminal, so token stores can purge it.
   onTerminal(listener) { this.#listeners.add(listener); return () => this.#listeners.delete(listener); }
 
@@ -84,7 +99,7 @@ export class SessionAuthority {
     this.#end(s, reason);
     return was;
   }
-  revokeAll(reason = 'revoked') { let n = 0; for (const s of this.#sessions.values()) if (!s.terminal) { this.#end(s, reason); n++; } return n; }
+  revokeAll(reason = 'revoked') { this.#epoch++; let n = 0; for (const s of this.#sessions.values()) if (!s.terminal) { this.#end(s, reason); n++; } return n; }
 
   // Kill switch: ends every session and refuses new ones until released. Releasing it does not
   // revive anything; new sessions need a new passkey ceremony.

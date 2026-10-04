@@ -108,9 +108,10 @@ export class TokenStore {
 
   counts() { return { codes: this.#codes.size, access: this.#access.size, refresh: [...this.#refresh.values()].filter(r => !r.consumed).length }; }
 
-  // Drops expired codes and access tokens; refresh tombstones live as long as their session.
+  // Drops expired unused codes and expired access tokens. Used codes and consumed refresh tokens stay
+  // as tombstones until their session ends, so a replay still ends the session.
   sweep() {
-    for (const [k, c] of this.#codes) if (c.used || this.time.elapsed(c.issued) >= this.codeTtlMs) this.#codes.delete(k);
+    for (const [k, c] of this.#codes) if (!c.used && this.time.elapsed(c.issued) >= this.codeTtlMs) { this.#codes.delete(k); this.authority.revoke(c.sid, 'code_expired_unused'); }
     for (const [k, a] of this.#access) if (this.time.elapsed(a.issued) >= a.ttl) this.#access.delete(k);
   }
 }

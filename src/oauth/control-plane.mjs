@@ -38,6 +38,7 @@ export function controlPlane({ port, issuer, passkeys, subject, authority, token
       case '/api/login/options': {
         if (authority.killed) throw new Error('kill_switch');
         const tx = transactions.find(d);
+        if (tx.epoch !== authority.epoch) throw new Error('transaction_not_found');
         return passkeys.options(newChallenge(`login:${tx.id}`));
       }
       case '/api/login/verify': {
@@ -46,6 +47,8 @@ export function controlPlane({ port, issuer, passkeys, subject, authority, token
         const challenge = takeChallenge(`login:${tx.id}`);
         const { grants } = await grantsFor(tx);
         const credentialId = await passkeys.verify({ response: d.response, challenge, origin });
+        // Re-checked after the awaits: a kill switch or revoke-all meanwhile cancels the sign-in.
+        if (authority.killed || tx.epoch !== authority.epoch) throw new Error('transaction_not_found');
         const resume = transactions.approve(tx, { sub: subject, credentialId, grants });
         audit({ event: 'local_login_approved', tx: redact(tx.id), credential: redact(credentialId), via: d.handoff ? 'handoff' : 'oob' });
         return { resume: `${issuer}/resume?h=${encodeURIComponent(resume)}`, via: d.handoff ? 'handoff' : 'oob' };

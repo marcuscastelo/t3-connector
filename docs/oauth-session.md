@@ -16,9 +16,9 @@ immediate.
 | Piece | File | Notes |
 |---|---|---|
 | Session authority | `src/oauth/session-authority.mjs` | Server-side source of truth. Idle window, optional max age, revoke, revoke all, kill switch. Monotonic + wall clock (larger elapsed wins); terminal states never revive. |
-| Token store | `src/oauth/token-store.mjs` | Single-use codes (60 s), opaque access tokens (default 60 s, truncated to the idle deadline), rotating refresh tokens (24 h per generation). Reuse of a consumed refresh token or code ends the session. Only HMACs of token values are stored. |
-| Client registry | `src/oauth/clients.mjs` | Allowlisted CIMD clients only. `private_key_jwt` verified against the document's JWKS (ES256, RS256, PS256): signature, `iss`=`sub`=client, `aud`, `exp`, max lifetime 10 min, `iat`/`nbf`, `jti` replay cache, key rotation (one refetch on unknown `kid`). No `none`, no secrets, no DCR. |
-| Authorization server | `src/oauth/authorization-server.mjs` | Metadata (also served at `/.well-known/openid-configuration`, which ChatGPT probes), `/authorize` (code + PKCE S256 only, exact callback, single resource, unknown scopes dropped), `/resume`, `/token`, `/revoke`. RFC 9207 `iss` on every callback. |
+| Token store | `src/oauth/token-store.mjs` | Single-use codes (60 s), opaque access tokens (default 60 s, truncated to the idle deadline), rotating refresh tokens (24 h per generation). Used codes and consumed refresh tokens stay as tombstones until their session ends, so reuse ends the session at any time. Only HMACs of token values are stored. `redirect_uri` at `/token` is checked when sent and may be omitted (OAuth 2.1 with PKCE); the authorization request always requires the exact registered callback. |
+| Client registry | `src/oauth/clients.mjs` | Allowlisted CIMD clients only. `private_key_jwt` verified against the document's JWKS (ES256, RS256, PS256): signature, `iss`=`sub`=client, `aud`, numeric `exp` with at most 10 min of remaining validity, and when `iat` is present (it is optional in RFC 7523) at most 10 min from `iat` to `exp`; malformed time claims refused; `jti` replay cache; key rotation (one refetch on unknown `kid`). Client documents are read as a stream and cut at 64 KiB. No `none`, no secrets, no DCR. |
+| Authorization server | `src/oauth/authorization-server.mjs` | Metadata (also served at `/.well-known/openid-configuration`, which ChatGPT probes), `/authorize` (code + PKCE S256 only, exact callback, single resource, unknown scopes dropped, explicit request with no supported scope refused), `/resume`, `/token`, `/revoke`. RFC 9207 `iss` on every callback. |
 | Login transactions | `src/oauth/transactions.mjs` | Server-side state of each sign-in. The browser only carries opaque handles; the resume handle exists only after a verified passkey and still needs the transaction cookie. 5 min TTL. |
 | Control plane | `src/oauth/control-plane.mjs` | Loopback only, Host `localhost:<port>`, exact Origin and JSON on every POST. `/login` (passkey approval, shows client, callback host, scopes and the write scope), `/enroll` (ticket printed on the terminal, single use, 15 min), `/` (sessions, revoke, revoke all, kill switch; releasing the kill switch needs a passkey). |
 | Resource server | `src/oauth/resource-server.mjs` | Streamable HTTP, stateless, JSON responses. Global OAuth (initialize and tools/list too). Facade over inner catalogs: scope per tool, activity admitted per `tools/call`, session re-checked before a result leaves. |
@@ -63,7 +63,8 @@ Two listeners:
 - After `idleSeconds` without a tool call the session is terminal: the RS answers `401
   invalid_token` and the AS answers `invalid_grant`, even for tokens that have not expired yet.
 - Local revoke, revoke all and the kill switch end sessions at once; tokens resolve to nothing on
-  the next request. The kill switch is persisted (`<state>/kill-switch`) and also blocks new
+  the next request. Revoke all and the kill switch also cancel sign-ins in progress, even ones
+  already approved with a passkey but not yet resumed (authority epoch). The kill switch is persisted (`<state>/kill-switch`) and also blocks new
   sign-ins until released with a passkey; releasing it revives nothing.
 - A connector restart ends every session (sessions and tokens live in memory). Passkeys, the
   subject id and the kill switch persist.
@@ -104,8 +105,11 @@ Consequences built into the defaults:
 
 - **Access tokens are short (60 s)** so that ChatGPT always refreshes before using one. Normal
   expiry must happen through refresh, never through a 401.
-- **A 401 is reserved for a dead session** (idle, revocation, kill switch, restart). That costs a
-  Reconnect plus a new passkey, which is the intended behaviour after idle.
+- **A 401 is meant for a dead session** (idle, revocation, kill switch, restart). That costs a
+  Reconnect plus a new passkey, which is the intended behaviour after idle. This is a deployment
+  condition, not a server guarantee: the server always rejects an expired access token, so if a
+  client presents one (missed or late refresh, long delay between refresh and request) it also
+  gets a 401. Proactive refresh by the real client must be confirmed in the end-to-end rehearsal.
 - Revoking only access tokens (not exposed in the product UI) would therefore cost a Reconnect too.
 - Longer access-token lifetimes are configurable but untested with ChatGPT; if it stops refreshing
   early, users would see Reconnect prompts before the idle window ends.
@@ -174,8 +178,10 @@ Guarantees:
 | `T3_CONNECTOR_CONFIG` | `~/.config/t3-connector/config.json` | Read config (same as `t3-connector`). |
 | `T3_CONNECTOR_OAUTH_VERBOSE` | unset | `1` echoes the redacted event log to stderr. |
 
-The event log `<state>/events.jsonl` never contains tokens, codes, cookies, handles or `state`
-(identifiers appear as 8-hex hash prefixes).
+The event log `<state>/events.jsonl` does not receive tokens, codes, cookies, handles or `state`.
+Session and credential ids are written as 8-hex hash prefixes at the sink, and client-controlled
+strings (unknown MCP methods, tool names outside `[a-z][a-z0-9_]*`, unknown client ids, form
+parameter names) are hashed too, so a secret sent in the wrong position is not persisted.
 
 ## 6. Local rehearsal
 
@@ -197,8 +203,10 @@ The rehearsal state directory is separate from `serve`'s.
 Automated (in `npm test`):
 
 - idle boundary exact; refresh/initialize/tools/list/ping do not extend; a tool call does;
-  suspended monotonic clock and wall rollback do not rejuvenate; terminal states never revive;
-- code single use (reuse ends the session), PKCE, client, callback and resource binding;
+  suspended monotonic clock and wall rollback do not rejuvenate, alone or combined (idle and max
+  age); terminal states never revive;
+- code single use (reuse ends the session, also after cleanup), PKCE, client, callback and
+  resource binding; expired unused codes end their pending session;
 - refresh rotation over 70 simulated minutes with activity; reuse ends the session (`invalid_grant`,
   then `401`);
 - `private_key_jwt`: valid ES256/RS256/PS256; wrong key, tampered payload, `alg` none/HS256, wrong
@@ -207,13 +215,15 @@ Automated (in `npm test`):
 - full first access over HTTP in the three login modes with a software passkey; resume needs the
   original cookie and is single use; UV, origin and challenge failures refuse approval;
 - revoke, revoke all and kill switch immediate; kill blocks sign-in; release needs a passkey and
-  revives nothing; kill switch and passkeys survive restart, sessions do not;
+  revives nothing; sign-ins approved before a kill or revoke-all cannot resume afterwards;
+- scope: absent → default, mixed → supported subset, explicit unsupported-only → `invalid_scope`; kill switch and passkeys survive restart, sessions do not;
 - control plane refuses foreign Host, Origin, non-JSON and missing tickets; public listener refuses
   foreign Host and browser Origins;
 - T3 catalog: eight reads + write catalog without `leaseId`; write scope shown and frozen; dedupe
   across refresh and sign-ins; unavailable environment and late projects refused; revocation during
   preflight stops the send; journal failure ends all sessions; channel identities and lease ids are
-  never accepted by the session gate; no secret in the event log.
+  never accepted by the session gate; no secret or raw identifier in the event log, including
+  client-controlled strings.
 
 End to end with ChatGPT (to run, needs authorization): first access with passkey → read and write
 → at least 10 minutes of refresh rotations without a new passkey while calling tools → idle expiry

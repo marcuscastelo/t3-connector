@@ -53,7 +53,7 @@ export function authorizationServer({ issuer, resource, localOrigin, loginMode =
     const q = Object.fromEntries(url.searchParams);
     let client;
     try { client = await clients.resolve(q.client_id); } catch (e) {
-      audit({ event: 'authorize_rejected', reason: e.description ?? e.message, clientId: typeof q.client_id === 'string' ? q.client_id.slice(0, 200) : null });
+      audit({ event: 'authorize_rejected', reason: e.description ?? e.message, clientId: redact(q.client_id) });
       return errorPage(res, 400, 'Unknown or invalid client.');
     }
     if (!client.redirectUris.includes(q.redirect_uri)) {
@@ -66,10 +66,12 @@ export function authorizationServer({ issuer, resource, localOrigin, loginMode =
     if (q.resource !== undefined && q.resource !== resource) return back('invalid_target', 'unknown_resource');
     if (q.request !== undefined || q.request_uri !== undefined) return back('request_not_supported');
     if (authority.killed) return back('access_denied', 'kill_switch');
-    // Unknown scopes are dropped (RFC 6749 §3.3); no scope means the full default scope.
-    const asked = typeof q.scope === 'string' ? q.scope.split(' ').filter(s => SCOPES.includes(s)) : [];
-    const scope = (asked.length ? [...new Set(asked)] : SCOPES).join(' ');
-    const { tx, cookie, handoff } = transactions.create({ clientId: client.clientId, clientName: client.name, redirectUri: q.redirect_uri, state: q.state, codeChallenge: q.code_challenge, resource, scope, mode: loginMode });
+    // Absent scope means the full default scope. Unknown scopes are dropped (RFC 6749 §3.3), but an
+    // explicit request with no supported scope is refused rather than widened to the default.
+    const asked = typeof q.scope === 'string' ? [...new Set(q.scope.split(' ').filter(s => SCOPES.includes(s)))] : null;
+    if (asked && !asked.length) return back('invalid_scope', 'no_supported_scope');
+    const scope = (asked ?? SCOPES).join(' ');
+    const { tx, cookie, handoff } = transactions.create({ clientId: client.clientId, clientName: client.name, redirectUri: q.redirect_uri, state: q.state, codeChallenge: q.code_challenge, resource, scope, mode: loginMode, epoch: authority.epoch });
     audit({ event: 'authorize', tx: redact(tx.id), clientId: client.clientId, scope, resourceSent: q.resource !== undefined, mode: loginMode, browser: browser(req) });
     const headers = { 'Set-Cookie': setCookie(cookie, 300) };
     const localUrl = `${localOrigin}/login#handoff=${handoff}`;
@@ -94,7 +96,9 @@ ${loginMode === 'button' ? `<p>Approve this sign-in with your passkey on the loc
     }
     const clear = { 'Set-Cookie': setCookie('', 0) };
     let sid;
-    try { sid = authority.create({ sub: tx.approved.sub, clientId: tx.clientId, credentialId: tx.approved.credentialId, scope: tx.scope, resource: tx.resource, grants: tx.approved.grants ?? null }); } catch (e) {
+    try {
+      // A revoke-all or kill switch after this sign-in started cancels it, even if already approved.
+      if (tx.epoch !== authority.epoch) throw new Error('authority_reset'); sid = authority.create({ sub: tx.approved.sub, clientId: tx.clientId, credentialId: tx.approved.credentialId, scope: tx.scope, resource: tx.resource, grants: tx.approved.grants ?? null }); } catch (e) {
       audit({ event: 'resume_rejected', reason: e.message });
       return redirect(res, callback(tx.redirectUri, { error: 'access_denied', error_description: e.message, state: tx.state }), clear);
     }
@@ -106,7 +110,7 @@ ${loginMode === 'button' ? `<p>Approve this sign-in with your passkey on the loc
   async function formBody(req) {
     if (!(req.headers['content-type'] ?? '').startsWith('application/x-www-form-urlencoded')) throw new OAuthError('invalid_request', 'form_encoding_required');
     const params = new URLSearchParams(await readBody(req)), form = {};
-    for (const [k, v] of params) { if (k in form) throw new OAuthError('invalid_request', `duplicate_${k}`); form[k] = v; }
+    for (const [k, v] of params) { if (Object.hasOwn(form, k)) throw new OAuthError('invalid_request', 'duplicate_parameter'); form[k] = v; }
     return form;
   }
   const oauthError = (res, e, extra = {}) => {

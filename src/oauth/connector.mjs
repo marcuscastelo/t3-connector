@@ -10,7 +10,10 @@ import { LoginTransactions } from './transactions.mjs';
 import { authorizationServer, SCOPES } from './authorization-server.mjs';
 import { resourceServer } from './resource-server.mjs';
 import { controlPlane, enrollmentTicket } from './control-plane.mjs';
-import { json, wrap } from './http.mjs';
+import { json, wrap, redact } from './http.mjs';
+
+const ID_FIELDS = ['sid', 'credentialId', 'credential'];
+const redactIds = e => Object.fromEntries(ID_FIELDS.filter(k => typeof e[k] === 'string' && !/^[0-9a-f]{8}$/.test(e[k])).map(k => [k, redact(e[k])]));
 
 // `tools({ authority, issuer, stateDir, audit })` returns { sources, grantProvider?, close? }: the
 // MCP catalogs behind the resource server and, for writes, the inventory frozen at sign-in.
@@ -26,7 +29,9 @@ export function createOAuthConnector({ config, tools, serverInfo, fetch, clock, 
   const resource = `${issuer}/mcp`;
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const eventsFile = join(stateDir, 'events.jsonl');
-  const audit = e => { const line = JSON.stringify({ t: new Date().toISOString(), ...e }); try { appendFileSync(eventsFile, line + '\n', { mode: 0o600 }); } catch {} if (config.verbose) log(line); };
+  // Identifiers (session ids, credential ids) are written as 8-hex hash prefixes whatever module
+  // emitted them; tokens, codes, cookies and handles are never passed to audit at all.
+  const audit = e => { const line = JSON.stringify({ t: new Date().toISOString(), ...e, ...redactIds(e) }); try { appendFileSync(eventsFile, line + '\n', { mode: 0o600 }); } catch {} if (config.verbose) log(line); };
 
   // Passkeys for the RP `localhost` at the control-plane origin; kept apart from the lease gate's.
   const passkeyFile = join(stateDir, 'passkeys.json');
