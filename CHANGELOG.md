@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `t3_thread.pedidosPendentes` now exposes request IDs, public response capability,
+  full user-input questions/options/field constraints, and approval prompts/provider
+  decisions. Exact request-ID joins and field allowlists exclude native/session details
+  and prior answers. Missing/invalid details and unsupported kinds have explicit
+  fallback codes; shell-only pending requests remain visible. Read scopes and write
+  authorization are unchanged.
+
 - New read tool `t3_buscar_threads`: finds threads by title or exact ID without an
   environment, across every configured environment (or one, with `ambiente`). Each result
   carries `ambiente: {alias, environmentId, nome}`. Deadlines of 4 s per environment and
