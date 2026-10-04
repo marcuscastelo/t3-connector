@@ -40,11 +40,11 @@ try {
     [info] = JSON.parse(npm(['pack', '--json', '--pack-destination', tmp], ROOT));
   }
   const files = info.files.map((f) => f.path).sort();
-  const allowed = [/^bin\/[\w-]+\.mjs$/, /^src\/(escrita\/)?[\w-]+\.mjs$/, /^web\/[\w-]+\.(js|html)$/,
+  const allowed = [/^bin\/[\w-]+\.mjs$/, /^src\/((escrita|oauth)\/)?[\w-]+\.mjs$/, /^web\/[\w-]+\.(js|html)$/,
     /^examples\/config\.json$/, /^docs\/adr\/\d{4}-[\w-]+\.md$/,
     /^(README|SECURITY|CHANGELOG)\.md$/, /^LICENSE$/, /^package\.json$/];
   for (const f of files) if (!allowed.some((r) => r.test(f))) fail(`file outside the allowlist: ${f}`);
-  for (const f of ['bin/t3-connector.mjs', 'bin/t3-connector-write.mjs', 'LICENSE', 'README.md', 'SECURITY.md', 'web/aprovacao.html'])
+  for (const f of ['bin/t3-connector.mjs', 'bin/t3-connector-write.mjs', 'bin/t3-connector-oauth.mjs', 'LICENSE', 'README.md', 'SECURITY.md', 'web/aprovacao.html'])
     if (!files.includes(f)) fail(`required file missing: ${f}`);
   if (info.name !== 't3-connector') fail(`package name ${info.name}, expected t3-connector`);
   if (info.version !== pkg.version) fail(`artifact version ${info.version} ≠ package.json ${pkg.version}`);
@@ -78,7 +78,7 @@ try {
   writeFileSync(path.join(target, 'package.json'), JSON.stringify({ name: 'package-check', private: true }));
   npm(['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', tgz], target);
   const binDir = path.join(target, 'node_modules', '.bin');
-  for (const bin of ['t3-connector', 't3-connector-write']) {
+  for (const bin of ['t3-connector', 't3-connector-write', 't3-connector-oauth']) {
     const v = execFileSync(path.join(binDir, bin), ['--version'], { encoding: 'utf8' }).trim();
     if (v !== pkg.version) fail(`${bin} --version = ${v}, expected ${pkg.version}`);
   }

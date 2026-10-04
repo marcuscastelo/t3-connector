@@ -12,6 +12,15 @@ export function identidadeCanal({organization,tunnelId}) {
   const identity=Object.freeze({subject:`canal:${organization}`,binding:`securetunnel:${tunnelId}`});
   trusted.add(identity);return identity;
 }
+// OAuth session profile (src/oauth/): the subject comes from the local passkey enrollment and the
+// issuer is the connector's own configured issuer, both resolved server side from a verified access
+// token, never from tool arguments. Stable across refresh and new sign-ins, so the journal dedupe
+// key survives them; it never matches a channel or mTLS identity, so lease grants do not apply.
+export function identidadeSessaoOAuth({issuer,subject}) {
+  if(typeof issuer!=='string'||!/^https?:\/\/[^/]+$/.test(issuer)||typeof subject!=='string'||!/^local:[A-Za-z0-9_-]{8,}$/.test(subject))throw new Error('oauth_identity_invalid');
+  const identity=Object.freeze({subject:`oauth:${subject}`,binding:`oauth-issuer:${issuer}`});
+  trusted.add(identity);return identity;
+}
 export function identidadeMTLS(request, allowedFingerprints) {
   const socket = request.socket;
   if (!socket.encrypted || socket.authorized !== true) throw new Error('caller_unverified');
