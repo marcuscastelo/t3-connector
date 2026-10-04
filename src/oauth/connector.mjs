@@ -17,7 +17,7 @@ import { resourceServer } from './resource-server.mjs';
 import { controlPlane, enrollmentTicket } from './control-plane.mjs';
 import { json, wrap } from './http.mjs';
 
-// `tools({ authority, issuer, stateDir, audit })` returns { sources, grantProvider?, close? }: the
+// `tools({ authority, issuer, stateDir, audit })` returns { sources, capabilities?, grantProvider?, close? }: the
 // MCP catalogs behind the resource server and, for writes, the policy approved at sign-in.
 //
 // Composes the OAuth session profile: public listener (AS + MCP RS, meant to sit behind an HTTPS
@@ -58,7 +58,7 @@ export function createOAuthConnector({ config, tools, serverInfo, fetch, clock, 
   // Tool catalogs need the authority (writes are authorized by it), so they are built here.
   const catalog = tools({ authority, issuer, stateDir, audit });
   const { sources } = catalog, grantProvider = catalog.grantProvider ?? null;
-  const consent = consentService({ grantProvider, idleSeconds: config.idleSeconds, maxAgeSeconds: config.maxAgeSeconds });
+  const consent = consentService({ grantProvider, capabilities: catalog.capabilities, idleSeconds: config.idleSeconds, maxAgeSeconds: config.maxAgeSeconds });
   const publicEnrollment = publicPasskeys ? new PublicEnrollment({ authority, origin: issuer, rpID: publicPasskeys.rpID, subject: storage.subject, clock, wall }) : null;
   authority.onReset(() => { transactions.cancelPublic(); publicEnrollment?.invalidate(); });
   const admin = credentialAdmin({ localKeys: passkeys, publicKeys: publicPasskeys, enrollment: publicEnrollment, authority, transactions, clock, wall });

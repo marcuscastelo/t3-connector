@@ -1,7 +1,10 @@
 import test from 'node:test';
+import { runInNewContext } from 'node:vm';
+import { t3Tools } from '../src/oauth/t3-tools.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, statSync } from 'node:fs';
 import { publicFixture } from './oauth-public-fixtures.mjs';
+import { http } from './oauth-apoio.mjs';
 import { authenticator } from './escrita-fixtures.mjs';
 import { loadOAuthConfig } from '../src/oauth/config.mjs';
 import { LoginTransactions } from '../src/oauth/transactions.mjs';
@@ -16,7 +19,7 @@ import { perRequestSource } from '../src/oauth/resource-server.mjs';
 import { rehearsalTools } from '../src/oauth/rehearsal-tools.mjs';
 import { consentAll } from '../src/oauth/project-policy.mjs';
 import { config as readConfig } from './apoio.mjs';
-import { conectarMcp } from './apoio.mjs';
+import { conectarMcp, ambientesFalsos } from './apoio.mjs';
 const data = r => JSON.parse(r.data.result.content[0].text);
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 
@@ -55,6 +58,7 @@ test('public: two independent RPs/storage, UV then explicit consent, exact OAuth
 for (const scope of ['connector:read', 'connector:write']) test(`public: consent for ${scope} shows only requested powers and configured lifetimes`, async t => {
   const f = await publicFixture(t, { config: { idleSeconds: 720, maxAgeSeconds: 3600 } }); await f.enrollPublic();
   const flow = await f.begin({ scope }), uv = await f.authenticate(flow); const text = uv.verify.data.view.writes.consent;
+  assert.ok(uv.verify.data.view.writes.environments.every(e => e.actions === (scope === 'connector:write' ? 42 : 0)));
   assert.match(text, /720 seconds.*3600 seconds/); assert.doesNotMatch(text, scope === 'connector:read' ? /Write access/ : /Read access/);
   const s = await f.approve(flow); assert.equal(s.token.data.scope, scope);
   const forbidden = await f.call(s.token.data.access_token, scope === 'connector:read' ? 'rehearsal_note_write' : 'rehearsal_now', scope === 'connector:read' ? { text: 'x' } : {});
@@ -540,4 +544,64 @@ test('public enrollment: graceful shutdown/restart during crypto cannot persist 
   hold.resolve(); await settled.promise; assert.notEqual((await pending).status, 200);
   assert.equal(old.publicPasskeys.credentials.size, 0); assert.equal(JSON.parse(readFileSync(`${f.state}/passkeys-public.json`)).credentials.length, 0);
   assert.equal((await f.post('/enroll/options', { ticket: newer.ticket }, newer.cookie)).status, 200);
+});
+
+// Execute only the delivered page's inline script against a small DOM and the real HTTP
+// ceremony endpoints/software authenticator. This checks displayed rows, without a browser.
+async function renderPublicConsent(f, flow) {
+  const elements = new Map(), element = () => ({ textContent: '', children: [], hidden: false, disabled: false, append(...items) { this.children.push(...items); } });
+  const document = { getElementById(id) { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); }, createElement: element };
+  const scripts = [...flow.page.text.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1]).filter(Boolean);
+  for (const script of scripts) runInNewContext(script, { document, location: { replace() {} }, SimpleWebAuthnBrowser: { startAuthentication: async ({ optionsJSON }) => f.publicAssertion(optionsJSON.challenge) }, fetch: async (path, options) => {
+    const response = await f.request(path, { method: options.method, headers: { ...options.headers, origin: f.issuer, cookie: flow.cookie }, body: options.body });
+    return { ok: response.status === 200, status: response.status, json: async () => response.data };
+  } });
+  await elements.get('authenticate').onclick();
+  assert.match(elements.get('status').textContent, /Review the access above/);
+  return elements.get('consent').children.map(e => e.textContent).join('\n');
+}
+
+for (const choice of [
+  { scope: 'connector:read', writes: true },
+  { scope: 'connector:write', writes: true },
+  { scope: 'connector:read connector:write', writes: false },
+  { scope: 'connector:write', writes: false },
+]) test(`public rendered consent: ${choice.scope}, write catalog ${choice.writes}`, async t => {
+  const tools = choice.writes ? undefined : t3Tools({ ambientes: ambientesFalsos(), projectPolicy: 'all' });
+  const f = await publicFixture(t, { backend: true, tools, config: { idleSeconds: 60, maxAgeSeconds: 300 } });
+  for (const connection of f.connections) connection.registro.acoes = ['thread.send'];
+  await f.enrollPublic(); const flow = await f.begin({ scope: choice.scope });
+  assert.equal(f.c.authority.list().length, 0); const text = await renderPublicConsent(f, flow);
+  assert.match(text, /60 seconds without.*300 seconds/s); assert.doesNotMatch(text, /one hour|42 actions/);
+  if (choice.scope.includes('connector:read')) assert.match(text, /Read access/); else assert.doesNotMatch(text, /Read access/);
+  if (choice.writes && choice.scope.includes('connector:write')) { assert.match(text, /Write access/); assert.match(text, /1 actions, full-access/); }
+  else { assert.doesNotMatch(text, /Write access|actions, full-access/); if (!choice.writes) assert.match(text, /offers no write tools/); }
+  assert.equal(f.c.authority.list().length, 0); // Display still does not approve.
+  const login = await f.approve(flow); assert.equal(login.token.status, 200); assert.equal(login.token.data.scope, choice.scope);
+});
+
+for (const choice of [
+  { scope: 'connector:read', writes: true },
+  { scope: 'connector:write', writes: true },
+  { scope: 'connector:read connector:write', writes: false },
+  { scope: 'connector:write', writes: false },
+]) test(`desktop rendered consent: ${choice.scope}, write catalog ${choice.writes}`, async t => {
+  const tools = choice.writes ? undefined : t3Tools({ ambientes: ambientesFalsos(), projectPolicy: 'all' });
+  const f = await publicFixture(t, { backend: true, tools, config: { loginMode: 'button', idleSeconds: 60, maxAgeSeconds: 300 } });
+  for (const connection of f.connections) connection.registro.acoes = ['thread.send'];
+  const flow = await f.begin({ scope: choice.scope }), handoff = /#handoff=([A-Za-z0-9_-]+)/.exec(flow.page.text)?.[1]; assert.ok(handoff);
+  const page = await http('GET', `${f.local}/login`); assert.equal(page.status, 200);
+  const elements = new Map(), element = () => ({ textContent: '', children: [], hidden: false, append(...items) { this.children.push(...items); } });
+  const document = { getElementById(id) { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); }, createElement: element };
+  const script = [...page.text.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1]).filter(Boolean).join('\n');
+  await runInNewContext(`${script}\nshow(${JSON.stringify({ handoff })})`, { document, URLSearchParams, location: { hash: '', pathname: '/login' }, history: { replaceState() {} }, window: { isSecureContext: true, PublicKeyCredential: {} }, fetch: async (path, options) => {
+    const response = await f.localPost(path, JSON.parse(options.body));
+    return { ok: response.status === 200, status: response.status, json: async () => response.data };
+  } });
+  const text = elements.get('view').children.map(e => e.textContent).join('\n');
+  assert.match(text, /60 seconds without.*300 seconds/s); assert.doesNotMatch(text, /one hour|42 actions/);
+  if (choice.scope.includes('connector:read')) assert.match(text, /Read access/); else assert.doesNotMatch(text, /Read access/);
+  if (choice.writes && choice.scope.includes('connector:write')) { assert.match(text, /Write access/); assert.match(text, /1 actions, full-access/); }
+  else { assert.doesNotMatch(text, /Write access|actions, full-access/); if (!choice.writes) assert.match(text, /offers no write tools/); }
+  assert.equal(f.c.authority.list().length, 0); assert.equal(elements.get('approve').hidden, false);
 });

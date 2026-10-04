@@ -50,7 +50,10 @@ Two listeners:
    administrative enrollment; the page never downgrades to the local RP.
 5. After UV, private inventory/policy is fetched once and frozen for this transaction. A second
    deliberate button approves the connection, showing requested scopes, configured idle/max-age,
-   environment identities/destinations and unavailable hosts. In `all` mode the boundary is read
+   environment identities/destinations and unavailable hosts. Verbs and action counts follow the
+   effective scopes and configured write capabilities: read-only consent has no write actions,
+   and a deployment without write tools explicitly states that writing is unavailable, even if
+   the client requested `connector:write`. In `all` mode the boundary is read
    and/or write of **all current and future projects** of the consented environments (Polaris and
    Sirius in this deployment), with automatic inclusion; no unrequested write/read claim.
    Restricted mode retains its write snapshot. Authentication alone creates no session or code.
@@ -154,9 +157,12 @@ The OAuth-only read loader validates the same endpoint identities, transports an
 but ignores `allowedProjects` in this mode. It never edits the shared config. Read and write
 configurations must contain exactly the same aliases, environment IDs and logical destinations;
 boot fails on divergence. Read-only deployments need no write config. Reads still use read-only
-backend credentials. The eight tool names and schemas remain unchanged. Each call owns its live
-scope, filters deleted projects, and verifies thread membership in the chosen host before bounded
-thread reads or subscriptions. Search preserves partial failures and pagination. No ID lookup
+backend credentials. The eight tool names and schemas remain unchanged. Each `tools/call` opens
+its own read server and live context, including concurrent messages in one accepted HTTP JSON-RPC
+batch. Catalog discovery owns a separate context and fetches no project inventory. Each inventory
+observation remains paired with that invocation's private project Set; deleted/empty observations
+cannot inherit another call's authority. Each call verifies thread membership in the chosen host
+before bounded thread reads or subscriptions. Search preserves partial failures and pagination. No ID lookup
 falls back to another host.
 
 Writes use an operation-local `SessionWriteGate` and the existing `Dispatcher` with optional
@@ -424,6 +430,11 @@ mutable fake inventories:
   projects created after sign-in readable/writable in the same session on both hosts; empty and
   recovered inventories; unchanged stdio ACL/config bytes; concurrent scopes; deleted/moved targets,
   workspace roots, cross-host references and mismatched identities refused with zero invokes;
+  actual HTTP batches with distinct/deleted/empty same-host inventory observations keep private
+  invocation scopes; consent text/rows reflect requested scopes, offered actions, no-write
+  deployments and configured idle/max-age; reservation/uncertain persistence/dispatch audit
+  failures invoke zero times, invoke/receipt failures exactly once, with journal state and fresh
+  sign-in retry assertions;
   restricted sandbox snapshots preserved; dedupe across refresh/sign-ins; revocation during
   preflight stops the send; journal failure ends all sessions; channel identities and lease ids are
   never accepted by the session gate; no secret or raw identifier in the event log, including

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- OAuth/all review fixes: isolate read servers/contexts per `tools/call`, including concurrent
+  messages in accepted HTTP JSON-RPC batches with distinct, deleted or empty inventories.
+  Public and desktop consent derive write actions from offered connections and effective scopes;
+  no-write deployments advertise no write capability, with configured idle/max-age. Failure
+  regressions assert exact invocation/journal states and no resend after fresh passkey sign-in.
+
 - Public issuer passkey login (HTTPS default, `T3_CONNECTOR_OAUTH_LOGIN_MODE=public`): independent
   issuer RP/storage sharing the canonical local subject, UV then explicit scope-aware consent,
   cookie/purpose/epoch-bound ≤120 s ceremonies and existing PKCE callback/resume semantics.
@@ -15,8 +21,9 @@
   software-authenticator race/negative tests. Hosted/mobile deployment remains separately unverified.
 
 - OAuth `T3_CONNECTOR_OAUTH_PROJECTS=all`: environment-based read/write consent for all current
-  and future projects, live inventories and isolated scopes per call, final ownership/workspace
-  validation before sending, and historical reconciliation without requiring deleted projects.
+  and future projects, live inventories and isolated scopes per tool invocation (including HTTP
+  batches), final ownership/workspace validation before sending, and historical reconciliation
+  without requiring deleted projects.
   Consent includes read-only sessions, idle expiry and local revoke. Read/write environment
   divergence and conflicting `T3_CONNECTOR_OAUTH_WRITE_PROJECTS` fail at boot. Restricted sandbox
   mode, stdio read ACL and Ponte lease snapshots remain supported and unchanged.

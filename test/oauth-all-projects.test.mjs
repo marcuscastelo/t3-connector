@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ambientesFalsos, dadosPadrao, config, conectarMcp } from './apoio.mjs';
-import { startConnector } from './oauth-apoio.mjs';
+import { startConnector, http } from './oauth-apoio.mjs';
 import { thread, projecao, mensagem } from './fixtures.mjs';
 import { memoryJournal } from './escrita-fixtures.mjs';
 import { t3Tools } from '../src/oauth/t3-tools.mjs';
@@ -17,7 +17,7 @@ import { ACTIONS } from '../src/escrita/adapters.mjs';
 
 const body = r => JSON.parse(r.data.result.content[0].text);
 const invokes = c => c.calls.filter(x => x.method).length;
-async function fixture(t, { empty = false } = {}) {
+async function fixture(t, { empty = false, config = {} } = {}) {
   const data = dadosPadrao(), reads = ambientesFalsos(data), journal = { ...memoryJournal(), audit() {} };
   const connections = reads.registros.map(r => {
     const d = data[r.alias]; if (empty) d.shell = { projects: [], threads: [] };
@@ -27,7 +27,7 @@ async function fixture(t, { empty = false } = {}) {
       adapter: { prepare: async () => { c.calls.push('prepare'); await c.prepareHook?.(); }, invoke: async (method, payload) => { c.calls.push({ method, payload }); return { sequence: 1 }; }, receipt: r => r, verifyWorkspace: async (path, roots) => { await c.workspaceHook?.(); return roots.includes(path); }, reconcile: async r => ({ found: !!r.receipt, state: 'unknown' }) }, fechar() {} };
     return c;
   });
-  const c = await startConnector({ tools: t3Tools({ ambientes: reads, conexoes: connections, journal, projectPolicy: 'all' }) }); t.after(c.close);
+  const c = await startConnector({ config, tools: t3Tools({ ambientes: reads, conexoes: connections, journal, projectPolicy: 'all' }) }); t.after(c.close);
   const add = (alias, id = `new-${alias}`) => {
     const d = data[alias]; d.shell.projects.push({ id, title: id, workspaceRoot: `/${alias}/${id}` });
     d.shell.threads.push(thread({ id: `t-${id}`, projectId: id, title: id, latestRunId: null, status: 'idle', pendingRuntimeRequest: { id: 'req', kind: 'user_input' } }));
@@ -174,16 +174,46 @@ for (const action of ['thread_fork', 'thread_merge_back']) test(`all: ${action} 
   assert.equal(r.data.result.isError, true); assert.equal(invokes(f.connections[0]), 0); assert.equal(invokes(f.connections[1]), 0);
 });
 
-for (const failure of ['reserve', 'uncertain', 'audit', 'invoke', 'receipt']) test(`all: ${failure} failure fails closed without a resend`, async t => {
+for (const failure of ['reserve', 'uncertain', 'audit', 'invoke', 'receipt']) test(`all: ${failure} failure has exact sends/journal state and cannot resend after fresh sign-in`, async t => {
   const f = await fixture(t); const id = f.add('local'); const a = (await f.c.signIn()).tokens, b = (await f.c.signIn()).tokens;
-  if (failure === 'reserve') f.journal.reserve = () => { throw new Error('disk'); };
-  if (failure === 'uncertain') { const put = f.journal.put; f.journal.put = (k, v) => { if (v.state === 'uncertain') throw new Error('disk'); return put(k, v); }; }
+  const original = { reserve: f.journal.reserve, put: f.journal.put, audit: f.journal.audit, invoke: f.connections[0].adapter.invoke, receipt: f.connections[0].adapter.receipt };
+  let key, reservations = 0;
+  f.journal.reserve = (k, v) => { key = k; reservations++; if (failure === 'reserve') throw new Error('disk'); return original.reserve(k, v); };
+  if (failure === 'uncertain') f.journal.put = (k, v) => { if (v.state === 'uncertain') throw new Error('disk'); return original.put(k, v); };
   if (failure === 'audit') f.journal.audit = () => { throw new Error('disk'); };
   if (failure === 'invoke') f.connections[0].adapter.invoke = async () => { f.connections[0].calls.push({ method: 'failed' }); throw new Error('transport'); };
   if (failure === 'receipt') f.connections[0].adapter.receipt = () => { throw new Error('bad receipt'); };
+  const result = await f.send(a.access_token, 'local', id);
+  assert.equal(result.data.result.isError, true); assert.match(result.data.result.content[0].text, /session_expired/);
+  const expectedInvokes = ['invoke', 'receipt'].includes(failure) ? 1 : 0;
+  const expectedState = failure === 'reserve' ? undefined : failure === 'uncertain' ? 'rejected' : 'uncertain';
+  const record = f.journal.get(key);
+  assert.equal(invokes(f.connections[0]), expectedInvokes); assert.equal(f.journal.get(key)?.state, expectedState);
+  if (record) { assert.equal(record.action, 'thread.send'); assert.equal(record.operationId, `op-local-${id}`); assert.equal(record.receipt, undefined); }
+  assert.equal((await f.c.mcp(b.access_token, 'tools/list')).status, 401);
+  assert.ok(f.c.connector.authority.list().every(s => s.state === 'write_path_failure'));
+  // Repair post-reservation faults: the new session must hit the journal, not the old-token
+  // rejection. A failed reserve has no record, so keep that disk fault to assert refusal again.
+  f.journal.put = original.put; f.journal.audit = original.audit;
+  f.connections[0].adapter.invoke = original.invoke; f.connections[0].adapter.receipt = original.receipt;
+  const fresh = await f.c.signIn(); assert.equal(fresh.tokenResponse.status, 200);
+  const retry = await f.send(fresh.tokens.access_token, 'local', id);
+  assert.equal(reservations, 2); assert.equal(invokes(f.connections[0]), expectedInvokes); assert.equal(invokes(f.connections[1]), 0);
+  assert.equal(f.journal.get(key)?.state, expectedState);
+  if (failure === 'reserve') { assert.equal(retry.data.result.isError, true); assert.match(retry.data.result.content[0].text, /session_expired/); }
+  else { assert.notEqual(retry.data.result.isError, true); assert.equal(body(retry).state, expectedState); assert.equal(body(retry).reconciliationRequired, true); assert.deepEqual(f.journal.get(key), record); }
+});
+
+// A reserve may have committed before reporting failure. Even after disk recovery and new UV,
+// that durable preparing record must not cause a second attempt at the mutation.
+test('all: ambiguously committed reserve is retained and dedupes after disk recovery/fresh sign-in', async t => {
+  const f = await fixture(t), id = f.add('local'), a = (await f.c.signIn()).tokens, reserve = f.journal.reserve; let key;
+  f.journal.reserve = (k, v) => { key = k; reserve(k, v); throw new Error('disk'); };
   assert.equal((await f.send(a.access_token, 'local', id)).data.result.isError, true);
-  assert.ok(invokes(f.connections[0]) <= 1); assert.equal((await f.c.mcp(b.access_token, 'tools/list')).status, 401);
-  await f.send(a.access_token, 'local', id); assert.ok(invokes(f.connections[0]) <= 1);
+  assert.equal(f.journal.get(key).state, 'preparing'); assert.equal(invokes(f.connections[0]), 0);
+  f.journal.reserve = reserve; const fresh = await f.c.signIn();
+  const retry = await f.send(fresh.tokens.access_token, 'local', id); assert.notEqual(retry.data.result.isError, true);
+  assert.equal(body(retry).state, 'preparing'); assert.equal(body(retry).reconciliationRequired, true); assert.equal(f.journal.get(key).state, 'preparing'); assert.equal(invokes(f.connections[0]), 0);
 });
 
 for (const end of ['revoke', 'idle', 'kill']) test(`all: ${end} during a read withholds fetched data`, async t => {
@@ -197,6 +227,11 @@ for (const end of ['revoke', 'idle', 'kill']) test(`all: ${end} during a read wi
 test('all: read-only deployment consents without a write connection', async t => {
   const c = await startConnector({ tools: t3Tools({ ambientes: ambientesFalsos(), projectPolicy: 'all' }) }); t.after(c.close);
   const s = await c.signIn({ scope: 'connector:read' }); assert.equal(s.view.data.writes.environments.length, 2);
+  assert.ok(s.view.data.writes.environments.every(e => e.actions === 0));
+  assert.match(s.view.data.writes.consent, /Read access/); assert.doesNotMatch(s.view.data.writes.consent, /Write access|full-access/);
+  const both = await c.signIn(); assert.match(both.view.data.writes.consent, /offers no write tools/); assert.doesNotMatch(both.view.data.writes.consent, /Write access|full-access/);
+  assert.ok(both.view.data.writes.environments.every(e => e.actions === 0));
+  assert.ok(c.connector.authority.check(c.connector.tokens.resolveAccess(both.tokens.access_token).sid).grants.environments.every(e => e.actions.length === 0));
   assert.equal(body(await c.callTool(s.tokens.access_token, 't3_ambientes', { check: false })).environments.length, 2);
 });
 
@@ -248,4 +283,44 @@ test('all: simultaneous calls to the same host keep separate scope snapshots', a
   await started; data.local.shell = { projects: [], threads: [] };
   const second = await b.usar(b.resolver('local'), async client => { const shell = await client.shell(); return b.resolver('local').escopo.threadsVisiveis(shell); });
   assert.deepEqual(second, []); resume(); assert.ok((await first).id); base.fechar();
+});
+
+for (const revision of ['different-projects', 'deleted-project', 'empty-inventory']) test(`all HTTP batch: ${revision} keeps each invocation paired with its own inventory`, async t => {
+  const f = await fixture(t), at = (await f.c.signIn({ scope: 'connector:read' })).tokens.access_token;
+  const project = (id, extra = {}) => ({ id, title: id, workspaceRoot: `/${id}`, ...extra });
+  const inventories = revision === 'different-projects'
+    ? [[project('snapshot-a')], [project('snapshot-b')]]
+    : revision === 'deleted-project' ? [[project('same-project', { deletedAt: 'now' })], [project('same-project')]] : [[], [project('created-project')]];
+  let observations = 0, release; const bothEntered = new Promise(resolve => { release = resolve; });
+  f.data.local.shell = async () => {
+    const projects = inventories[observations++]; if (observations === 2) release();
+    await bothEntered; return { projects, threads: [] };
+  };
+  const batch = [1, 2].map(id => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 't3_projetos', arguments: { environment: 'local' } } }));
+  const response = await http('POST', f.c.mcpUrl, { headers: { authorization: `Bearer ${at}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify(batch), timeoutMs: 5000 });
+  assert.equal(response.status, 200); assert.equal(observations, 2); assert.ok(Array.isArray(response.data));
+  for (const id of [1, 2]) {
+    const result = response.data.find(r => r.id === id).result; assert.notEqual(result.isError, true);
+    const projects = JSON.parse(result.content[0].text).projects;
+    assert.deepEqual(projects.map(p => p.projectId), inventories[id - 1].filter(p => !p.deletedAt).map(p => p.id));
+  }
+  assert.equal(invokes(f.connections[0]), 0); assert.equal(invokes(f.connections[1]), 0);
+});
+
+test('all local consent: effective scopes, offered actions and configured idle/max-age are accurate', async t => {
+  const f = await fixture(t, { config: { idleSeconds: 60, maxAgeSeconds: 600 } });
+  for (const c of f.connections) c.registro.acoes = ['thread.send'];
+  for (const scope of ['connector:read', 'connector:write']) {
+    const s = await f.c.signIn({ scope }), v = s.view.data.writes;
+    assert.match(v.consent, /60 seconds without.*600 seconds/); assert.doesNotMatch(v.consent, /one hour/);
+    assert.equal(v.idleSeconds, 60); assert.equal(v.maxAgeSeconds, 600);
+    assert.match(v.consent, scope === 'connector:read' ? /Read access/ : /Write access/);
+    assert.doesNotMatch(v.consent, scope === 'connector:read' ? /Write access|full-access/ : /Read access/);
+    assert.ok(v.environments.every(e => e.actions === (scope === 'connector:write' ? 1 : 0)));
+    if (scope === 'connector:write') {
+      const denied = await f.c.callTool(s.tokens.access_token, 't3_escrever_thread_settle', { environment: 'local', operationId: 'not-offered', input: { threadId: 't-comum' } });
+      assert.equal(denied.data.result.isError, true); assert.match(denied.data.result.content[0].text, /scope_denied/); assert.equal(invokes(f.connections[0]), 0);
+      assert.doesNotThrow(() => f.c.connector.tokens.resolveAccess(s.tokens.access_token));
+    }
+  }
 });
