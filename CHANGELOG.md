@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.1
+
 - OAuth tunnel setup: opt-in `T3_CONNECTOR_OAUTH_RESOURCE_CAPTURE_FILE` +
   `T3_CONNECTOR_OAUTH_RESOURCE_CAPTURE_MATCH` write a refused `/authorize` resource to a local
   0600 file only when it is a canonical https URL with unreserved path characters and the tunnel ID
