@@ -67,6 +67,10 @@ it; guarded synchronous persistence prevents late commit. All public enrollment 
 otherwise. A stolen link authorizes adding a credential, so protect links/QRs. Public credentials
 cannot administer enrollment/removal; no public SIGUSR2 or automatic bootstrap. Per-RP deletion
 ends that key's sessions/tokens and pending approvals and blocks in-flight counter restoration.
+Deletion reserves bounded queue capacity and persists intent before accepting revocation. A
+failed/pending key remains disabled across restart; fresh local action-bound UV can finish its
+removal. Counter/registration commits retain outstanding intents. Overload or initial-intent
+storage failure rejects admission without claiming revocation; retry requires a fresh proof.
 
 CSP/nonces, frame denial, no-referrer/no-store/nosniff and host-only Secure/HttpOnly/Lax cookies
 protect issuer pages; app maps/queues/verification/body/connection limits and deadlines are finite.

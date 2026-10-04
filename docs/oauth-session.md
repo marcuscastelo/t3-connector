@@ -96,8 +96,19 @@ canonical subject. Protect the link/QR as administrative secrets. There is no pu
 permanent registration endpoint, password/PIN fallback or proxy to the local handler.
 
 **Manage credentials** also needs fresh local, action-bound UV to list keys or remove the selected
-RP/key. Removal immediately ends that key's sessions/AT/RT and pending authenticated/approved
+RP/key. Once bounded queue admission and synchronous durable intent persistence succeed,
+removal immediately ends that key's sessions/AT/RT and pending authenticated/approved
 transactions, blocks in-flight counter writes, and preserves other keys and the local recovery RP.
+The per-RP credential file stores `pendingDeletions` alongside its keys through a flushed
+owner-only temporary file and atomic rename. A pending/failed key stays stored but disabled;
+options omit it and verification cannot save its counter. Other counter/registration commits
+preserve the intent. The local list shows `active`, `pending` or `failed`; **Finish removal with
+local passkey** obtains a new action-bound proof and completes deletion without re-enabling it.
+Restart loads incomplete intents as `pending`, keeps those keys unusable and requires a fresh
+local proof to finish (no automatic deletion or restored authority). Success removes both key
+and intent. Queue overload or failure to persist the initial intent rejects admission before any
+revocation transition: the operation has not been accepted and must be retried. A failure after
+intent commit leaves the key disabled and its sessions/approvals canceled, even after restart.
 The last usable local key cannot be removed. Public keys cannot self-administer. Local bootstrap
 recovery remains a separately authorized, terminal-only mechanism, including during kill.
 
@@ -402,6 +413,8 @@ mutable fake inventories:
   crypto/inventory and after approval refuse sessions/persistence;
 - local action-bound capability issuance/removal, atomic browser claim, single generation,
   replacement/reset/restart invalidation, failed registration never consumes newer capability;
+- real HTTP removal queue rejection, timeout/epoch guard and storage failures, fresh local-UV
+  retry without restart, durable pending revocation after restart, and last-local-key protection;
 - revoked-key AT/RT/pending approvals rejected, in-flight counter cannot restore deleted key;
 - headers/CSP/cookies, escaped client metadata, no secrets in audit, bounded queues/maps/CIMD,
   slow/oversized/malformed bodies, admission/attempt exhaustion and operator recovery;

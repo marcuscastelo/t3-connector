@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Credential-removal recovery: bounded queue admission precedes durable per-RP deletion intent
+  and immediate revocation. Failed/pending keys remain disabled across restart and support fresh
+  local-passkey retry; other credential writes preserve intents. Local listing distinguishes
+  active/pending/failed keys and offers completion, preserving the last usable local key.
+
 - OAuth/all review fixes: isolate read servers/contexts per `tools/call`, including concurrent
   messages in accepted HTTP JSON-RPC batches with distinct, deleted or empty inventories.
   Public and desktop consent derive write actions from offered connections and effective scopes;

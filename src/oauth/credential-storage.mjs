@@ -28,15 +28,22 @@ export function credentialStorage(stateDir, issuer) {
     }
     return map;
   };
-  const persist = (file, tags, next) => {
+  const deletionIntents = (value, credentials) => {
+    const ids = value.pendingDeletions === undefined ? [] : value.pendingDeletions;
+    if (!Array.isArray(ids) || ids.length > MAX_CREDENTIALS || new Set(ids).size !== ids.length || ids.some(id => !credentials.has(id))) throw new Error('credential_storage_invalid');
+    return ids;
+  };
+  const persist = (file, tags, next, pendingDeletions = []) => {
     const tmp = `${file}.next`;
     if (existsSync(tmp)) { const s = lstatSync(tmp); if (!s.isFile() || s.isSymbolicLink() || s.uid !== process.getuid() || (s.mode & 0o077)) throw new Error('credential_storage_invalid'); }
-    const serialized = JSON.stringify({ ...tags, subject: local.subject, credentials: [...next.values()].map(c => ({ ...c, publicKey: Buffer.from(c.publicKey).toString('base64url') })) });
+    deletionIntents({ pendingDeletions }, next);
+    const serialized = JSON.stringify({ ...tags, subject: local.subject, pendingDeletions, credentials: [...next.values()].map(c => ({ ...c, publicKey: Buffer.from(c.publicKey).toString('base64url') })) });
     if (Buffer.byteLength(serialized) > 128 * 1024) throw new Error('credential_storage_capacity');
-    writeFileSync(tmp, serialized, { mode: 0o600 });
+    writeFileSync(tmp, serialized, { mode: 0o600, flush: true });
     renameSync(tmp, file);
   };
   const localCredentials = decode(local);
+  const localDeletions = deletionIntents(local, localCredentials);
   if (!existsSync(localFile)) persist(localFile, {}, localCredentials);
   let publicStore = null;
   if (issuer.startsWith('https://')) {
@@ -44,8 +51,9 @@ export function credentialStorage(stateDir, issuer) {
     const stored = existsSync(publicFile) ? load(publicFile) : { ...tags, subject: local.subject, credentials: [] };
     if (stored.schemaVersion !== tags.schemaVersion || stored.origin !== tags.origin || stored.rpID !== tags.rpID || stored.subject !== local.subject) throw new Error('public_credential_storage_mismatch');
     const credentials = decode(stored);
+    const pendingDeletions = deletionIntents(stored, credentials);
     if (!existsSync(publicFile)) persist(publicFile, tags, credentials);
-    publicStore = { credentials, persist: next => persist(publicFile, tags, next) };
+    publicStore = { credentials, pendingDeletions, persist: (next, pending) => persist(publicFile, tags, next, pending) };
   } else if (existsSync(publicFile)) throw new Error('public_credential_storage_mismatch');
-  return { subject: local.subject, local: { credentials: localCredentials, persist: next => persist(localFile, {}, next) }, public: publicStore };
+  return { subject: local.subject, local: { credentials: localCredentials, pendingDeletions: localDeletions, persist: (next, pending) => persist(localFile, {}, next, pending) }, public: publicStore };
 }

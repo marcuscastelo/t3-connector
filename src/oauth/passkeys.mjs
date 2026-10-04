@@ -13,25 +13,36 @@ export class OAuthPasskeys {
   #pending = 0;
   #activeGuard = null;
   #versions = new Map();
-  #disabled = new Set();
+  #deletions = new Map();
   #serial = 0;
-  constructor({ persist, credentials = new Map(), clock, wall, deadlineMs = 10_000, maxPending = 9, ...options }) {
+  constructor({ persist, credentials = new Map(), pendingDeletions = [], clock, wall, deadlineMs = 10_000, maxPending = 9, ...options }) {
     Object.assign(this, { credentials, persist, deadlineMs, maxPending, time: stopwatch({ clock, wall }), origin: options.origin, rpID: options.rpID });
     if (credentials.size > MAX_CREDENTIALS) reject('credential_capacity');
+    for (const id of pendingDeletions) {
+      if (!credentials.has(id)) reject('credential_storage_invalid');
+      this.#deletions.set(id, 'pending');
+    }
     this.crypto = new Passkeys({ ...options, credentials, saveCredential: c => {
       this.#activeGuard();
       const next = new Map(credentials); next.set(c.id, c);
       // persist must be synchronous: no reset/removal can intervene after the guard.
-      const result = persist(next);
-      if (result?.then) reject('synchronous_persistence_required');
+      this.#persist(next);
       if (!credentials.has(c.id)) this.#versions.set(c.id, ++this.#serial);
     } });
   }
   version(id) { return this.#versions.get(id) ?? 0; }
-  current(id, version = this.version(id)) { return this.credentials.has(id) && !this.#disabled.has(id) && this.version(id) === version; }
-  #run(work, guard = () => {}, committed = () => {}) {
+  current(id, version = this.version(id)) { return this.credentials.has(id) && !this.#deletions.has(id) && this.version(id) === version; }
+  deletionState(id) { return this.#deletions.get(id) ?? null; }
+  #persist(next, deletions = this.#deletions.keys()) {
+    const result = this.persist(next, [...deletions]);
+    if (result?.then) reject('synchronous_persistence_required');
+  }
+  #run(work, guard = () => {}, committed = () => {}, admitted = () => {}) {
     if (this.#pending >= this.maxPending) return Promise.reject(Object.assign(new Error('verification_overload'), { status: 429 }));
     this.#pending++;
+    // Reserve capacity before accepting a durable revocation. Admission is synchronous,
+    // as are all persistence commits; no counter writer can interleave here.
+    try { guard(); admitted(); } catch (e) { this.#pending--; return Promise.reject(e); }
     const at = this.time.mark(); let expired = false, timer;
     const check = () => { if (expired || this.time.elapsed(at) >= this.deadlineMs) reject('verification_timeout', 408); guard(); };
     const operation = this.#chain.then(async () => {
@@ -43,9 +54,12 @@ export class OAuthPasskeys {
     const deadline = new Promise((_, rej) => { timer = setTimeout(() => { expired = true; rej(Object.assign(new Error('verification_timeout'), { status: 408 })); }, this.deadlineMs); });
     return Promise.race([operation, deadline]);
   }
-  options(challenge) {
+  async options(challenge) {
     if (![...this.credentials.keys()].some(id => this.current(id))) reject('enrollment_required');
-    return this.crypto.options(challenge);
+    const options = await this.crypto.options(challenge);
+    options.allowCredentials = options.allowCredentials.filter(c => this.current(c.id));
+    if (!options.allowCredentials.length) reject('enrollment_required');
+    return options;
   }
   registrationOptions(challenge, userID) {
     if (this.credentials.size >= MAX_CREDENTIALS) reject('credential_capacity', 429);
@@ -65,15 +79,28 @@ export class OAuthPasskeys {
     }, committed);
   }
   remove(id, { guard = () => {}, invalidated = () => {} } = {}) {
-    if (!this.current(id)) return Promise.reject(new Error('credential_unknown'));
-    // Disable synchronously so an in-flight signature/counter save cannot restore the key.
-    this.#disabled.add(id); this.#versions.set(id, ++this.#serial); invalidated();
+    if (!this.credentials.has(id)) return Promise.reject(new Error('credential_unknown'));
     return this.#run(() => {
+      if (!this.credentials.has(id)) reject('credential_unknown');
       const next = new Map(this.credentials); next.delete(id);
-      const result = this.persist(next); if (result?.then) reject('synchronous_persistence_required');
-      this.credentials.delete(id); this.#disabled.delete(id); this.#versions.delete(id);
+      this.#activeGuard();
+      this.#persist(next, [...this.#deletions.keys()].filter(key => key !== id));
+      this.credentials.delete(id); this.#deletions.delete(id); this.#versions.delete(id);
       return true;
-    }, guard);
+    }, guard, () => {}, () => {
+      if (!this.#deletions.has(id)) {
+        // Intent and keys share one atomic file. Every later counter/registration save
+        // preserves the intent. If this write fails, deletion was never accepted.
+        this.#persist(this.credentials, [...this.#deletions.keys(), id]);
+        this.#versions.set(id, ++this.#serial);
+      }
+      // Failed/pending keys remain stored but unusable, including after restart. A new
+      // local action-bound proof may finish removal; failure never re-enables the key.
+      this.#deletions.set(id, 'pending'); invalidated();
+    }).catch(e => {
+      if (this.#deletions.has(id)) this.#deletions.set(id, 'failed');
+      throw e;
+    });
   }
   get pending() { return this.#pending; }
 }

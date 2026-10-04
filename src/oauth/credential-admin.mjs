@@ -9,7 +9,7 @@ export function credentialAdmin({ localKeys, publicKeys, enrollment, authority, 
   const sweep = () => { for (const [id, p] of proofs) if (p.epoch !== authority.epoch || time.elapsed(p.at) >= CEREMONY_MS) proofs.delete(id); };
   authority.onReset(() => proofs.clear());
   const localCount = () => [...localKeys.credentials.keys()].filter(id => localKeys.current(id)).length;
-  const list = () => ['local', 'public'].flatMap(rp => [...(rp === 'local' ? localKeys : publicKeys)?.credentials.values() ?? []].map(c => ({ rp, rpID: rp === 'local' ? localKeys.rpID : publicKeys.rpID, credentialId: c.id })));
+  const list = () => ['local', 'public'].flatMap(rp => [...(rp === 'local' ? localKeys : publicKeys)?.credentials.values() ?? []].map(c => ({ rp, rpID: rp === 'local' ? localKeys.rpID : publicKeys.rpID, credentialId: c.id, state: (rp === 'local' ? localKeys : publicKeys).deletionState(c.id) ?? 'active' })));
   return {
     sweep,
     async options(d) {
@@ -18,8 +18,8 @@ export function credentialAdmin({ localKeys, publicKeys, enrollment, authority, 
       if (d.action === 'enroll-public' && (!publicKeys || authority.killed)) throw limited('public_enrollment_unavailable', 400);
       if (d.action === 'remove') {
         const keys = d.rp === 'local' ? localKeys : d.rp === 'public' ? publicKeys : null;
-        if (typeof d.credentialId !== 'string' || d.credentialId.length > 2048 || !keys?.current(d.credentialId)) throw limited('credential_unknown', 400);
-        if (d.rp === 'local' && localCount() <= 1) throw limited('last_local_credential', 400);
+        if (typeof d.credentialId !== 'string' || d.credentialId.length > 2048 || !keys?.credentials.has(d.credentialId)) throw limited('credential_unknown', 400);
+        if (d.rp === 'local' && keys.current(d.credentialId) && localCount() <= 1) throw limited('last_local_credential', 400);
       }
       if (proofs.size >= 16) throw limited('admin_capacity');
       const handle = randomBytes(24).toString('base64url'), challenge = randomBytes(32).toString('base64url');
@@ -40,7 +40,7 @@ export function credentialAdmin({ localKeys, publicKeys, enrollment, authority, 
         return { link, qr: { size: modules.size, cells: rows }, expiresIn: 900 };
       }
       const keys = p.rp === 'local' ? localKeys : publicKeys;
-      if (p.rp === 'local' && localCount() <= 1) throw limited('last_local_credential', 400);
+      if (p.rp === 'local' && keys.current(p.credentialId) && localCount() <= 1) throw limited('last_local_credential', 400);
       await keys.remove(p.credentialId, { guard: () => {
         guard();
         if (p.rp === 'local' && ![...localKeys.credentials.keys()].some(id => id !== p.credentialId && localKeys.current(id))) throw limited('last_local_credential', 400);
