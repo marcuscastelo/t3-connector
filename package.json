@@ -7,7 +7,8 @@
   "license": "MIT",
   "bin": {
     "t3-connector": "bin/t3-connector.mjs",
-    "t3-connector-write": "bin/t3-connector-write.mjs"
+    "t3-connector-write": "bin/t3-connector-write.mjs",
+    "t3-connector-oauth": "bin/t3-connector-oauth.mjs"
   },
   "files": [
     "bin/",
