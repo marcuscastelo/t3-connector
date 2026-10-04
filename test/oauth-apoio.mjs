@@ -45,13 +45,21 @@ export function http(method, url, { headers = {}, body, host, timeoutMs = defaul
 export async function startConnector({ config = {}, loginMode = 'button', tools = () => ({ sources: [perRequestSource(rehearsalTools())] }), enroll = true } = {}) {
   let mono = 0, wallMs = Date.now();
   const clock = () => mono, wall = () => wallMs;
-  const [publicPort, localPort] = [await freePort(), await freePort()];
   const keys = clientKeys('ES256');
   const doc = { client_id: CLIENT, client_name: 'Fake client', redirect_uris: ['https://client.example/cb'], token_endpoint_auth_method: 'private_key_jwt', jwks: { keys: [keys.jwk] } };
-  const cfg = { ...DEFAULTS, issuer: `http://localhost:${publicPort}`, publicPort, localPort, stateDir: mkdtempSync(join(tmpdir(), 't3c-oauth-')), clients: [CLIENT], loginMode, ...config };
-  const connector = createOAuthConnector({ config: cfg, tools, fetch: cimdFetch({ [CLIENT]: doc }), clock, wall, serverInfo: { name: 't3-connector-test', version: '0.0.0' } });
-  await connector.listen();
-  const issuer = cfg.issuer, local = `http://localhost:${localPort}`;
+  // freePort() releases the port before the connector binds it, so a parallel test file can take it
+  // first. A partial listen leaves bound servers that keep the process alive: close and retry.
+  let cfg, connector;
+  for (let attempt = 1; ; attempt++) {
+    const [publicPort, localPort] = [await freePort(), await freePort()];
+    cfg = { ...DEFAULTS, issuer: `http://localhost:${publicPort}`, publicPort, localPort, stateDir: mkdtempSync(join(tmpdir(), 't3c-oauth-')), clients: [CLIENT], loginMode, ...config };
+    connector = createOAuthConnector({ config: cfg, tools, fetch: cimdFetch({ [CLIENT]: doc }), clock, wall, serverInfo: { name: 't3-connector-test', version: '0.0.0' } });
+    try { await connector.listen(); break; } catch (e) {
+      await connector.close();
+      if (e.code !== 'EADDRINUSE' || attempt === 5) throw e;
+    }
+  }
+  const issuer = cfg.issuer, local = `http://localhost:${cfg.localPort}`;
   // Tunnel mode: tokens are bound to cfg.resource and MCP is served on the loopback tunnel listener.
   const resource = cfg.resource ?? `${issuer}/mcp`;
   const mcpUrl = cfg.tunnelPort ? `http://127.0.0.1:${cfg.tunnelPort}/mcp` : `${issuer}/mcp`;
