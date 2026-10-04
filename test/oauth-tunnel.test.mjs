@@ -20,7 +20,7 @@ test('config: tunnel mode needs an exact https resource with a path, together wi
   assert.equal(cfg.tunnelPort, 7456);
   assert.equal(loadOAuthConfig(base).resource, null);
   assert.equal(loadOAuthConfig(base).tunnelPort, null);
-  for (const bad of ['http://tunnel.example.com/v1/mcp/x', 'https://tunnel.example.com', 'https://tunnel.example.com/', 'https://tunnel.example.com/mcp?x=1', 'https://tunnel.example.com/mcp#f', 'https://u:p@tunnel.example.com/mcp', 'https://TUNNEL.example.com/mcp', 'https://tunnel.example.com/a/../mcp', 'not a url', 'https://tunnel.example.com:443/mcp']) {
+  for (const bad of ['http://tunnel.example.com/v1/mcp/x', 'https://tunnel.example.com', 'https://tunnel.example.com/', 'https://tunnel.example.com/mcp?x=1', 'https://tunnel.example.com/mcp#f', 'https://u:p@tunnel.example.com/mcp', 'https://TUNNEL.example.com/mcp', 'https://tunnel.example.com/a/../mcp', 'not a url', 'https://tunnel.example.com:443/mcp', 'https://tunnel.example.com/v1/mcp/t?', 'https://tunnel.example.com/v1/mcp/t#', 'https://tunnel.example.com/v1/mcp/t?#']) {
     assert.throws(() => loadOAuthConfig({ ...base, T3_CONNECTOR_OAUTH_RESOURCE: bad, T3_CONNECTOR_OAUTH_TUNNEL_PORT: '7456' }), /T3_CONNECTOR_OAUTH_RESOURCE/, bad);
   }
   assert.throws(() => loadOAuthConfig({ ...base, T3_CONNECTOR_OAUTH_RESOURCE: RESOURCE }), /go together/);
@@ -82,19 +82,50 @@ test('tunnel mode: sign-in, tool call, refresh and audience binding with the tun
   assert.equal(other.data.error, 'invalid_target');
 });
 
-test('tunnel mode: /authorize refuses the public-issuer resource and logs a plain requested resource', async t => {
+for (const mode of ['tunnel', 'default']) {
+  test(`${mode} mode: /authorize refuses an unknown resource and logs only its hash, even a secret in a valid https path`, async t => {
+    const c = mode === 'tunnel' ? await tunnelConnector() : await startConnector(); t.after(c.close);
+    const s = await c.signIn();
+    const secret = s.tokens.refresh_token;
+    const q = new URLSearchParams({ response_type: 'code', client_id: CLIENT, redirect_uri: 'https://client.example/cb', code_challenge: 'a'.repeat(43), code_challenge_method: 'S256', state: 's' });
+    for (const resource of [`https://other.example/${secret}`, `https://${secret.toLowerCase().replace(/[^a-z0-9]/g, '')}.example/mcp`, mode === 'tunnel' ? `${c.issuer}/mcp` : RESOURCE]) {
+      q.set('resource', resource);
+      const auth = await http('GET', `${c.issuer}/authorize?${q}`);
+      assert.equal(auth.status, 302);
+      assert.equal(new URL(auth.headers.location).searchParams.get('error'), 'invalid_target');
+    }
+    const unknown = events(c).filter(e => e.event === 'authorize_unknown_resource');
+    assert.equal(unknown.length, 3);
+    assert.ok(unknown.every(e => /^[0-9a-f]{8}$/.test(e.requestedHash) && e.requested === undefined));
+    const log = readFileSync(join(c.connector.stateDir, 'events.jsonl'), 'utf8');
+    assert.ok(!log.includes(secret) && !log.includes(secret.toLowerCase().replace(/[^a-z0-9]/g, '')));
+  });
+}
+
+test('tunnel mode: code exchange naming another resource is refused; a token for another resource is wrong_audience', async t => {
   const c = await tunnelConnector(); t.after(c.close);
-  const q = new URLSearchParams({ response_type: 'code', client_id: CLIENT, redirect_uri: 'https://client.example/cb', code_challenge: 'a'.repeat(43), code_challenge_method: 'S256', state: 's', resource: `${c.issuer}/mcp` });
-  const auth = await http('GET', `${c.issuer}/authorize?${q}`);
-  assert.equal(auth.status, 302);
-  assert.equal(new URL(auth.headers.location).searchParams.get('error'), 'invalid_target');
-  q.set('resource', 'https://other.example/v1/mcp/tunnel_zz');
-  await http('GET', `${c.issuer}/authorize?${q}`);
-  q.set('resource', 'https://x.example/mcp?token=secret');
-  await http('GET', `${c.issuer}/authorize?${q}`);
-  const unknown = events(c).filter(e => e.event === 'authorize_unknown_resource');
-  // The test issuer is http://localhost, so its /mcp is not a plain https URL and is hashed too.
-  assert.deepEqual(unknown.map(e => e.requested), [undefined, 'https://other.example/v1/mcp/tunnel_zz', undefined]);
-  assert.ok(unknown[0].requestedHash && unknown[2].requestedHash);
-  assert.ok(!JSON.stringify(unknown).includes('secret'));
+  const s = await c.signIn();
+  assert.ok(s.tokens?.access_token);
+  // A sign-in whose code is exchanged naming the public-issuer resource is refused.
+  const other = await c.signIn({ tokenResource: `${c.issuer}/mcp` });
+  assert.equal(other.tokenResponse.status, 400);
+  assert.equal(other.tokenResponse.data.error, 'invalid_target');
+  const d = await startConnector({ config: { resource: 'https://tunnel.example.com/v1/mcp/tunnel_other', tunnelPort: await freePort() } }); t.after(d.close);
+  const foreign = await d.signIn();
+  const r = await c.mcp(foreign.tokens.access_token, 'initialize', {});
+  assert.equal(r.status, 401);
+  assert.match(r.headers['www-authenticate'], /error="invalid_token"/);
+});
+
+test('tunnel mode: after a restart with another resource, old tokens are refused and a new sign-in works', async t => {
+  const tunnelPort = await freePort();
+  const c = await tunnelConnector({ tunnelPort });
+  const s = await c.signIn();
+  const stateDir = c.connector.stateDir;
+  await c.close();
+  const d = await startConnector({ config: { resource: 'https://tunnel.example.com/v1/mcp/tunnel_new', tunnelPort, stateDir }, enroll: false }); t.after(d.close);
+  assert.equal((await d.mcp(s.tokens.access_token, 'initialize', {})).status, 401);
+  const rt = await d.refresh(s.tokens.refresh_token);
+  assert.equal(rt.status, 400);
+  assert.equal(rt.data.error, 'invalid_grant');
 });

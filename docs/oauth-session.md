@@ -218,9 +218,11 @@ With `T3_CONNECTOR_OAUTH_RESOURCE` and `T3_CONNECTOR_OAUTH_TUNNEL_PORT` set:
 - the metadata names the configured resource and the issuer as authorization server; `/authorize`
   and `/token` accept only that exact resource, and tokens are bound to it;
 - an `/authorize` with another resource is refused (`invalid_target`) and logged as
-  `authorize_unknown_resource`, with the requested value only when it is a plain https URL (hashed
-  otherwise). That is how to read the tunnel's resource the first time: start with a placeholder
-  resource, connect once, read the event, set the exact value and restart.
+  `authorize_unknown_resource` with a hash of the requested value only.
+
+The exact resource is the one the tunnel service puts in the rewritten protected resource metadata.
+Read it from the tunnel side (the tunnel client's logged discovery URLs and status UI, or the
+rewritten metadata), never from request values, and restart with it set.
 
 Tunnel client profile (`server_urls`, channel `main`): `http://127.0.0.1:<tunnel port>/mcp`.
 

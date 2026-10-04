@@ -58,7 +58,7 @@ export function loadOAuthConfig(env = process.env, { rehearsal = false } = {}) {
   if (resourceRaw !== undefined && resourceRaw !== '') {
     let r;
     try { r = new URL(resourceRaw); } catch { throw new Error('T3_CONNECTOR_OAUTH_RESOURCE must be an absolute https URL'); }
-    if (r.protocol !== 'https:' || r.href !== resourceRaw || r.search || r.hash || r.username || r.password || r.pathname === '/') throw new Error('T3_CONNECTOR_OAUTH_RESOURCE must be an exact https URL with a path and no query, fragment or credentials');
+    if (r.protocol !== 'https:' || r.href !== resourceRaw || /[?#]/.test(resourceRaw) || r.search || r.hash || r.username || r.password || r.pathname === '/') throw new Error('T3_CONNECTOR_OAUTH_RESOURCE must be an exact https URL with a path and no query, fragment or credentials');
     cfg.resource = resourceRaw;
   }
   if (Boolean(cfg.resource) !== Boolean(cfg.tunnelPort)) throw new Error('T3_CONNECTOR_OAUTH_RESOURCE and T3_CONNECTOR_OAUTH_TUNNEL_PORT go together (tunnel mode)');

@@ -65,10 +65,8 @@ export function authorizationServer({ issuer, resource, localOrigin, loginMode =
     if (q.response_type !== 'code') return back('unsupported_response_type');
     if (q.code_challenge_method !== 'S256' || typeof q.code_challenge !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(q.code_challenge)) return back('invalid_request', 'pkce_s256_required');
     if (q.resource !== undefined && q.resource !== resource) {
-      // The requested resource is logged only when it is a plain https URL, so the tunnel resource
-      // can be read from the events while setting up tunnel mode; anything else is hashed.
-      const plain = typeof q.resource === 'string' && q.resource.length <= 200 && /^https:\/\/[a-z0-9.-]+(:\d{1,5})?(\/[A-Za-z0-9._~\-/]*)?$/.test(q.resource);
-      audit({ event: 'authorize_unknown_resource', clientId: client.clientId, ...(plain ? { requested: q.resource } : { requestedHash: redact(q.resource) }) });
+      // Hashed only: a request value can carry anything, including a secret in a valid-looking URL.
+      audit({ event: 'authorize_unknown_resource', clientId: client.clientId, requestedHash: redact(q.resource) });
       return back('invalid_target', 'unknown_resource');
     }
     if (q.request !== undefined || q.request_uri !== undefined) return back('request_not_supported');
