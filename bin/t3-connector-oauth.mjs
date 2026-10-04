@@ -31,8 +31,12 @@ async function start({ config, tools, serverName, banner }) {
   for (const s of ['SIGINT', 'SIGTERM']) process.on(s, () => connector.close().then(() => process.exit(0)));
   const lines = [
     `t3-connector-oauth ${VERSAO} (${banner})`,
-    `  MCP URL for the client: ${connector.resource}`,
-    `  public listener: 127.0.0.1:${ports.publicPort} (put the HTTPS ingress in front of it)`,
+    ...(ports.tunnelPort
+      ? [`  tunnel mode: MCP resource ${connector.resource}`,
+         `  tunnel listener: http://127.0.0.1:${ports.tunnelPort}/mcp (point the tunnel client here; loopback only)`,
+         `  public listener: 127.0.0.1:${ports.publicPort} (authorization server only; put the HTTPS ingress for ${config.issuer} in front of it)`]
+      : [`  MCP URL for the client: ${connector.resource}`,
+         `  public listener: 127.0.0.1:${ports.publicPort} (put the HTTPS ingress in front of it)`]),
     `  local control:   ${connector.localOrigin}/ (loopback only; never expose it)`,
     `  sessions: idle ${config.idleSeconds}s, access token ${config.accessTokenSeconds}s, login mode ${config.loginMode}`,
     `  state: ${config.stateDir}`,

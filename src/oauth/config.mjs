@@ -48,7 +48,21 @@ export function loadOAuthConfig(env = process.env, { rehearsal = false } = {}) {
     clients: list(env.T3_CONNECTOR_OAUTH_CLIENTS) ?? DEFAULTS.clients,
     allowedOrigins: list(env.T3_CONNECTOR_OAUTH_ALLOWED_ORIGINS) ?? DEFAULTS.allowedOrigins,
     verbose: env.T3_CONNECTOR_OAUTH_VERBOSE === '1',
+    resource: null,
+    tunnelPort: int('T3_CONNECTOR_OAUTH_TUNNEL_PORT', env.T3_CONNECTOR_OAUTH_TUNNEL_PORT, 1, 65535) ?? null,
   };
+  // Tunnel mode: the MCP resource is served on a loopback listener for a Secure MCP Tunnel client,
+  // whose hosted discovery names the resource; the issuer stays the public AS origin. The resource
+  // is one exact HTTPS URL (compared verbatim everywhere), and both settings go together.
+  const resourceRaw = env.T3_CONNECTOR_OAUTH_RESOURCE;
+  if (resourceRaw !== undefined && resourceRaw !== '') {
+    let r;
+    try { r = new URL(resourceRaw); } catch { throw new Error('T3_CONNECTOR_OAUTH_RESOURCE must be an absolute https URL'); }
+    if (r.protocol !== 'https:' || r.href !== resourceRaw || /[?#]/.test(resourceRaw) || r.search || r.hash || r.username || r.password || r.pathname === '/') throw new Error('T3_CONNECTOR_OAUTH_RESOURCE must be an exact https URL with a path and no query, fragment or credentials');
+    cfg.resource = resourceRaw;
+  }
+  if (Boolean(cfg.resource) !== Boolean(cfg.tunnelPort)) throw new Error('T3_CONNECTOR_OAUTH_RESOURCE and T3_CONNECTOR_OAUTH_TUNNEL_PORT go together (tunnel mode)');
+  if (cfg.tunnelPort && (cfg.tunnelPort === cfg.publicPort || cfg.tunnelPort === cfg.localPort)) throw new Error('the tunnel port must differ from the public and local ports');
   if (!LOGIN_MODES.includes(cfg.loginMode)) throw new Error(`T3_CONNECTOR_OAUTH_LOGIN_MODE must be one of ${LOGIN_MODES.join(', ')}`);
   if (cfg.localPort === cfg.publicPort) throw new Error('public and local ports must differ');
   if (cfg.maxAgeSeconds && cfg.maxAgeSeconds < cfg.idleSeconds) throw new Error('T3_CONNECTOR_OAUTH_MAX_AGE_SECONDS must be 0 (off) or at least the idle window');

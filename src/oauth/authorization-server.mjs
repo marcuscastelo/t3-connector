@@ -64,7 +64,11 @@ export function authorizationServer({ issuer, resource, localOrigin, loginMode =
     const back = (error, description) => { audit({ event: 'authorize_rejected', reason: description ?? error, clientId: client.clientId }); return redirect(res, callback(q.redirect_uri, { error, error_description: description, state: q.state })); };
     if (q.response_type !== 'code') return back('unsupported_response_type');
     if (q.code_challenge_method !== 'S256' || typeof q.code_challenge !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(q.code_challenge)) return back('invalid_request', 'pkce_s256_required');
-    if (q.resource !== undefined && q.resource !== resource) return back('invalid_target', 'unknown_resource');
+    if (q.resource !== undefined && q.resource !== resource) {
+      // Hashed only: a request value can carry anything, including a secret in a valid-looking URL.
+      audit({ event: 'authorize_unknown_resource', clientId: client.clientId, requestedHash: redact(q.resource) });
+      return back('invalid_target', 'unknown_resource');
+    }
     if (q.request !== undefined || q.request_uri !== undefined) return back('request_not_supported');
     if (authority.killed) return back('access_denied', 'kill_switch');
     // Absent scope means the full default scope. Unknown scopes are dropped (RFC 6749 §3.3), but an
