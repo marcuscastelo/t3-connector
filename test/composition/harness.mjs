@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
-import { startConnector, freePort, http } from '../oauth-apoio.mjs';
+import { startConnector, freePort, http, setHttpTimeout } from '../oauth-apoio.mjs';
 import { ambientesFalsos } from '../apoio.mjs';
 import { t3Tools } from '../../src/oauth/t3-tools.mjs';
 import { FileJournal } from '../../src/escrita/journal.mjs';
@@ -31,6 +31,8 @@ const log = m => { const line = `${brt()} ${m}`; console.log(line); appendFileSy
 const results = [];
 const check = (name, ok, detail = '') => { results.push({ name, ok }); log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// Every HTTP call of the harness and of the synthetic client is bounded and destroyed on expiry.
+setHttpTimeout(10_000);
 
 // Doubled T3 backend: one environment, one project, one thread. Counts every outbound invoke. In
 // scenario C the next invoke is held on a barrier (sent, no acknowledgement) until released.
@@ -65,7 +67,7 @@ const c = await startConnector({
 });
 
 let starts = 0, current = null;
-const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout: ${what}`)), ms))]);
+const withTimeout = (p, ms, what) => { let t; return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`timeout: ${what}`)), ms); })]).finally(() => clearTimeout(t)); };
 const until = async (cond, ms, what) => { const end = Date.now() + ms; while (!(await cond())) { if (Date.now() > end) throw new Error(`timeout: ${what}`); await sleep(50); } };
 // Readiness: sequential probes, each bounded, overall deadline.
 const ready = (ms = 10_000) => until(async () => { try { return (await withTimeout(http('GET', `${c.issuer}/.well-known/oauth-protected-resource/mcp`), 1000, 'probe')).status === 200; } catch { return false; } }, ms, 'ingress ready');
@@ -134,13 +136,17 @@ try {
   let reached; const reachedP = new Promise(r => { reached = r; });
   let release; const released = new Promise(r => { release = r; });
   holdNext = { reached, released };
-  const pendingC = withTimeout(send(tok.access_token, 'op-c'), 15_000, 'op-c client').then(x => ({ status: x.status, body: x.text }), e => ({ error: e.message }));
+  const pendingC = send(tok.access_token, 'op-c').then(x => ({ status: x.status, body: x.text }), e => ({ error: e.message }));
   await withTimeout(reachedP, 10_000, 'op-c reached backend');
   check('C1 backend received op-c (held: sent, not acknowledged)', sent.length === 2, `sends ${sent.length}`);
-  const beforeKill = starts;
-  current.kill('SIGKILL');
+  const beforeKill = starts, victim = current;
+  const victimExit = new Promise(r => victim.once('exit', () => r()));
+  victim.kill('SIGKILL');
+  await withTimeout(victimExit, 5_000, 'ingress exit');
   const clientC = await pendingC;
-  check('C2 client got no response for op-c (connection dropped while the send was outstanding)', !!clientC.error && clientC.status === undefined, clientC.error ?? `status ${clientC.status}`);
+  // A deadline is not a dropped connection: only a transport error counts, and the backend send is
+  // still held at this point (released only below).
+  check('C2 client got a transport error for op-c, no response, while the send was outstanding', !!clientC.error && !clientC.error.startsWith('timeout') && clientC.status === undefined && holdNext === null && sent.length === 2, clientC.error ?? `status ${clientC.status}`);
   release();
   await until(() => c.connector.authority.list().every(s => s.state !== 'active'), 10_000, 'fail closed');
   await until(() => starts > beforeKill, 10_000, 'relaunch'); await ready();

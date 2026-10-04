@@ -15,16 +15,25 @@ import { clientKeys, cimdFetch, CLIENT } from './oauth-fixtures.mjs';
 // client (CIMD + private_key_jwt) and a software passkey (UV) for the control-plane.
 export const freePort = () => new Promise((ok, ko) => { const s = createServer(); s.once('error', ko); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => ok(port)); }); });
 
-export function http(method, url, { headers = {}, body, host } = {}) {
+// Optional per-request deadline for every helper call (the composition harness sets it). On expiry
+// the request is destroyed and the promise rejects with a `timeout:` error.
+let defaultTimeoutMs = 0;
+export const setHttpTimeout = ms => { defaultTimeoutMs = ms; };
+
+export function http(method, url, { headers = {}, body, host, timeoutMs = defaultTimeoutMs } = {}) {
   const u = new URL(url);
   return new Promise((ok, ko) => {
     const req = httpRequest({ host: '127.0.0.1', port: u.port, method, path: u.pathname + u.search, headers: { host: host ?? u.host, ...headers } }, res => {
-      const parts = []; res.on('data', c => parts.push(c)); res.on('end', () => {
+      const parts = []; res.on('data', c => parts.push(c));
+      res.on('aborted', () => ko(new Error('response aborted')));
+      res.on('error', ko);
+      res.on('end', () => {
         const text = Buffer.concat(parts).toString('utf8');
         let data; try { data = JSON.parse(text); } catch { data = text; }
         ok({ status: res.statusCode, headers: res.headers, text, data });
       });
     });
+    if (timeoutMs) req.setTimeout(timeoutMs, () => req.destroy(new Error(`timeout: ${method} ${u.pathname}`)));
     req.on('error', ko);
     if (body !== undefined) req.write(body);
     req.end();

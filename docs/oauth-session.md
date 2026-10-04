@@ -86,12 +86,14 @@ structural `gate` is replaced by `SessionWriteGate`, keyed by session id:
   session ends;
 - targets outside the frozen grant are refused before the Dispatcher runs, so a model asking for an
   unapproved project gets `scope_denied` without ending the session.
-- reconciliation: a write refused before the send boundary (e.g. `thread_not_found`) is journaled
-  `rejected` without a target. `t3_reconciliar_escrita` answers it as `{state: "rejected",
+- reconciliation: a write refused during preflight, before its target is recorded (e.g.
+  `thread_not_found`, workspace refusals), is journaled `rejected` without a target.
+  `t3_reconciliar_escrita` answers exactly that record as `{state: "rejected",
   observation: null, sent: false}` after the same authority checks as a dispatch (active session of
   the same caller, environment grant, action) and a re-check after its audit; an audit failure fails
   closed. Every other record is reconciled by the Dispatcher unchanged (the lease path is not
-  touched).
+  touched), including a write refused by the final authorization check after its target was
+  recorded, which stays `uncertain` as before.
 
 ## 2. What ChatGPT does, and why the token lifetimes are what they are
 
