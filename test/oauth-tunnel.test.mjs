@@ -72,6 +72,8 @@ test('tunnel mode: sign-in, tool call, refresh and audience binding with the tun
   assert.equal(init.status, 200);
   const call = await c.callTool(s.tokens.access_token, 'rehearsal_echo', { text: 'hi' });
   assert.equal(call.status, 200);
+  assert.equal(call.data.error, undefined);
+  assert.notEqual(call.data.result.isError, true);
   assert.deepEqual(call.data.result.content, [{ type: 'text', text: 'echo: hi' }]);
   assert.ok(events(c).some(e => e.event === 'tool_call'));
   const r = await c.refresh(s.tokens.refresh_token);
