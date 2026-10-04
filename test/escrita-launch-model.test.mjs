@@ -49,7 +49,7 @@ test('tools/list publishes the same open model selection for launch and set',asy
 for(const text of [undefined,'isolated initial message'])for(const options of [undefined,[{id:'effort',value:'high'}]]) {
  test(`direct custom-instance launch reaches RPC unchanged (text=${text!==undefined}, options=${options!==undefined})`,async t=>{
   const p=await isolated(t),modelSelection={...selection,...(options?{options}:{})};
-  const result=await p.client.callTool({name:'t3_escrever_thread_launch',arguments:{leaseId:p.lease.leaseId,ambiente:'isolated',operationId:'direct-launch',
+  const result=await p.client.callTool({name:'t3_escrever_thread_launch',arguments:{leaseId:p.lease.leaseId,environment:'isolated',operationId:'direct-launch',
    input:{projectId:'app',title:'isolated launch',modelSelection,workspaceStrategy:{type:'root'},...(text!==undefined?{text}:{})}}});
   assert.equal(result.isError,undefined);assert.equal(JSON.parse(result.content[0].text).state,'completed');
   assert.equal(p.frames.length,1);assert.equal(p.relays(),1);
@@ -57,14 +57,14 @@ for(const text of [undefined,'isolated initial message'])for(const options of [u
   assert.equal(frame.payload.runtimeMode,'full-access');assert.equal(frame.payload.interactionMode,'default');
   assert.equal(frame.payload.initialMessage?.text,text);assert.equal(frame.payload.text,undefined);
   assert.equal(frame.payload.initialMessage===undefined,text===undefined);
-  const changed=await p.client.callTool({name:'t3_escrever_thread_model_selection_set',arguments:{leaseId:p.lease.leaseId,ambiente:'isolated',operationId:'set-model',input:{threadId:frame.payload.threadId,modelSelection}}});
+  const changed=await p.client.callTool({name:'t3_escrever_thread_model_selection_set',arguments:{leaseId:p.lease.leaseId,environment:'isolated',operationId:'set-model',input:{threadId:frame.payload.threadId,modelSelection}}});
   assert.equal(changed.isError,undefined);assert.equal(p.frames[1].tag,'orchestration.dispatchCommand');
   assert.equal(p.frames[1].payload.type,'thread.model-selection.set');assert.deepEqual(p.frames[1].payload.modelSelection,frame.payload.modelSelection);
  });
 }
 
 test('upstream RPC failure remains uncertain, never leaks details or retries launch',async t=>{
- const p=await isolated(t,{failure:true});const args={leaseId:p.lease.leaseId,ambiente:'isolated',operationId:'failed-launch',input:{projectId:'app',title:'isolated',modelSelection:selection,workspaceStrategy:{type:'root'}}};
+ const p=await isolated(t,{failure:true});const args={leaseId:p.lease.leaseId,environment:'isolated',operationId:'failed-launch',input:{projectId:'app',title:'isolated',modelSelection:selection,workspaceStrategy:{type:'root'}}};
  const result=await p.client.callTool({name:'t3_escrever_thread_launch',arguments:args});
  assert.equal(result.isError,true);assert.match(result.content[0].text,/^reconciliation_required:.*tried to send to T3.*does not prove.*do not retry/i);assert.doesNotMatch(result.content[0].text,/must not leak/);
  await p.client.callTool({name:'t3_escrever_thread_launch',arguments:args});assert.equal(p.frames.length,1);
@@ -75,6 +75,6 @@ test('upstream RPC failure remains uncertain, never leaks details or retries lau
  const [a,b]=InMemoryTransport.createLinkedPair();await server.connect(b);
  const client=new Client({name:'pre-send-error',version:'1'});await client.connect(a);
  t.after(async()=>{await client.close();await server.close();});
- const result=await client.callTool({name:'t3_escrever_thread_launch',arguments:{leaseId:'fake',ambiente:'isolated',operationId:'pre-send',input:{projectId:'app',title:'isolated',modelSelection:selection,workspaceStrategy:{type:'root'}}}});
+ const result=await client.callTool({name:'t3_escrever_thread_launch',arguments:{leaseId:'fake',environment:'isolated',operationId:'pre-send',input:{projectId:'app',title:'isolated',modelSelection:selection,workspaceStrategy:{type:'root'}}}});
  assert.equal(result.isError,true);assert.match(result.content[0].text,/^dispatch_rejected:.*before sending it to T3.*does not mean the model is blocked/);
  });

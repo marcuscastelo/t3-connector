@@ -19,27 +19,27 @@ const RODANDO = new Set(['preparing', 'queued', 'starting', 'running']);
 const CANCELADA = new Set(['cancelled', 'interrupted', 'rolled_back']);
 
 const MOTIVO_DO_PEDIDO = {
-  command: 'aprovação de comando',
-  'file-read': 'aprovação de leitura de arquivo',
-  'file-change': 'aprovação de alteração de arquivo',
-  permission: 'aprovação de permissão',
-  'mcp-elicitation': 'ferramenta MCP pedindo dados',
-  user_input: 'pergunta aguardando resposta',
-  dynamic_tool_call: 'chamada de ferramenta aguardando resposta',
-  auth_refresh: 'provider pedindo nova autenticação',
+  command: 'command approval',
+  'file-read': 'file read approval',
+  'file-change': 'file change approval',
+  permission: 'permission approval',
+  'mcp-elicitation': 'MCP tool asking for data',
+  user_input: 'question waiting for an answer',
+  dynamic_tool_call: 'tool call waiting for a response',
+  auth_refresh: 'provider asking to authenticate again',
 };
 
 export function motivoDoPedido(kind) {
-  return MOTIVO_DO_PEDIDO[kind] ?? `pedido pendente do tipo ${kind}`;
+  return MOTIVO_DO_PEDIDO[kind] ?? `pending request of kind ${kind}`;
 }
 
 function intervencaoPorPedido(pedido) {
   return {
-    estado: 'precisa_intervencao',
-    motivo: motivoDoPedido(pedido.kind),
-    tipo: pedido.kind,
-    identificador: { runtimeRequestId: pedido.id },
-    desde: pedido.createdAt,
+    state: 'needs_intervention',
+    reason: motivoDoPedido(pedido.kind),
+    kind: pedido.kind,
+    identifier: { runtimeRequestId: pedido.id },
+    since: pedido.createdAt,
   };
 }
 
@@ -61,36 +61,36 @@ export function estadoDaThread(thread, pedidosPendentes = []) {
   const limite = thread.limitRecovery;
   if (limite && !limite.autoResume && !RODANDO.has(status)) {
     return {
-      estado: 'precisa_intervencao',
-      motivo: 'limite de uso do provider; retomada automática desligada',
-      tipo: 'usage_limit',
-      identificador: { runId: limite.runId },
-      desde: null,
-      liberaEm: limite.resetAt,
+      state: 'needs_intervention',
+      reason: 'provider usage limit; automatic resume is off',
+      kind: 'usage_limit',
+      identifier: { runId: limite.runId },
+      since: null,
+      resetAt: limite.resetAt,
       statusRun: status,
       runId,
     };
   }
 
   if (RODANDO.has(status)) {
-    return { estado: 'rodando', statusRun: status, runId, ...(limite?.autoResume ? { retomaEm: limite.resetAt } : {}) };
+    return { state: 'running', statusRun: status, runId, ...(limite?.autoResume ? { resumeAt: limite.resetAt } : {}) };
   }
   if (status === 'waiting') {
     // Run em espera sem pedido no resumo: não é término nem intervenção confirmada.
     return {
-      estado: 'rodando',
+      state: 'running',
       statusRun: status,
       runId,
-      observacao: 'run em espera sem pedido pendente visível; consultar a thread para confirmar',
+      note: 'run waiting with no visible pending request; read the thread to confirm',
     };
   }
   if (thread.hasActionableProposedPlan) {
     return {
-      estado: 'precisa_intervencao',
-      motivo: 'plano proposto aguardando decisão',
-      tipo: 'proposed_plan',
-      identificador: { runId: thread.latestRunId },
-      desde: thread.latestRunCompletedAt ?? null,
+      state: 'needs_intervention',
+      reason: 'proposed plan waiting for a decision',
+      kind: 'proposed_plan',
+      identifier: { runId: thread.latestRunId },
+      since: thread.latestRunCompletedAt ?? null,
       statusRun: status,
       runId,
     };
@@ -98,28 +98,28 @@ export function estadoDaThread(thread, pedidosPendentes = []) {
   if (status === 'completed') {
     const fundo = thread.pendingBackgroundTasks ?? [];
     return {
-      estado: 'concluida',
+      state: 'completed',
       statusRun: status,
       runId,
-      ...(fundo.length ? { tarefasEmSegundoPlano: fundo.map((t) => ({ kind: t.kind, taskId: t.taskId, descricao: t.description ?? null })) } : {}),
+      ...(fundo.length ? { backgroundTasks: fundo.map((t) => ({ kind: t.kind, taskId: t.taskId, description: t.description ?? null })) } : {}),
     };
   }
   if (status === 'failed') {
     return {
-      estado: 'falhou',
+      state: 'failed',
       statusRun: status,
       runId,
-      erro: thread.lastError ?? null,
-      classeErro: thread.lastErrorClass ?? null,
+      error: thread.lastError ?? null,
+      errorClass: thread.lastErrorClass ?? null,
     };
   }
   if (CANCELADA.has(status)) {
-    return { estado: 'cancelada', statusRun: status, runId };
+    return { state: 'cancelled', statusRun: status, runId };
   }
   if (status === 'idle') {
-    return { estado: 'sem_execucao', statusRun: status, runId: null };
+    return { state: 'no_run', statusRun: status, runId: null };
   }
-  return { estado: 'desconhecido', statusRun: status, runId };
+  return { state: 'unknown', statusRun: status, runId };
 }
 
 /** Pedidos `pending` do snapshot /bounded, do mais antigo para o mais novo. */
@@ -147,10 +147,10 @@ export function ultimaResposta(projecao, maxCaracteres = 1500) {
     return {
       messageId: m.id,
       runId: m.runId,
-      texto,
-      truncada: m.text.length > maxCaracteres,
-      emAndamento: Boolean(m.streaming),
-      atualizadaEm: m.updatedAt,
+      text: texto,
+      truncated: m.text.length > maxCaracteres,
+      streaming: Boolean(m.streaming),
+      updatedAt: m.updatedAt,
     };
   }
   return null;
@@ -160,8 +160,8 @@ export function resumoModelo(modelSelection) {
   if (!modelSelection) return null;
   const opcoes = Object.fromEntries((modelSelection.options ?? []).map((o) => [o.id, o.value]));
   return {
-    modelo: modelSelection.model,
-    instancia: modelSelection.instanceId ?? null,
-    esforco: opcoes.reasoningEffort ?? opcoes.effort ?? null,
+    model: modelSelection.model,
+    instanceId: modelSelection.instanceId ?? null,
+    effort: opcoes.reasoningEffort ?? opcoes.effort ?? null,
   };
 }

@@ -35,7 +35,7 @@ export async function leituraProtegida({verificar,cliente,ambiente,operation,inp
  const [a,b]=InMemoryTransport.createLinkedPair();
  try {
   await servidor.connect(b);await mcp.connect(a);
-  const resultado=await mcp.callTool({name:operation,arguments:{...input,ambiente:ambiente.alias}});
+  const resultado=await mcp.callTool({name:operation,arguments:{...input,environment:ambiente.alias}});
   // Lease vencida ou revogada durante a leitura: o resultado já buscado não sai.
   verificar();
   return resultado;

@@ -2,31 +2,48 @@
 
 ## Unreleased
 
+- **Breaking: English public contract.** Tool parameters, response fields, state and
+  return values, search failure codes, write error codes, connector messages and
+  configuration keys are English, with no Portuguese alias or duplicate. Parameters:
+  `environment`, `search`, `limit`, `state` (`running`, `needs_intervention`,
+  `completed`, `failed`, `cancelled`, `no_run`, `unknown`), `includeNoRun`, `match`
+  (`partial`, `exact`), `maxCharacters`, `includeLatestResponse`, `check`. Responses: for
+  example `ambiente` → `environment`, `proximoCursor` → `nextCursor`, `pedidosPendentes` →
+  `pendingRequests`, `proximaAcao` → `nextAction`, `ambiente_fora_da_lease` →
+  `environment_not_in_lease`. Config: `default`, `environments`, `allowedProjects`,
+  `ssh.remotePort`, `port`, `stateDir`, `channel`. Tool inputs are now strict: an old or
+  unknown parameter fails with `-32602` instead of being ignored (an ignored `ambiente`
+  used to fall back to the default environment). Old config keys stop start-up naming
+  their replacement. CLI JSON (`environments`, `diagnose`, write `pair`) uses English
+  keys. Cursors from earlier versions are refused; restart the query. Bridge and gate
+  must be upgraded and restarted together. Tool names are unchanged. Full tables in
+  [ADR 0004](docs/adr/0004-english-contract.md).
+
 - Release pipeline: pushing a tag `vX.Y.Z` on `main` checks that version, lock, `VERSAO`,
   `VERSAO_ESCRITA` and CHANGELOG agree, runs CI, packs once, checks that exact artifact
   and publishes it with a `.sha256` as a GitHub Release. `npm run release:dry-run` does
   the same locally without publishing. Updating a running connector stays manual; see
   `docs/releasing.md`.
 
-- `t3_thread.pedidosPendentes` now exposes request IDs, public response capability,
+- `t3_thread.pendingRequests` now exposes request IDs, public response capability,
   full user-input questions/options/field constraints, and approval prompts/provider
   decisions. Exact request-ID joins and field allowlists exclude native/session details
   and prior answers. Missing/invalid details and unsupported kinds have explicit
   fallback codes; shell-only pending requests remain visible. Read scopes and write
   authorization are unchanged.
-  Structured `proximaAcao` recommends the answer/approval tool with target IDs and
+  Structured `nextAction` recommends the answer/approval tool with target IDs and
   response field, or inspection in T3 when it cannot safely recommend a response.
-  `threadSendRespondePedido: false` and tool guidance make explicit that sends do not
+  `threadSendAnswersRequest: false` and tool guidance make explicit that sends do not
   resolve requests. A stateful MCP regression covers a send queued behind user input
   and the existing request's answer resuming the same run.
 
 - New read tool `t3_buscar_threads`: finds threads by title or exact ID without an
-  environment, across every configured environment (or one, with `ambiente`). Each result
-  carries `ambiente: {alias, environmentId, nome}`. Deadlines of 4 s per environment and
-  10 s in total; environments that fail are listed in `falhasAmbientes` with
-  `completa: false` instead of failing the search. Ambiguous matches are all returned,
-  ordered by environment and thread ID, with a cursor bound to the environments that
-  answered. Existing tools and write actions are unchanged and still take one environment.
+  environment, across every configured environment (or one, with `environment`). Each
+  result carries `environment: {alias, environmentId, name}`. Deadlines of 4 s per
+  environment and 10 s in total; environments that fail are listed in
+  `environmentFailures` with `complete: false` instead of failing the search. Ambiguous
+  matches are all returned, ordered by environment and thread ID, with a cursor bound to
+  the environments that answered. Existing tools and write actions are unchanged and still take one environment.
 
 ## 0.5.0
 

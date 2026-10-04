@@ -84,7 +84,7 @@ test('pedido leva o inventário completo do environment, sem filtro nem allowlis
  assert.equal(grant.projects.filter(p=>p.name.startsWith('app.example-issue-')).length,30);
  assert.deepEqual(grant.readProjectIds.length,32);
  const lido=JSON.parse((await relay({op:'read',ambiente:'remoto',leaseId:l.leaseId,operation:'t3_projetos',input:{}})).content[0].text);
- assert.ok(lido.projetos.some(p=>p.titulo==='app.example-issue-7@remoto'));
+ assert.ok(lido.projects.some(p=>p.title==='app.example-issue-7@remoto'));
  const w=await relay({op:'dispatch',ambiente:'remoto',leaseId:l.leaseId,action:'thread.settle',operationId:'issue-settle',input:{threadId:'t-issue'}});
  assert.equal(w.state,'completed');assert.equal(remoto.calls.filter(x=>x.m).length,1);
 });
@@ -116,8 +116,8 @@ test('leitura protegida usa o grant e o servidor do environment escolhido',async
  const {aprovar,relay}=await montar();const {l}=await aprovar();
  const r=await relay({op:'read',ambiente:'remoto',leaseId:l.leaseId,operation:'t3_projetos',input:{}});
  const dados=JSON.parse(r.content[0].text);
- assert.equal(dados.ambiente.alias,'remoto');
- assert.ok(dados.projetos.every(p=>p.diretorio.startsWith('/remoto/')));
+ assert.equal(dados.environment.alias,'remoto');
+ assert.ok(dados.projects.every(p=>p.directory.startsWith('/remoto/')));
  await assert.rejects(relay({op:'read',ambiente:'remoto',leaseId:'outra',operation:'t3_projetos',input:{}}),/lease_closed/);
  await assert.rejects(relay({op:'read',ambiente:'remoto',leaseId:l.leaseId,operation:'t3_aguardar_thread',input:{}}),/action_unavailable/);
 });
@@ -131,17 +131,17 @@ test('reconcile fica no environment da operação',async()=>{
 });
 
 test('config de escrita: destino lógico estável, ações válidas e sem environment padrão',()=>{
- const base={porta:7433,estado:'~/x',canal:{organization:'my-org',tunnelId:'tunnel_abc'},ambientes:{remoto:{environmentId:'env-s',ssh:{host:'remoto'},tokenFile:'~/t'}}};
+ const base={port:7433,stateDir:'~/x',channel:{organization:'my-org',tunnelId:'tunnel_abc'},environments:{remoto:{environmentId:'env-s',ssh:{host:'remoto'},tokenFile:'~/t'}}};
  const c=validarConfigEscrita(base);
  assert.equal(c.ambientes[0].destination,'t3://env-s');
- for(const campo of ['projetos','acoes'])assert.throws(()=>validarConfigEscrita({...base,ambientes:{remoto:{...base.ambientes.remoto,[campo]:['x']}}}),/não é suportado/);
+ for(const campo of ['projetos','acoes'])assert.throws(()=>validarConfigEscrita({...base,environments:{remoto:{...base.environments.remoto,[campo]:['x']}}}),/não é suportado/);
  assert.equal(c.ambientes[0].acoes.length,42);
- assert.throws(()=>validarConfigEscrita({...base,ambientes:{remoto:{...base.ambientes.remoto,url:'http://127.0.0.1:1'}}}),/exatamente um/);
- assert.throws(()=>validarConfigEscrita({...base,canal:{organization:'x',tunnelId:'nope'}}),/canal/);
+ assert.throws(()=>validarConfigEscrita({...base,environments:{remoto:{...base.environments.remoto,url:'http://127.0.0.1:1'}}}),/exatamente um/);
+ assert.throws(()=>validarConfigEscrita({...base,channel:{organization:'x',tunnelId:'nope'}}),/channel/);
 });
 
 test('config de escrita: rótulos da passkey são opcionais e validados',()=>{
- const base={porta:7433,estado:'~/x',canal:{organization:'my-org',tunnelId:'tunnel_abc'},ambientes:{remoto:{environmentId:'env-s',ssh:{host:'remoto'},tokenFile:'~/t'}}};
+ const base={port:7433,stateDir:'~/x',channel:{organization:'my-org',tunnelId:'tunnel_abc'},environments:{remoto:{environmentId:'env-s',ssh:{host:'remoto'},tokenFile:'~/t'}}};
  assert.deepEqual(validarConfigEscrita(base).passkey,{});
  assert.deepEqual(validarConfigEscrita({...base,passkey:{rpName:'Minha ponte',userName:'eu'}}).passkey,{rpName:'Minha ponte',userName:'eu'});
  assert.throws(()=>validarConfigEscrita({...base,passkey:{rpName:''}}),/passkey.rpName/);

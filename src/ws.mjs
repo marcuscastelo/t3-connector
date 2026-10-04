@@ -15,7 +15,7 @@ function mensagemDaFalha(exit) {
     const erro = c?.error ?? c?.defect;
     if (erro) return erro.message ?? erro._tag ?? JSON.stringify(erro).slice(0, 200);
   }
-  return 'falha sem detalhe';
+  return 'failure without detail';
 }
 
 /**
@@ -32,11 +32,11 @@ export async function assinar({ baseUrl, ticket, tag, payload, aoReceber, signal
   let encerrado = false;
 
   await new Promise((resolve, reject) => {
-    const aoAbortar = () => { socket.close(); reject(signal.reason?.name === 'TimeoutError' ? new ErroT3('WS não abriu no prazo da chamada', { codigo: 'prazo' }) : new Cancelada()); };
+    const aoAbortar = () => { socket.close(); reject(signal.reason?.name === 'TimeoutError' ? new ErroT3('WS did not open within the call deadline', { codigo: 'prazo' }) : new Cancelada()); };
     if (signal?.aborted) return aoAbortar();
     signal?.addEventListener('abort', aoAbortar, { once: true });
     socket.addEventListener('open', () => { signal?.removeEventListener('abort', aoAbortar); resolve(); }, { once: true });
-    socket.addEventListener('error', () => { signal?.removeEventListener('abort', aoAbortar); reject(new ErroT3('WS do T3 recusou a conexão', { codigo: 'indisponivel' })); }, { once: true });
+    socket.addEventListener('error', () => { signal?.removeEventListener('abort', aoAbortar); reject(new ErroT3('T3 WS refused the connection', { codigo: 'indisponivel' })); }, { once: true });
   });
 
   const fim = new Promise((resolve, reject) => {
@@ -49,11 +49,11 @@ export async function assinar({ baseUrl, ticket, tag, payload, aoReceber, signal
         try { aoReceber(msg.values ?? []); } catch (e) { reject(e); }
       } else if (msg._tag === 'Exit') {
         if (msg.exit?._tag === 'Success') resolve();
-        else reject(new ErroT3(`subscription recusada pelo T3: ${mensagemDaFalha(msg.exit)}`));
+        else reject(new ErroT3(`subscription refused by T3: ${mensagemDaFalha(msg.exit)}`));
       }
     });
     socket.addEventListener('close', () => {
-      if (!encerrado) reject(new ErroT3('WS do T3 fechou durante a espera', { codigo: 'indisponivel' }));
+      if (!encerrado) reject(new ErroT3('T3 WS closed during the wait', { codigo: 'indisponivel' }));
     });
   });
   fim.catch(() => {});

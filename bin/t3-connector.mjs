@@ -51,7 +51,7 @@ async function serve() {
 
 async function listarAmbientes() {
   const { ambientes } = await abrir();
-  console.log(JSON.stringify({ padrao: ambientes.padrao, ambientes: await ambientes.listar({ verificar: true, prazoMs: 15000 }) }, null, 1));
+  console.log(JSON.stringify({ default: ambientes.padrao, environments: await ambientes.listar({ verificar: true, prazoMs: 15000 }) }, null, 1));
   ambientes.fechar();
 }
 
@@ -65,22 +65,22 @@ async function diagnostico() {
       const shell = await cliente.shell();
       const projetos = (shell.projects ?? []).filter((p) => r.escopo.projetoPermitido(p.id));
       saida.push({
-        ambiente: ambientes.identidade(r),
-        nome: info.nome,
-        versao: info.versao,
-        escopos: info.escopos,
-        tokenExpiraEm: info.tokenExpiraEm,
-        projetosAutorizados: projetos.map((p) => ({ projectId: p.id, titulo: p.title, diretorio: p.workspaceRoot })),
-        projetosConfiguradosInexistentes: [...r.escopo.permitidos].filter((id) => !projetos.some((p) => p.id === id)),
-        threadsVisiveis: r.escopo.threadsVisiveis(shell).length,
+        environment: ambientes.identidade(r),
+        name: info.nome,
+        version: info.versao,
+        scopes: info.escopos,
+        tokenExpiresAt: info.tokenExpiraEm,
+        allowedProjects: projetos.map((p) => ({ projectId: p.id, title: p.title, directory: p.workspaceRoot })),
+        missingAllowedProjects: [...r.escopo.permitidos].filter((id) => !projetos.some((p) => p.id === id)),
+        visibleThreads: r.escopo.threadsVisiveis(shell).length,
       });
     } catch (e) {
-      saida.push({ ambiente: ambientes.identidade(r), erro: e.message });
+      saida.push({ environment: ambientes.identidade(r), error: e.message });
     }
   }
   console.log(JSON.stringify(saida, null, 1));
   ambientes.fechar();
-  if (saida.some((s) => s.erro || s.projetosConfiguradosInexistentes?.length)) process.exitCode = 1;
+  if (saida.some((s) => s.error || s.missingAllowedProjects?.length)) process.exitCode = 1;
 }
 
 async function lerStdin() {

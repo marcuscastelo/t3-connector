@@ -33,12 +33,13 @@ Facts gathered (upstream T3 Code commit `8ed276c246b6`, MCP SDK 1.32.0, tunnel-c
 ## Decision
 
 - Tool `t3_aguardar_thread` on top of `orchestration.subscribeThread`.
-- `ambiente` and `timeoutMs` are required. `timeoutMs` ranges from 1 to 5,000 ms; for
+- `environment` (formerly `ambiente`, see [ADR 0004](0004-english-contract.md)) and `timeoutMs` are required. `timeoutMs` ranges from 1 to 5,000 ms; for
   voice, 1,000 to 2,000 ms.
 - The deadline covers the whole call: connection, authorization, WS ticket, snapshot and
   events. It is not a timer for the waiting phase only.
-- Returns immediately when there is no run (`sem_execucao`), when the run already finished
-  or when a request is pending (`precisa_intervencao`). Otherwise it returns on the first
+- Returns immediately when there is no run (`no_run`), when the run already finished
+  or when a request is pending (`needs_intervention`); English values since
+  [ADR 0004](0004-english-contract.md). Otherwise it returns on the first
   terminal or intervention event, or at the deadline.
 - Reaching the deadline with an observed state is a normal result (`timedOut: true`),
   never an error. With no state observed at all (environment down), it is a transport

@@ -25,21 +25,21 @@ test('verificação aceita só token de leitura e o environmentId esperado', asy
     '/.well-known/t3/environment': descritor,
     '/api/auth/session': { scopes: ['orchestration:read', 'orchestration:operate'] },
   }) });
-  await assert.rejects(verificarConexao(amplo, { environmentIdEsperado: 'e' }), /além de leitura/);
+  await assert.rejects(verificarConexao(amplo, { environmentIdEsperado: 'e' }), /beyond read/);
   const leitura = criarCliente({ url: 'http://127.0.0.1:1', token: 't', fetchImpl: fetchFalso({
     '/.well-known/t3/environment': descritor,
     '/api/auth/session': { scopes: ['orchestration:read'] },
   }) });
   assert.deepEqual((await verificarConexao(leitura, { environmentIdEsperado: 'e' })).escopos, ['orchestration:read']);
-  await assert.rejects(verificarConexao(leitura, { environmentIdEsperado: 'outro' }), /esperado outro/);
+  await assert.rejects(verificarConexao(leitura, { environmentIdEsperado: 'outro' }), /expected outro/);
 });
 
 test('verificação recusa servidor fora do protocolo 2 e URL pública sem TLS', async () => {
   const v1 = criarCliente({ url: 'http://127.0.0.1:1', token: 't', fetchImpl: fetchFalso({
     '/.well-known/t3/environment': { orchestrationProtocolVersion: 1 },
   }) });
-  await assert.rejects(verificarConexao(v1), /protocolo 1/);
-  assert.throws(() => criarCliente({ url: 'http://100.64.0.1:3773', token: 't' }), /HTTPS ou HTTP de loopback/);
+  await assert.rejects(verificarConexao(v1), /protocol 1/);
+  assert.throws(() => criarCliente({ url: 'http://100.64.0.1:3773', token: 't' }), /HTTPS or loopback HTTP/);
 });
 
 test('cliente manda o header V2 só nas rotas de orquestração e só usa GET, salvo o ticket WS', async () => {
@@ -64,18 +64,18 @@ test('prazo do chamador vira erro "prazo", não "indisponivel"', async () => {
   clearTimeout(manter);
   const ac = new AbortController();
   setTimeout(() => ac.abort(), 20);
-  await assert.rejects(c.shell({ signal: ac.signal }), /cancelada/);
+  await assert.rejects(c.shell({ signal: ac.signal }), /cancelled/);
 });
 
 test('config: exige environmentId, um transporte, token e ACL não vazia por environment', () => {
-  const base = { environmentId: 'e1', url: 'http://127.0.0.1:3773', tokenFile: '~/t', projetosPermitidos: ['p'] };
-  assert.equal(validarConfig({ ambientes: { local: base } }).padrao, 'local');
-  assert.throws(() => validarConfig({ ambientes: { local: { ...base, projetosPermitidos: [] } } }), /projetosPermitidos vazio/);
-  assert.throws(() => validarConfig({ ambientes: { local: { ...base, environmentId: undefined } } }), /environmentId/);
-  assert.throws(() => validarConfig({ ambientes: { local: { ...base, ssh: { host: 'remoto' } } } }), /exatamente um/);
-  assert.throws(() => validarConfig({ ambientes: { local: { ...base, url: 'http://remoto.example.com:3773' } } }), /loopback/);
-  assert.throws(() => validarConfig({ padrao: 'inexistente', ambientes: { local: base } }), /padrao "inexistente"/);
-  assert.throws(() => validarConfig({ ambientes: { a: base, b: base } }), /environmentId repetido/);
+  const base = { environmentId: 'e1', url: 'http://127.0.0.1:3773', tokenFile: '~/t', allowedProjects: ['p'] };
+  assert.equal(validarConfig({ environments: { local: base } }).padrao, 'local');
+  assert.throws(() => validarConfig({ environments: { local: { ...base, allowedProjects: [] } } }), /allowedProjects vazio/);
+  assert.throws(() => validarConfig({ environments: { local: { ...base, environmentId: undefined } } }), /environmentId/);
+  assert.throws(() => validarConfig({ environments: { local: { ...base, ssh: { host: 'remoto' } } } }), /exatamente um/);
+  assert.throws(() => validarConfig({ environments: { local: { ...base, url: 'http://remoto.example.com:3773' } } }), /loopback/);
+  assert.throws(() => validarConfig({ default: 'inexistente', environments: { local: base } }), /default "inexistente"/);
+  assert.throws(() => validarConfig({ environments: { a: base, b: base } }), /environmentId repetido/);
 });
 
 test('túnel SSH: argumentos fechados, porta de loopback, reuso e recriação após queda', async () => {
@@ -108,7 +108,7 @@ test('túnel SSH: argumentos fechados, porta de loopback, reuso e recriação ap
   assert.equal(filhos.length, 2, 'recria depois que o ssh saiu');
   t.fechar();
   for (const s of servidores) s.close();
-  assert.throws(() => criarTransporteSsh({ host: 'remoto; rm -rf /' }), /host SSH inválido/);
+  assert.throws(() => criarTransporteSsh({ host: 'remoto; rm -rf /' }), /invalid SSH host/);
 });
 
 test('túnel SSH que não abre vira erro de indisponibilidade com a última linha do ssh', async () => {

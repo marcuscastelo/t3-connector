@@ -13,11 +13,11 @@ async function ponte(relay) {
  const c=new Client({name:'t',version:'0'});await c.connect(a);return c;
 }
 
-test('catálogo: 42 escritas, aprovação, 5 leituras e reconcile; ambiente obrigatório em todas as que tocam dados',async()=>{
+test('catálogo: 42 escritas, aprovação, 5 leituras e reconcile; environment obrigatório em todas as que tocam dados',async()=>{
  const c=await ponte(async()=>({}));
  const {tools}=await c.listTools();
  assert.equal(tools.length,ACTIONS.length+7);
- for(const t of tools.filter(t=>t.name!=='t3_pedir_aprovacao'))assert.ok(t.inputSchema.required.includes('ambiente'),t.name);
+ for(const t of tools.filter(t=>t.name!=='t3_pedir_aprovacao')){assert.ok(t.inputSchema.required.includes('environment'),t.name);assert.equal('ambiente' in t.inputSchema.properties,false,t.name);}
  assert.ok(!tools.some(t=>/dispatchCommand|rpc/.test(t.name)));
 });
 
@@ -25,12 +25,12 @@ test('repassa o ambiente ao relay e explica erros de roteamento',async()=>{
  const pedidos=[];
  const c=await ponte(async req=>{pedidos.push(req);if(req.ambiente==='inexistente')throw new Error('ambiente_desconhecido');if(req.ambiente==='remoto'&&req.leaseId==='velha')throw new Error('ambiente_fora_da_lease');return {ambiente:{alias:req.ambiente},state:'completed'};});
  const args={leaseId:'l',operationId:'op',input:{threadId:'t',text:'oi',clientRequestId:'op',delivery:'start_immediately'}};
- const ok=await c.callTool({name:'t3_escrever_thread_send',arguments:{...args,ambiente:'remoto'}});
+ const ok=await c.callTool({name:'t3_escrever_thread_send',arguments:{...args,environment:'remoto'}});
  assert.equal(ok.isError,undefined);assert.equal(pedidos[0].ambiente,'remoto');assert.equal(pedidos[0].op,'dispatch');
- const inexistente=await c.callTool({name:'t3_escrever_thread_send',arguments:{...args,ambiente:'inexistente'}});
- assert.match(inexistente.content[0].text,/^ambiente_desconhecido: .*configured: local, remoto/);
- const fora=await c.callTool({name:'t3_escrever_thread_send',arguments:{...args,leaseId:'velha',ambiente:'remoto'}});
- assert.match(fora.content[0].text,/^ambiente_fora_da_lease: /);
+ const inexistente=await c.callTool({name:'t3_escrever_thread_send',arguments:{...args,environment:'inexistente'}});
+ assert.match(inexistente.content[0].text,/^environment_unknown: .*configured: local, remoto/);
+ const fora=await c.callTool({name:'t3_escrever_thread_send',arguments:{...args,leaseId:'velha',environment:'remoto'}});
+ assert.match(fora.content[0].text,/^environment_not_in_lease: /);
  const sem=await c.callTool({name:'t3_escrever_thread_send',arguments:args});
  assert.equal(sem.isError,true,'sem ambiente o schema recusa');
  assert.equal(pedidos.filter(p=>p.op==='dispatch'&&!p.ambiente).length,0);
@@ -40,8 +40,9 @@ test('pedido de aprovação lista environments incluídos e indisponíveis',asyn
  const c=await ponte(async()=>({requestId:'R',scopeHash:'h',scope:{environments:[{alias:'local',environmentId:'p',projects:[1],actions:[1,2]}]},indisponiveis:[{alias:'remoto',environmentId:'s',motivo:'ambiente_indisponivel'}]}));
  const r=JSON.parse((await c.callTool({name:'t3_pedir_aprovacao',arguments:{}})).content[0].text);
  assert.equal(r.approvalUrl,'http://localhost:7433/#request=R');
- assert.deepEqual(r.ambientes,[{alias:'local',environmentId:'p',projetos:1,acoes:2}]);
- assert.equal(r.indisponiveis[0].alias,'remoto');
+ assert.deepEqual(r.environments,[{alias:'local',environmentId:'p',projectCount:1,actionCount:2}]);
+ assert.deepEqual(r.unavailableEnvironments,[{alias:'remoto',environmentId:'s',reason:'environment_unavailable'}]);
+ assert.equal('ambientes' in r||'indisponiveis' in r,false);
 });
 
 // Servidor T3 falso: HTTP (identidade, shell, ticket) e WS que responde Exit Success.
@@ -61,7 +62,7 @@ const registro={alias:'remoto',environmentId:'env-s',ssh:{host:'remoto'},tokenFi
 const transporte=()=>{const t={descartes:0,baseUrl:async()=>'http://127.0.0.1:43773',descartar(){t.descartes++;},fechar(){}};return t;};
 
 test('conexão: exige read+operate exatos e o environmentId certo',async()=>{
- for(const [opcoes,erro] of [[{escopos:['orchestration:read']},/sem o escopo orchestration:operate/],[{escopos:['orchestration:read','orchestration:operate','terminal:operate']},/escopos a mais/],[{environmentId:'env-p'},/esperado env-s/]]){
+ for(const [opcoes,erro] of [[{escopos:['orchestration:read']},/without scope orchestration:operate/],[{escopos:['orchestration:read','orchestration:operate','terminal:operate']},/extra scopes/],[{environmentId:'env-p'},/expected env-s/]]){
   const f=servidorFalso(opcoes);
   const c=criarConexaoEscrita(registro,{transporte:transporte(),lerToken:()=>'t',criarClienteImpl:f.cliente,WebSocketImpl:f.SocketFalso});
   await assert.rejects(c.verificar(),erro);
