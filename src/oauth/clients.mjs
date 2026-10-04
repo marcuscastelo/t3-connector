@@ -111,6 +111,8 @@ export class ClientRegistry {
     const jtiKey = `${clientId} ${claims.jti}`;
     if (this.#seenJti.has(jtiKey)) throw new OAuthError('invalid_client', 'assertion_replayed', 401);
     this.#seenJti.set(jtiKey, claims.exp + SKEW_S);
+    // Evidence that the signature was verified, and with which key (public metadata only).
+    this.audit({ event: 'client_authenticated', clientId, alg: header.alg, kid: typeof header.kid === 'string' ? header.kid.slice(0, 64).replace(/[^A-Za-z0-9._-]/g, '_') : null, lifetime: claims.iat !== undefined ? claims.exp - claims.iat : null });
     return client;
   }
 
