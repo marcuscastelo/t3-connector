@@ -26,7 +26,7 @@ export function assertEnvironmentParity(reads, writes) {
 }
 export function consented(authority, principal, registro) {
   const s = authority.check(principal.sid);
-  if (s.sub !== principal.sub || s.grants?.projectPolicy !== 'all' || !s.grants.environments.some(e =>
+  if (s.sub !== principal.sub || s.grants?.projectPolicy !== 'all' || s.grants.scopeVersion !== 3 || !s.grants.environments.some(e =>
     e.alias === registro.alias && e.environmentId === registro.environmentId && e.destination === (registro.destination ?? `t3://${registro.environmentId}`))) {
     throw new ForaDoEscopo('environment outside the consented OAuth policy');
   }

@@ -27,7 +27,18 @@ export function t3Tools({ readConfig, writeConfig = null, writeProjects = null, 
     }
     return {
       sources,
-      grantProvider: all ? Object.assign(async () => ({ grants: consentAll(reads.registros), unavailable: [] }), { projectPolicy: 'all' }) : writes ? () => writes.inventory() : null,
+      grantProvider: all ? Object.assign(async () => {
+        // Availability is explanatory at consent; configured hosts remain in the continuing
+        // policy. Public login invokes this only after UV, and no project IDs are collected.
+        const unavailable = (await Promise.all(reads.registros.map(async r => {
+          try {
+            // Probe a private record so consent cannot prime the reads' cached verification.
+            await reads.conectar({ ...r, conexao: null }, { signal: AbortSignal.timeout(4000) });
+            return null;
+          } catch { return { alias: r.alias, environmentId: r.environmentId, reason: 'environment_unavailable' }; }
+        }))).filter(Boolean);
+        return { grants: consentAll(reads.registros), unavailable };
+      }, { projectPolicy: 'all' }) : writes ? () => writes.inventory() : null,
       close() { writes?.close(); ownJournal?.close(); reads.fechar?.(); },
     };
   };

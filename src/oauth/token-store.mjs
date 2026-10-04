@@ -20,9 +20,9 @@ export class TokenStore {
   #codes = new Map();
   #access = new Map();
   #refresh = new Map();
-  constructor({ authority, atTtlMs = AT_TTL_MS, rtTtlMs = RT_TTL_MS, codeTtlMs = CODE_TTL_MS, clock, wall, audit = () => {} }) {
+  constructor({ authority, atTtlMs = AT_TTL_MS, rtTtlMs = RT_TTL_MS, codeTtlMs = CODE_TTL_MS, maxRecords = 65_536, maxFamilyRecords = 4096, clock, wall, audit = () => {} }) {
     if (!authority) throw new Error('authority_required');
-    Object.assign(this, { authority, atTtlMs, rtTtlMs, codeTtlMs, audit, time: stopwatch({ clock, wall }) });
+    Object.assign(this, { authority, atTtlMs, rtTtlMs, codeTtlMs, maxRecords, maxFamilyRecords, audit, time: stopwatch({ clock, wall }) });
     authority.onTerminal(sid => this.#purge(sid));
   }
   #key(v) { return createHmac('sha256', this.#pepper).update(String(v)).digest('base64url'); }
@@ -30,8 +30,21 @@ export class TokenStore {
   #purge(sid) {
     for (const m of [this.#codes, this.#access, this.#refresh]) for (const [k, v] of m) if (v.sid === sid) m.delete(k);
   }
+  #reserve(sid, count) {
+    this.sweep();
+    const maps = [this.#codes, this.#access, this.#refresh];
+    const total = maps.reduce((n, m) => n + m.size, 0);
+    const family = maps.reduce((n, m) => n + [...m.values()].filter(r => r.sid === sid).length, 0);
+    if (total + count > this.maxRecords || family + count > this.maxFamilyRecords) {
+      // Reuse tombstones are never discarded from a live family. End the offending session
+      // instead of weakening replay detection or evicting another client's records.
+      this.authority.revoke(sid, 'token_capacity');
+      throw new OAuthError('temporarily_unavailable', 'token_capacity', 429);
+    }
+  }
 
   issueCode({ sid, clientId, redirectUri, codeChallenge, resource, scope }) {
+    this.#reserve(sid, 1);
     const code = this.#token();
     this.#codes.set(this.#key(code), { sid, clientId, redirectUri, codeChallenge, resource, scope, issued: this.time.mark(), used: false });
     return code;
@@ -76,6 +89,7 @@ export class TokenStore {
   }
 
   #mint(sid, { clientId, resource, scope }, accessScope = scope) {
+    this.#reserve(sid, 2);
     const accessToken = this.#token(), refreshToken = this.#token(), issued = this.time.mark();
     // The access token never outlives the idle deadline known at issuance; the authority check on
     // every request still decides.

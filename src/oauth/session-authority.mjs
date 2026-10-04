@@ -31,10 +31,11 @@ export class SessionAuthority {
   #killed = false;
   #epoch = 0;
   #listeners = new Set();
-  constructor({ idleMs = IDLE_MS, maxAgeMs = 0, clock, wall, audit = () => {} } = {}) {
+  #resetListeners = new Set();
+  constructor({ idleMs = IDLE_MS, maxAgeMs = 0, maxSessions = 128, clock, wall, audit = () => {} } = {}) {
     if (!(idleMs > 0)) throw new Error('invalid_idle');
     if (!(maxAgeMs >= 0)) throw new Error('invalid_max_age');
-    Object.assign(this, { idleMs, maxAgeMs, audit, time: stopwatch({ clock, wall }) });
+    Object.assign(this, { idleMs, maxAgeMs, maxSessions, audit, time: stopwatch({ clock, wall }) });
   }
   get killed() { return this.#killed; }
   // Increments on revoke-all and on the kill switch. Pending sign-ins record it and are refused at
@@ -44,14 +45,22 @@ export class SessionAuthority {
   // Called with (sid, reason) once, when a session becomes terminal, so token stores can purge it.
   onTerminal(listener) { this.#listeners.add(listener); return () => this.#listeners.delete(listener); }
 
+  onReset(listener) { this.#resetListeners.add(listener); return () => this.#resetListeners.delete(listener); }
+  revokeCredential(rpID, credentialId, origin) {
+    let n = 0; for (const s of this.#sessions.values()) if (s.credentialId === credentialId && s.credentialRp === rpID && (origin === undefined || s.credentialOrigin === origin) && !s.terminal) { this.#end(s, 'credential_removed'); n++; } return n;
+  }
+
   // A session starts right after a verified passkey ceremony; that instant is its first activity.
   // `grants` is the policy frozen at consent time (environments/actions; projects only in restricted mode); refresh
   // never changes it.
-  create({ sub, clientId, credentialId, scope, resource, grants = null }) {
+  create({ sub, clientId, credentialId, credentialRp = 'localhost', credentialOrigin = null, scope, resource, grants = null }) {
     if (this.#killed) throw new Error('kill_switch');
+    // Reclaim terminal sessions before admission; never evict a live session to admit another.
+    this.sweep();
+    if (this.#sessions.size >= this.maxSessions) throw Object.assign(new Error('session_capacity'), { status: 429 });
     for (const [k, v] of Object.entries({ sub, clientId, credentialId, scope, resource })) if (typeof v !== 'string' || !v) throw new Error(`invalid_${k}`);
     const sid = randomBytes(18).toString('base64url'), at = this.time.mark();
-    this.#sessions.set(sid, { sid, sub, clientId, credentialId, scope, resource, grants: grants && deepFreeze(structuredClone(grants)), created: at, lastActivity: at, terminal: null });
+    this.#sessions.set(sid, { sid, sub, clientId, credentialId, credentialRp, credentialOrigin, scope, resource, grants: grants && deepFreeze(structuredClone(grants)), created: at, lastActivity: at, terminal: null });
     this.audit({ event: 'session_created', sid, clientId, credentialId });
     return sid;
   }
@@ -99,7 +108,7 @@ export class SessionAuthority {
     this.#end(s, reason);
     return was;
   }
-  revokeAll(reason = 'revoked') { this.#epoch++; let n = 0; for (const s of this.#sessions.values()) if (!s.terminal) { this.#end(s, reason); n++; } return n; }
+  revokeAll(reason = 'revoked') { this.#epoch++; for (const l of this.#resetListeners) { try { l(); } catch {} } let n = 0; for (const s of this.#sessions.values()) if (!s.terminal) { this.#end(s, reason); n++; } return n; }
 
   // Kill switch: ends every session and refuses new ones until released. Releasing it does not
   // revive anything; new sessions need a new passkey ceremony.
@@ -117,5 +126,5 @@ export class SessionAuthority {
   // Drops terminal sessions; their tokens are already purged through onTerminal.
   sweep() { for (const s of [...this.#sessions.values()]) { try { this.#live(s.sid); } catch { this.#sessions.delete(s.sid); } } }
 
-  #view(s) { return { sid: s.sid, sub: s.sub, clientId: s.clientId, credentialId: s.credentialId, scope: s.scope, resource: s.resource, grants: s.grants }; }
+  #view(s) { return { sid: s.sid, sub: s.sub, clientId: s.clientId, credentialId: s.credentialId, credentialRp: s.credentialRp, credentialOrigin: s.credentialOrigin, scope: s.scope, resource: s.resource, grants: s.grants }; }
 }

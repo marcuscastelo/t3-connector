@@ -1,5 +1,6 @@
 import { createPublicKey, verify as verifySignature, constants } from 'node:crypto';
 import { stopwatch } from './session-authority.mjs';
+import { deadline } from './limits.mjs';
 import { OAuthError } from './token-store.mjs';
 
 // OAuth clients identified by a Client ID Metadata Document (CIMD): the client_id is an HTTPS URL
@@ -46,8 +47,10 @@ async function fetchJson(fetchImpl, url) {
 
 export class ClientRegistry {
   #cache = new Map();
+  #loading = new Map();
   #seenJti = new Map();
   constructor({ allowedClients = [CHATGPT_CLIENT_ID], fetch: fetchImpl = globalThis.fetch, clock, wall = () => Date.now(), audit = () => {} } = {}) {
+    if (allowedClients.length > 32) throw new Error('client_capacity');
     for (const id of allowedClients) if (new URL(id).protocol !== 'https:' || new URL(id).href !== id) throw new Error(`invalid_client_id:${id}`);
     Object.assign(this, { allowed: new Set(allowedClients), fetchImpl, wall, audit, time: stopwatch({ clock, wall }) });
   }
@@ -55,14 +58,22 @@ export class ClientRegistry {
   async #load(clientId, { force = false } = {}) {
     const hit = this.#cache.get(clientId);
     if (hit && !force && this.time.elapsed(hit.at) < CACHE_MS) return hit.client;
+    if (this.#loading.has(clientId)) return deadline(this.#loading.get(clientId), 5000);
+    if (this.#loading.size >= 4) throw new OAuthError('temporarily_unavailable', 'client_metadata_overload', 429);
+    const work = this.#fetchClient(clientId);
+    this.#loading.set(clientId, work);
+    work.finally(() => { if (this.#loading.get(clientId) === work) this.#loading.delete(clientId); }).catch(() => {});
+    return deadline(work, 5000);
+  }
+  async #fetchClient(clientId) {
     const doc = await fetchJson(this.fetchImpl, clientId);
     if (doc?.client_id !== clientId) throw new Error('cimd_client_id_mismatch');
     const redirectUris = Array.isArray(doc.redirect_uris) ? doc.redirect_uris.filter(u => typeof u === 'string' && new URL(u).protocol === 'https:') : [];
-    if (!redirectUris.length) throw new Error('cimd_redirect_uris_missing');
+    if (!redirectUris.length || redirectUris.length > 32) throw new Error('cimd_redirect_uris_missing');
     if (doc.token_endpoint_auth_method !== 'private_key_jwt') throw new Error('cimd_auth_method_unsupported');
     let jwks = doc.jwks;
     if (!jwks && typeof doc.jwks_uri === 'string') jwks = await fetchJson(this.fetchImpl, doc.jwks_uri);
-    if (!Array.isArray(jwks?.keys) || !jwks.keys.length) throw new Error('cimd_jwks_missing');
+    if (!Array.isArray(jwks?.keys) || !jwks.keys.length || jwks.keys.length > 16) throw new Error('cimd_jwks_missing');
     const client = { clientId, name: typeof doc.client_name === 'string' ? doc.client_name.slice(0, 120) : null, redirectUris, keys: jwks.keys };
     this.#cache.set(clientId, { client, at: this.time.mark() });
     this.audit({ event: 'client_loaded', clientId, keys: jwks.keys.length });
@@ -72,7 +83,7 @@ export class ClientRegistry {
   // Used by /authorize: the client must be allowlisted and its document valid.
   async resolve(clientId) {
     if (typeof clientId !== 'string' || !this.allowed.has(clientId)) throw new OAuthError('invalid_client', 'client_not_allowed', 401);
-    try { return await this.#load(clientId); } catch (e) { throw new OAuthError('invalid_client', `cimd_${e.message}`.replace(/^cimd_cimd_/, 'cimd_'), 401); }
+    try { return await this.#load(clientId); } catch (e) { if (e.status === 429) throw e; const reason = /^[a-z0-9_]{1,64}$/.test(e.message) ? e.message : 'fetch_failed'; throw new OAuthError('invalid_client', `cimd_${reason}`.replace(/^cimd_cimd_/, 'cimd_'), 401); }
   }
 
   // Token endpoint client authentication (RFC 7523 §3 / RFC 7521 §4.2).
@@ -106,10 +117,11 @@ export class ClientRegistry {
     if (claims.iat !== undefined && (claims.exp <= claims.iat || claims.exp - claims.iat > MAX_ASSERTION_LIFETIME_S)) throw new OAuthError('invalid_client', 'assertion_lifetime_too_long', 401);
     if (claims.iat !== undefined && claims.iat - SKEW_S > now) throw new OAuthError('invalid_client', 'assertion_issued_in_future', 401);
     if (claims.nbf !== undefined && claims.nbf - SKEW_S > now) throw new OAuthError('invalid_client', 'assertion_not_yet_valid', 401);
-    if (typeof claims.jti !== 'string' || !claims.jti) throw new OAuthError('invalid_client', 'assertion_jti_missing', 401);
+    if (typeof claims.jti !== 'string' || !claims.jti || claims.jti.length > 256) throw new OAuthError('invalid_client', 'assertion_jti_missing', 401);
     this.#pruneJti(now);
     const jtiKey = `${clientId} ${claims.jti}`;
     if (this.#seenJti.has(jtiKey)) throw new OAuthError('invalid_client', 'assertion_replayed', 401);
+    if (this.#seenJti.size >= 4096) throw new OAuthError('temporarily_unavailable', 'assertion_replay_capacity', 429);
     this.#seenJti.set(jtiKey, claims.exp + SKEW_S);
     // Evidence that the signature was verified, and with which key (public metadata only).
     this.audit({ event: 'client_authenticated', clientId, alg: header.alg, kid: typeof header.kid === 'string' ? header.kid.slice(0, 64).replace(/[^A-Za-z0-9._-]/g, '_') : null, lifetime: claims.iat !== undefined ? claims.exp - claims.iat : null });
