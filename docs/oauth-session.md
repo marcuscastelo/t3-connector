@@ -241,6 +241,21 @@ End to end with ChatGPT (to run, needs authorization): first access with passkey
 (short window) → Reconnect + passkey → read and write again, old tokens refused → local revoke and
 kill switch → connector restart. Record versions and events without secrets.
 
+The spike (ChatGPT web, 04/10/2026, verdict GO with caveat) already proved, with its own harness:
+the localhost passkey detour (button and 302), CIMD with `private_key_jwt` at code and refresh,
+early refresh with 60 s access tokens, and recovery of every dead-session case through Reconnect →
+Continue → passkey without recreating the connection, the interrupted call resuming without being
+resent. Server-side natural idle expiry passed. Pending for the product E2E (not covered by the
+spike):
+
+- tool resumption after Reconnect in the natural idle case;
+- `private_key_jwt` signature verification against ChatGPT's real JWKS (implemented and unit
+  tested here; the spike harness did not verify signatures);
+- write tools and ChatGPT's own write confirmation dialog;
+- platform authenticator (Touch ID) besides the Bitwarden passkey;
+- a real 1 h idle window, measured by a background process rather than an agent polling;
+- browser restart, concurrent conversations on the same connection, and mobile.
+
 ## 8. Decisions for Marcus (smallest choice made, recommendation)
 
 1. **Ingress.** Implemented: any HTTPS ingress in front of the public listener, issuer fixed by
