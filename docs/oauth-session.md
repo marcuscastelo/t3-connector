@@ -190,6 +190,12 @@ The caller is `oauth:<subject>|oauth-issuer:<issuer>` and remains stable across 
 The journal is `<oauth state>/write-journal.sqlite`, separate from the lease journal. Journal/audit
 failures and uncertain sends end every OAuth session. Missing/deleted projects or moved/deleted
 threads fail before invoking T3; rejected operations stay journaled without costing a reconnect.
+A reservation error before any durable commit leaves no record and has sent nothing; another
+attempt still fails closed while storage remains unavailable. If reservation committed before
+reporting failure, its `preparing` record dedupes after storage recovery and fresh sign-in without
+sending. Stored `rejected`/`uncertain` operations likewise never resend on reconnection. Dedupe
+requires a durable record; an absent reservation cannot remember an operation that never sent.
+
 Existing worktrees must have canonical paths equal to current project roots; unsupported worktree
 plans remain refused. Fork, merge-back and delegated actions validate all source/target references.
 

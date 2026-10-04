@@ -11,7 +11,8 @@
   messages in accepted HTTP JSON-RPC batches with distinct, deleted or empty inventories.
   Public and desktop consent derive write actions from offered connections and effective scopes;
   no-write deployments advertise no write capability, with configured idle/max-age. Failure
-  regressions assert exact invocation/journal states and no resend after fresh passkey sign-in.
+  regressions assert exact invocation/journal states and no resend of durable operations after
+  fresh passkey sign-in, including a reservation that committed before reporting failure.
 
 - Public issuer passkey login (HTTPS default, `T3_CONNECTOR_OAUTH_LOGIN_MODE=public`): independent
   issuer RP/storage sharing the canonical local subject, UV then explicit scope-aware consent,

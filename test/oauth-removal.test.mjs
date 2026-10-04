@@ -119,4 +119,3 @@ test('public storage: malformed durable revocation intent fails closed at boot',
     await assert.rejects(f.reopen(), /credential_storage_invalid/);
   }
 });
-
