@@ -9,7 +9,7 @@
 // prova que a thread não existe.
 
 import { Cancelada, ErroT3 } from './t3.mjs';
-import { assinatura, casaBusca, comparador, CursorInvalido, normalizar, paginar } from './paginacao.mjs';
+import { assinatura, casaBusca, comparador, CursorInvalido, normalizar, paginar, VERSAO_CURSOR } from './paginacao.mjs';
 
 export const PRAZO_AMBIENTE_MS = 4000;
 export const PRAZO_TOTAL_MS = 10000;
@@ -161,9 +161,12 @@ export async function buscarThreads(ambientes, args, {
 
 function mesmaConsultaOutraCobertura(cursor, consulta) {
   try {
-    const q = JSON.parse(JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')).q);
+    const dados = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+    if (dados?.v !== VERSAO_CURSOR || !Array.isArray(dados.k)) return false;
+    const q = JSON.parse(dados.q);
     const atual = JSON.parse(consulta);
-    return JSON.stringify(q.slice(0, -1)) === JSON.stringify(atual.slice(0, -1));
+    return JSON.stringify(q.slice(0, -1)) === JSON.stringify(atual.slice(0, -1))
+      && JSON.stringify(q.at(-1)) !== JSON.stringify(atual.at(-1));
   } catch {
     return false;
   }

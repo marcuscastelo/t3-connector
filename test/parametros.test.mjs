@@ -75,6 +75,15 @@ test('leitura: cursor de t3_threads filtrado por estado continua na página segu
   assert.match(antigo.content[0].text, /^invalid cursor/);
 });
 
+test('busca: cursor v1 da mesma busca é cursor inválido, não mudança de cobertura', async () => {
+  const c = await conectarMcp(ambientesFalsos());
+  const p1 = dados(await c.callTool({ name: 't3_buscar_threads', arguments: { threadId: 't-comum', limit: 1 } }));
+  const v1 = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(p1.nextCursor, 'base64url').toString()), v: 1 })).toString('base64url');
+  const r = await c.callTool({ name: 't3_buscar_threads', arguments: { threadId: 't-comum', limit: 1, cursor: v1 } });
+  assert.equal(r.isError, true);
+  assert.match(r.content[0].text, /^invalid cursor/);
+});
+
 test('escrita: `ambiente` ou falta de environment não chegam ao relay; leitura sob lease vai em inglês', async () => {
   const pedidos = [];
   const c = await ponte(async (req) => { pedidos.push(req); return req.op === 'read' ? { content: [{ type: 'text', text: '{}' }] } : { ambiente: { alias: req.ambiente }, state: 'completed' }; });

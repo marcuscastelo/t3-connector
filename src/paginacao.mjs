@@ -6,7 +6,7 @@
 // (environment + filtros) e a chave do último item. Usado em outra consulta, é recusado.
 
 // Versão do formato: 2 desde o contrato em inglês (ADR 0004); cursores anteriores são recusados.
-const VERSAO_CURSOR = 2;
+export const VERSAO_CURSOR = 2;
 
 export class CursorInvalido extends Error {
   constructor() {
