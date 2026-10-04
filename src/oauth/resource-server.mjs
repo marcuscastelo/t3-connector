@@ -1,20 +1,45 @@
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { ListToolsRequestSchema, CallToolRequestSchema, McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { OAuthError } from './token-store.mjs';
 import { json, readBody, redact } from './http.mjs';
 
 // MCP resource server over Streamable HTTP (stateless, JSON responses). Global OAuth: every
 // request, including initialize and tools/list, needs a valid access token of a live session.
 //
-// Activity: only an authorized tools/call that reaches its handler (schema already validated by the
-// SDK) counts, through authority.admit(). initialize, tools/list, ping, notifications and refresh
-// never extend the session. Read-only tools need connector:read; every other tool connector:write.
+// The public MCP server is a thin facade over inner catalogs reached through in-memory MCP pairs:
+//   - shared sources: a long-lived inner server (the existing read catalog) with one client;
+//   - per-request sources: registerTools(server, principal) on a fresh inner server, so handlers
+//     get the verified principal by closure, never from tool arguments.
+// The facade enforces, per tools/call: scope (read-only tools need connector:read, the others
+// connector:write), then admits activity (the only thing that restarts the idle window), forwards,
+// and re-checks the session before releasing the result. initialize, tools/list, ping and
+// notifications never count as activity.
 export function protectedResourceMetadata({ issuer, resource, scopes }) {
   return { resource, authorization_servers: [issuer], scopes_supported: scopes, bearer_methods_supported: ['header'], resource_name: 'T3 Connector' };
 }
 
-export function resourceServer({ issuer, resource, scopes, tokens, authority, registerTools, serverInfo = { name: 't3-connector', version: '0.0.0' }, allowedOrigins = ['https://chatgpt.com'], audit = () => {} }) {
-  const prmdUrl = `${new URL(resource).origin}/.well-known/oauth-protected-resource${new URL(resource).pathname}`;
+async function pair(server, name) {
+  const client = new Client({ name, version: '1.0.0' });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await server.connect(b); await client.connect(a);
+  return client;
+}
+
+export function sharedSource(server) {
+  let ready;
+  return { shared: true, client: () => (ready ??= pair(server, 'oauth-facade-shared')), close: async () => { if (ready) await (await ready).close(); } };
+}
+export function perRequestSource(registerTools, serverInfo = { name: 'oauth-inner', version: '1.0.0' }) {
+  return { shared: false, async open(principal) { const s = new McpServer(serverInfo); registerTools(s, principal); const client = await pair(s, 'oauth-facade'); return { client, close: () => client.close() }; } };
+}
+
+export function resourceServer({ issuer, resource, scopes, tokens, authority, sources, serverInfo = { name: 't3-connector', version: '0.0.0' }, allowedOrigins = ['https://chatgpt.com'], audit = () => {} }) {
+  const path = new URL(resource).pathname;
+  const prmdUrl = `${new URL(resource).origin}/.well-known/oauth-protected-resource${path}`;
   const prmd = protectedResourceMetadata({ issuer, resource, scopes });
 
   function unauthorized(res, e, rpc) {
@@ -24,33 +49,45 @@ export function resourceServer({ issuer, resource, scopes, tokens, authority, re
     return json(res, 401, { error: e ? 'invalid_token' : 'unauthorized' }, { 'WWW-Authenticate': parts.join(', ') });
   }
 
-  // Wraps registerTool so every handler re-checks the session, enforces scope and records activity.
-  function guardedServer(principal) {
-    const server = new McpServer(serverInfo);
-    const register = server.registerTool.bind(server);
-    server.registerTool = (name, config, handler) => {
-      const needed = config?.annotations?.readOnlyHint === true ? 'connector:read' : 'connector:write';
-      return register(name, config, async (...args) => {
-        if (!principal.scope.split(' ').includes(needed)) return { isError: true, content: [{ type: 'text', text: `insufficient_scope: ${needed}` }] };
-        try { authority.admit(principal.sid); } catch (e) {
-          audit({ event: 'tool_denied', tool: name, reason: e.message, sid: redact(principal.sid) });
-          return { isError: true, content: [{ type: 'text', text: 'session_expired: reconnect the connector' }] };
-        }
-        audit({ event: 'tool_call', tool: name, sid: redact(principal.sid) });
-        return handler(...args);
-      });
-    };
-    registerTools(server, principal);
-    return server;
+  async function facade(principal) {
+    const opened = [];
+    const clients = await Promise.all(sources.map(async src => {
+      if (src.shared) return src.client();
+      const o = await src.open(principal); opened.push(o); return o.client;
+    }));
+    const catalog = new Map();
+    for (const client of clients) {
+      const { tools } = await client.listTools();
+      for (const tool of tools) if (!catalog.has(tool.name)) catalog.set(tool.name, { tool, client });
+    }
+    const server = new Server(serverInfo, { capabilities: { tools: {} } });
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...catalog.values()].map(e => e.tool) }));
+    server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
+      const name = req.params.name, entry = catalog.get(name);
+      if (!entry) throw new McpError(ErrorCode.InvalidParams, `Tool ${name} not found`);
+      const needed = entry.tool.annotations?.readOnlyHint === true ? 'connector:read' : 'connector:write';
+      if (!principal.scope.split(' ').includes(needed)) return { isError: true, content: [{ type: 'text', text: `insufficient_scope: ${needed}` }] };
+      try { authority.admit(principal.sid); } catch (e) {
+        audit({ event: 'tool_denied', tool: name, reason: e.message, sid: redact(principal.sid) });
+        return { isError: true, content: [{ type: 'text', text: 'session_expired: reconnect the connector' }] };
+      }
+      audit({ event: 'tool_call', tool: name, sid: redact(principal.sid) });
+      const result = await entry.client.callTool({ name, arguments: req.params.arguments ?? {} }, undefined, { signal: extra.signal, timeout: 15 * 60 * 1000 });
+      // Session revoked or expired while the call ran: the fetched result does not leave.
+      try { authority.check(principal.sid); } catch (e) {
+        audit({ event: 'tool_result_withheld', tool: name, reason: e.message, sid: redact(principal.sid) });
+        return { isError: true, content: [{ type: 'text', text: 'session_expired: reconnect the connector' }] };
+      }
+      return result;
+    });
+    return { server, close: async () => { await server.close(); await Promise.all(opened.map(o => o.close())); } };
   }
 
   async function mcp(req, res) {
     const origin = req.headers.origin;
     if (origin !== undefined && !allowedOrigins.includes(origin)) return json(res, 403, { error: 'origin_not_allowed' });
-    if (req.method !== 'POST') {
-      // Stateless JSON mode: no standalone SSE stream and no session to delete.
-      return json(res, 405, { error: 'method_not_allowed' }, { Allow: 'POST' });
-    }
+    // Stateless JSON mode: no standalone SSE stream and no transport session to delete.
+    if (req.method !== 'POST') return json(res, 405, { error: 'method_not_allowed' }, { Allow: 'POST' });
     const bearer = /^Bearer ([A-Za-z0-9\-._~+/]+=*)$/.exec(req.headers.authorization ?? '')?.[1];
     let body;
     try { const raw = await readBody(req, 1024 * 1024); body = raw ? JSON.parse(raw) : undefined; } catch (e) { if (e.status === 413) return json(res, 413, { error: 'body_too_large' }); body = null; }
@@ -62,17 +99,17 @@ export function resourceServer({ issuer, resource, scopes, tokens, authority, re
     if (principal.resource !== resource) return unauthorized(res, new OAuthError('invalid_token', 'wrong_audience', 401), rpc);
     if (body === null) return json(res, 400, { jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null });
     audit({ event: 'mcp_request', rpc, sid: redact(principal.sid) });
-    const server = guardedServer(principal);
+    const f = await facade(principal);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-    res.on('close', () => { transport.close(); server.close(); });
-    await server.connect(transport);
+    res.on('close', () => { transport.close(); f.close(); });
+    await f.server.connect(transport);
     await transport.handleRequest(req, res, body);
   }
 
   return async function handle(req, res, url) {
     const p = url.pathname;
-    if (p === '/.well-known/oauth-protected-resource' || p === `/.well-known/oauth-protected-resource${new URL(resource).pathname}`) { json(res, 200, prmd); return true; }
-    if (p === new URL(resource).pathname) { await mcp(req, res); return true; }
+    if (p === '/.well-known/oauth-protected-resource' || p === `/.well-known/oauth-protected-resource${path}`) { json(res, 200, prmd); return true; }
+    if (p === path) { await mcp(req, res); return true; }
     return false;
   };
 }

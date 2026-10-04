@@ -15,17 +15,26 @@ const CHALLENGE_MS = 120 * 1000;
 const swaBundle = () => readFileSync(join(dirname(dirname(createRequire(import.meta.url).resolve('@simplewebauthn/browser'))), 'dist/bundle/index.umd.min.js'));
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
-export function controlPlane({ port, issuer, passkeys, subject, authority, tokens, transactions, killSwitch, enrollment, clock, wall, audit = () => {} }) {
+export function controlPlane({ port, issuer, passkeys, subject, authority, tokens, transactions, killSwitch, enrollment, grantProvider = null, clock, wall, audit = () => {} }) {
   const origin = `http://localhost:${port}`, host = `localhost:${port}`, time = stopwatch({ clock, wall });
   const challenges = new Map();
   let bundle;
   const newChallenge = key => { const c = randomBytes(32).toString('base64url'); challenges.set(key, { c, at: time.mark() }); return c; };
   const takeChallenge = key => { const v = challenges.get(key); challenges.delete(key); if (!v || time.elapsed(v.at) >= CHALLENGE_MS) throw new Error('challenge_expired'); return v.c; };
-  const txView = tx => ({ clientId: tx.clientId, clientName: tx.clientName, returnsTo: new URL(tx.redirectUri).host, scope: tx.scope, resource: tx.resource, mode: tx.mode });
+  // Write scope shown on the approval page and frozen into the session: the backend inventory taken
+  // once per sign-in, when the page first shows the transaction (same snapshot rule as the lease).
+  const grantsFor = tx => (tx.grants ??= grantProvider && tx.scope.split(' ').includes('connector:write')
+    ? grantProvider().catch(() => ({ grants: null, unavailable: [{ reason: 'inventory_failed' }] }))
+    : Promise.resolve({ grants: null, unavailable: [] }));
+  const grantSummary = g => ({
+    environments: (g.grants?.environments ?? []).map(e => ({ alias: e.alias, environmentId: e.environmentId, projects: e.projects.map(p => p.name), actions: e.actions.length })),
+    unavailable: g.unavailable,
+  });
+  const txView = async tx => ({ clientId: tx.clientId, clientName: tx.clientName, returnsTo: new URL(tx.redirectUri).host, scope: tx.scope, resource: tx.resource, mode: tx.mode, writes: grantSummary(await grantsFor(tx)) });
 
   async function api(p, d) {
     switch (p) {
-      case '/api/login/view': { const tx = transactions.find(d); audit({ event: 'local_login_view', tx: redact(tx.id), via: d.handoff ? 'handoff' : 'oob' }); return txView(tx); }
+      case '/api/login/view': { const tx = transactions.find(d); audit({ event: 'local_login_view', tx: redact(tx.id), via: d.handoff ? 'handoff' : 'oob' }); return await txView(tx); }
       case '/api/login/options': {
         if (authority.killed) throw new Error('kill_switch');
         const tx = transactions.find(d);
@@ -35,8 +44,9 @@ export function controlPlane({ port, issuer, passkeys, subject, authority, token
         if (authority.killed) throw new Error('kill_switch');
         const tx = transactions.find(d);
         const challenge = takeChallenge(`login:${tx.id}`);
+        const { grants } = await grantsFor(tx);
         const credentialId = await passkeys.verify({ response: d.response, challenge, origin });
-        const resume = transactions.approve(tx, { sub: subject, credentialId });
+        const resume = transactions.approve(tx, { sub: subject, credentialId, grants });
         audit({ event: 'local_login_approved', tx: redact(tx.id), credential: redact(credentialId), via: d.handoff ? 'handoff' : 'oob' });
         return { resume: `${issuer}/resume?h=${encodeURIComponent(resume)}`, via: d.handoff ? 'handoff' : 'oob' };
       }
@@ -114,7 +124,7 @@ const loginPage = n => page('Approve sign-in', `<h1>Approve sign-in</h1>
 <script nonce="${n}">${api}
 let ref=null;const frag=new URLSearchParams(location.hash.slice(1)).get('handoff');history.replaceState(null,'',location.pathname);
 function row(k,v){const dt=document.createElement('dt');dt.textContent=k;const dd=document.createElement('dd');dd.textContent=v;$('view').append(dt,dd);}
-async function show(r){ref=r;const v=await api('/api/login/view',r);$('view').textContent='';row('Client',(v.clientName?v.clientName+' ':'')+'('+v.clientId+')');row('Returns to',v.returnsTo);row('Access',v.scope);row('Resource',v.resource);$('approve').hidden=false;$('code').hidden=true;say('');}
+async function show(r){ref=r;const v=await api('/api/login/view',r);$('view').textContent='';row('Client',(v.clientName?v.clientName+' ':'')+'('+v.clientId+')');row('Returns to',v.returnsTo);row('Access',v.scope);row('Resource',v.resource);for(const e of v.writes.environments)row('Writes: '+e.alias,e.projects.join(', ')+' ('+e.actions+' actions, full-access)');for(const u of v.writes.unavailable)row('Unavailable',(u.alias||'')+' '+u.reason);$('approve').hidden=false;$('code').hidden=true;say('');}
 $('find').onclick=()=>show({oob:$('oob').value}).catch(e=>say('Error: '+e.message));
 $('approve').onclick=async()=>{try{say('Waiting for passkey…');const o=await api('/api/login/options',ref);const response=await SimpleWebAuthnBrowser.startAuthentication({optionsJSON:o});const v=await api('/api/login/verify',{...ref,response});$('approve').hidden=true;
 if(v.via==='oob'){say('Approved. Go back to the sign-in page; it continues by itself. You can close this tab.');}else{say('Approved, returning…');location.replace(v.resume);}}catch(e){say('Error: '+e.message);}};

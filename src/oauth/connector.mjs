@@ -12,13 +12,16 @@ import { resourceServer } from './resource-server.mjs';
 import { controlPlane, enrollmentTicket } from './control-plane.mjs';
 import { json, wrap } from './http.mjs';
 
+// `tools({ authority, issuer, stateDir, audit })` returns { sources, grantProvider?, close? }: the
+// MCP catalogs behind the resource server and, for writes, the inventory frozen at sign-in.
+//
 // Composes the OAuth session profile: public listener (AS + MCP RS, meant to sit behind an HTTPS
 // ingress) and the local control-plane (loopback only). Independent of the stdio connectors and of
 // the passkey lease gate: separate state directory, separate passkeys, separate port.
 //
 // Persistence: passkeys (public keys), the subject id and the kill switch survive a restart.
 // Sessions and tokens live in memory, so a restart ends every session (new sign-in + passkey).
-export function createOAuthConnector({ config, registerTools, serverInfo, fetch, clock, wall, log = line => process.stderr.write(line + '\n') }) {
+export function createOAuthConnector({ config, tools, serverInfo, fetch, clock, wall, log = line => process.stderr.write(line + '\n') }) {
   const { issuer, publicPort, localPort, stateDir } = config;
   const resource = `${issuer}/mcp`;
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
@@ -50,9 +53,12 @@ export function createOAuthConnector({ config, registerTools, serverInfo, fetch,
   const transactions = new LoginTransactions({ clock, wall });
   const enrollment = enrollmentTicket({ clock, wall });
 
+  // Tool catalogs need the authority (writes are authorized by it), so they are built here.
+  const catalog = tools({ authority, issuer, stateDir, audit });
+  const { sources } = catalog, grantProvider = catalog.grantProvider ?? null;
   const as = authorizationServer({ issuer, resource, localOrigin, loginMode: config.loginMode, authority, tokens, clients, transactions, audit });
-  const rs = resourceServer({ issuer, resource, scopes: SCOPES, tokens, authority, registerTools, serverInfo, allowedOrigins: config.allowedOrigins, audit });
-  const local = controlPlane({ port: localPort, issuer, passkeys, subject: stored.subject, authority, tokens, transactions, killSwitch, enrollment, clock, wall, audit });
+  const rs = resourceServer({ issuer, resource, scopes: SCOPES, tokens, authority, sources, serverInfo, allowedOrigins: config.allowedOrigins, audit });
+  const local = controlPlane({ port: localPort, issuer, passkeys, subject: stored.subject, authority, tokens, transactions, killSwitch, enrollment, grantProvider, clock, wall, audit });
   const publicHost = new URL(issuer).host;
 
   async function publicHandler(req, res) {
@@ -80,6 +86,6 @@ export function createOAuthConnector({ config, registerTools, serverInfo, fetch,
       audit({ event: 'started', issuer, resource, localOrigin, credentials: credentials.size, killed: authority.killed });
       return { publicPort: pub.address().port, localPort: loc.address().port };
     },
-    async close() { clearInterval(sweeper); await Promise.all(servers.map(s => new Promise(r => { s.closeAllConnections?.(); s.close(() => r()); }))); },
+    async close() { clearInterval(sweeper); await Promise.all(sources.map(src => src.close?.())); catalog.close?.(); await Promise.all(servers.map(s => new Promise(r => { s.closeAllConnections?.(); s.close(() => r()); }))); },
   };
 }

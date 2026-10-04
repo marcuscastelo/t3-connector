@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 // clock that stops during suspend cannot rejuvenate a session, and a wall clock moved backwards
 // cannot either. A terminal session never becomes active again.
 export const IDLE_MS = 60 * 60 * 1000;
+const deepFreeze = o => { if (o && typeof o === 'object') { for (const v of Object.values(o)) deepFreeze(v); Object.freeze(o); } return o; };
 
 export function stopwatch({ clock = () => performance.now(), wall = () => Date.now() } = {}) {
   const mark = () => ({ mono: clock(), wall: wall() });
@@ -29,11 +30,13 @@ export class SessionAuthority {
   onTerminal(listener) { this.#listeners.add(listener); return () => this.#listeners.delete(listener); }
 
   // A session starts right after a verified passkey ceremony; that instant is its first activity.
-  create({ sub, clientId, credentialId, scope, resource }) {
+  // `grants` is the write scope frozen at consent time (environments, projects, actions); refresh
+  // never changes it.
+  create({ sub, clientId, credentialId, scope, resource, grants = null }) {
     if (this.#killed) throw new Error('kill_switch');
     for (const [k, v] of Object.entries({ sub, clientId, credentialId, scope, resource })) if (typeof v !== 'string' || !v) throw new Error(`invalid_${k}`);
     const sid = randomBytes(18).toString('base64url'), at = this.time.mark();
-    this.#sessions.set(sid, { sid, sub, clientId, credentialId, scope, resource, created: at, lastActivity: at, terminal: null });
+    this.#sessions.set(sid, { sid, sub, clientId, credentialId, scope, resource, grants: grants && deepFreeze(structuredClone(grants)), created: at, lastActivity: at, terminal: null });
     this.audit({ event: 'session_created', sid, clientId, credentialId });
     return sid;
   }
@@ -99,5 +102,5 @@ export class SessionAuthority {
   // Drops terminal sessions; their tokens are already purged through onTerminal.
   sweep() { for (const s of [...this.#sessions.values()]) { try { this.#live(s.sid); } catch { this.#sessions.delete(s.sid); } } }
 
-  #view(s) { return { sid: s.sid, sub: s.sub, clientId: s.clientId, credentialId: s.credentialId, scope: s.scope, resource: s.resource }; }
+  #view(s) { return { sid: s.sid, sub: s.sub, clientId: s.clientId, credentialId: s.credentialId, scope: s.scope, resource: s.resource, grants: s.grants }; }
 }

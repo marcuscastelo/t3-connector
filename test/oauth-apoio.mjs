@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { createOAuthConnector } from '../src/oauth/connector.mjs';
 import { rehearsalTools } from '../src/oauth/rehearsal-tools.mjs';
+import { perRequestSource } from '../src/oauth/resource-server.mjs';
 import { DEFAULTS } from '../src/oauth/config.mjs';
 import { authenticator } from './escrita-fixtures.mjs';
 import { clientKeys, cimdFetch, CLIENT } from './oauth-fixtures.mjs';
@@ -30,14 +31,14 @@ export function http(method, url, { headers = {}, body, host } = {}) {
   });
 }
 
-export async function startConnector({ config = {}, loginMode = 'button', registerTools = rehearsalTools(), enroll = true } = {}) {
+export async function startConnector({ config = {}, loginMode = 'button', tools = () => ({ sources: [perRequestSource(rehearsalTools())] }), enroll = true } = {}) {
   let mono = 0, wallMs = Date.now();
   const clock = () => mono, wall = () => wallMs;
   const [publicPort, localPort] = [await freePort(), await freePort()];
   const keys = clientKeys('ES256');
   const doc = { client_id: CLIENT, client_name: 'Fake client', redirect_uris: ['https://client.example/cb'], token_endpoint_auth_method: 'private_key_jwt', jwks: { keys: [keys.jwk] } };
   const cfg = { ...DEFAULTS, issuer: `http://localhost:${publicPort}`, publicPort, localPort, stateDir: mkdtempSync(join(tmpdir(), 't3c-oauth-')), clients: [CLIENT], loginMode, ...config };
-  const connector = createOAuthConnector({ config: cfg, registerTools, fetch: cimdFetch({ [CLIENT]: doc }), clock, wall, serverInfo: { name: 't3-connector-test', version: '0.0.0' } });
+  const connector = createOAuthConnector({ config: cfg, tools, fetch: cimdFetch({ [CLIENT]: doc }), clock, wall, serverInfo: { name: 't3-connector-test', version: '0.0.0' } });
   await connector.listen();
   const issuer = cfg.issuer, local = `http://localhost:${localPort}`;
   const passkey = authenticator({ rpID: 'localhost' });

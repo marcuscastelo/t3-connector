@@ -94,7 +94,7 @@ ${loginMode === 'button' ? `<p>Approve this sign-in with your passkey on the loc
     }
     const clear = { 'Set-Cookie': setCookie('', 0) };
     let sid;
-    try { sid = authority.create({ sub: tx.approved.sub, clientId: tx.clientId, credentialId: tx.approved.credentialId, scope: tx.scope, resource: tx.resource }); } catch (e) {
+    try { sid = authority.create({ sub: tx.approved.sub, clientId: tx.clientId, credentialId: tx.approved.credentialId, scope: tx.scope, resource: tx.resource, grants: tx.approved.grants ?? null }); } catch (e) {
       audit({ event: 'resume_rejected', reason: e.message });
       return redirect(res, callback(tx.redirectUri, { error: 'access_denied', error_description: e.message, state: tx.state }), clear);
     }

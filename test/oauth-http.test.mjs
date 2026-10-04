@@ -99,13 +99,14 @@ test('token endpoint: private_key_jwt required, wrong verifier, code reuse kills
   assert.equal(json.data.error, 'invalid_request');
 });
 
-test('wrong PKCE verifier is refused', async t => {
+test('wrong PKCE verifier is refused and burns the code', async t => {
   const c = await startConnector(); t.after(c.close);
-  const s = await c.signIn();
-  // signIn already exchanged the code; run the flow manually with a bad verifier
-  const r = await c.token({ grant_type: 'authorization_code', code: 'nope', code_verifier: 'x'.repeat(43) });
-  assert.equal(r.data.error, 'invalid_grant');
-  assert.ok(s.tokens.access_token);
+  const sid = c.connector.authority.create({ sub: c.connector.subject, clientId: CLIENT, credentialId: 'k', scope: 'connector:read connector:write', resource: `${c.issuer}/mcp` });
+  const code = c.connector.tokens.issueCode({ sid, clientId: CLIENT, redirectUri: 'https://client.example/cb', codeChallenge: 'B'.repeat(43), resource: `${c.issuer}/mcp`, scope: 'connector:read' });
+  const bad = await c.token({ grant_type: 'authorization_code', code, code_verifier: 'x'.repeat(43) });
+  assert.equal(bad.data.error, 'invalid_grant');
+  const again = await c.token({ grant_type: 'authorization_code', code, code_verifier: 'x'.repeat(43) });
+  assert.equal(again.data.error, 'invalid_grant');
 });
 
 test('silent refresh rotation keeps read+write working while tools are called; refresh never extends idle', async t => {
