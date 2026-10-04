@@ -124,7 +124,7 @@ Consequences built into the defaults:
   Reconnect plus a new passkey, which is the intended behaviour after idle. This is a deployment
   condition, not a server guarantee: the server always rejects an expired access token, so if a
   client presents one (missed or late refresh, long delay between refresh and request) it also
-  gets a 401. Proactive refresh by the real client must be confirmed in the end-to-end rehearsal.
+  gets a 401. The ChatGPT E2E (section 7) confirmed proactive refresh right before each tool call.
 - Revoking only access tokens (not exposed in the product UI) would therefore cost a Reconnect too.
 - **Do not raise the access-token lifetime for ChatGPT.** With a long token it stops refreshing
   early and calls with the token it has; when that token expires the call gets a 401, which costs
@@ -282,31 +282,27 @@ operationId, one send) and an outstanding send while the ingress dies (uncertain
 resend, reconcilable after a new sign-in). It is not the OpenAI tunnel-client and says nothing about
 client-side retries.
 
-End to end with ChatGPT (to run, needs authorization): first access with passkey → read and write
-→ at least 10 minutes of refresh rotations without a new passkey while calling tools → idle expiry
-(short window) → Reconnect + passkey → read and write again, old tokens refused → local revoke and
-kill switch → connector restart. Record versions and events without secrets.
+End to end with ChatGPT web, 04/10/2026, through a quick tunnel (rehearsal tools, then `serve`
+with writes limited to one scratch project): **passed** — passkey enrollment and first access in 3
+apps; `private_key_jwt` with ChatGPT's real JWKS (RS256) at code and every refresh; proactive refresh
+and rotation with no reuse; real read; real launch/title/archive with ChatGPT's confirmation dialog
+(only for `destructiveHint=true`), sandbox restored; activity counted only on tool calls; natural
+1 h idle expiry measured by a background process; Reconnect → passkey → tool after idle, old refresh
+refused, call not resent; two concurrent chats on one session (2.5 s apart) with sequential refresh.
+Still not covered: Touch ID (Bitwarden served every ceremony), browser restart, mobile, ChatGPT's own
+retries, and the production path (the OpenAI Secure MCP Tunnel of section 5.1 with a stable
+authorization server hostname). A quick tunnel run proves the OAuth flow, not that path.
 
-The spike (ChatGPT web, 04/10/2026, verdict GO with caveat) already proved, with its own harness:
+The spike (ChatGPT web, 04/10/2026, verdict GO with caveat) had already proved, with its own harness:
 the localhost passkey detour (button and 302), CIMD with `private_key_jwt` at code and refresh,
 early refresh with 60 s access tokens, and recovery of every dead-session case through Reconnect →
-Continue → passkey without recreating the connection, the interrupted call resuming without being
-resent. Server-side natural idle expiry passed. Pending for the product E2E (not covered by the
-spike):
-
-- tool resumption after Reconnect in the natural idle case;
-- `private_key_jwt` signature verification against ChatGPT's real JWKS (implemented and unit
-  tested here; the spike harness did not verify signatures);
-- write tools and ChatGPT's own write confirmation dialog;
-- platform authenticator (Touch ID) besides the Bitwarden passkey;
-- a real 1 h idle window, measured by a background process rather than an agent polling;
-- browser restart, concurrent conversations on the same connection, and mobile.
+Continue → passkey without recreating the connection.
 
 ## 8. Decisions for Marcus (smallest choice made, recommendation)
 
-1. **Ingress.** Implemented: any HTTPS ingress in front of the public listener, issuer fixed by
-   configuration. Recommendation: a stable hostname (named tunnel or reverse proxy on a domain you
-   control). A quick tunnel changes hostname per run, which changes the issuer and forces a new
+1. **Ingress.** Decided (04/10/2026): MCP through the OpenAI Secure MCP Tunnel (tunnel mode,
+   section 5.1, same transport as the stdio Ponte) and only the authorization server on a stable
+   HTTPS hostname. A quick tunnel changes hostname per run, which changes the issuer and forces a new
    connection each time; fine for rehearsal only.
 2. **Persistence across restart.** Implemented: restart ends every session (new passkey sign-in).
    Recommendation: keep it for the first version; persisting sessions needs durable token storage,
