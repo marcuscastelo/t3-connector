@@ -323,6 +323,7 @@ Guarantees:
 | `T3_CONNECTOR_OAUTH_VERBOSE` | unset | `1` echoes the redacted event log to stderr. |
 | `T3_CONNECTOR_OAUTH_RESOURCE` | unset | Tunnel mode (5.1): the exact canonical MCP resource named by the tunnel service. Exact HTTPS URL with a path; compared verbatim. |
 | `T3_CONNECTOR_OAUTH_TUNNEL_PORT` | unset | Tunnel mode (5.1): loopback listener for the tunnel client. Set together with `T3_CONNECTOR_OAUTH_RESOURCE`. |
+| `T3_CONNECTOR_OAUTH_ADVERTISED_RESOURCE` | unset | Tunnel mode only: exact https URL advertised in the local protected resource metadata instead of `T3_CONNECTOR_OAUTH_RESOURCE`, when the accepted resource (the hosted tunnel endpoint) is not reachable from the tunnel client. Never accepted for authorization or tokens. |
 
 The event log `<state>/events.jsonl` does not receive tokens, codes, cookies, handles or `state`.
 
@@ -340,8 +341,10 @@ With `T3_CONNECTOR_OAUTH_RESOURCE` and `T3_CONNECTOR_OAUTH_TUNNEL_PORT` set:
   `/token`, `/revoke`, public ceremonies/consent/vendor and capability-gated public enrollment); `/mcp` and the protected resource metadata answer 404 there;
 - the tunnel listener (`127.0.0.1:<tunnel port>`, Host `127.0.0.1:<port>` or `localhost:<port>`
   only, 421 otherwise) serves `/mcp` and its metadata, never the authorization server;
-- the metadata names the configured resource and the issuer as authorization server; `/authorize`
-  and `/token` accept only that exact resource, and tokens are bound to it;
+- the metadata names the issuer as authorization server and, as `resource`, the configured
+  resource R — or the advertised value A when `T3_CONNECTOR_OAUTH_ADVERTISED_RESOURCE` is set (see
+  below); `/authorize`, `/token`, refresh and the resource server accept only R, and tokens are
+  bound to it;
 - an `/authorize` with another resource is refused (`invalid_target`) and logged as
   `authorize_unknown_resource` with a hash of the requested value only.
 
@@ -361,6 +364,17 @@ configured.
 Read it from the tunnel side (the tunnel client's logged discovery URLs and status UI, or the
 rewritten metadata). Request values are not a source, except for the opt-in diagnostic below, whose
 candidate must be corroborated; restart with the value set.
+
+Observed in production (tunnel-client 0.0.14): the hosted resource ChatGPT sends is an internal
+OpenAI gateway URL (`https://tunnel-service.gateway.<…>.internal.api.openai.org/v1/mcp/<tunnel_id>`)
+that tunnel-client cannot reach; advertising it locally makes tunnel-client's own startup discovery
+time out on that origin and never register the discovery target. Configure it as
+`T3_CONNECTOR_OAUTH_RESOURCE` (R) and advertise a reachable exact URL with
+`T3_CONNECTOR_OAUTH_ADVERTISED_RESOURCE` (A). This depends on the hosted tunnel rewriting both the
+metadata `resource` and the challenge's `resource_metadata` before any external client reads them:
+a client that saw A directly could not authenticate, because A is never accepted. The internal
+hostname and this workaround are observed behaviour of the current service, not a public API
+guarantee; keep the two values separate (no alias acceptance).
 
 Tunnel client profile (`server_urls`, channel `main`): `http://127.0.0.1:<tunnel port>/mcp`.
 

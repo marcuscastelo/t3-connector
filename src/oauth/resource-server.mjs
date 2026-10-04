@@ -58,12 +58,16 @@ export function perInvocationSource(createServer) {
 
 // `route` is the local path that serves MCP; by default the resource's own path. Behind a tunnel the
 // canonical resource lives on the tunnel service and the local route stays /mcp. Metadata is served
-// at the RFC 9728 well-known path for the route (and the root alias); the challenge points at the
-// well-known URL of the canonical resource.
-export function resourceServer({ issuer, resource, route, scopes, tokens, authority, sources, serverInfo = { name: 't3-connector', version: '0.0.0' }, allowedOrigins = ['https://chatgpt.com'], audit = () => {} }) {
+// at the RFC 9728 well-known path for the route (and the root alias); metadata and challenge name
+// the advertised resource when one is set (tunnel mode), otherwise the canonical resource, while
+// tokens are accepted only for the canonical resource.
+export function resourceServer({ issuer, resource, advertisedResource = null, route, scopes, tokens, authority, sources, serverInfo = { name: 't3-connector', version: '0.0.0' }, allowedOrigins = ['https://chatgpt.com'], audit = () => {} }) {
   const path = route ?? new URL(resource).pathname;
-  const prmdUrl = `${new URL(resource).origin}/.well-known/oauth-protected-resource${new URL(resource).pathname}`;
-  const prmd = protectedResourceMetadata({ issuer, resource, scopes });
+  // Metadata and challenge name the advertised resource when one is configured (tunnel mode); tokens
+  // are still checked against `resource` only.
+  const shown = advertisedResource ?? resource;
+  const prmdUrl = `${new URL(shown).origin}/.well-known/oauth-protected-resource${new URL(shown).pathname}`;
+  const prmd = protectedResourceMetadata({ issuer, resource: shown, scopes });
 
   function unauthorized(res, e, rpc) {
     const parts = [`Bearer resource_metadata="${prmdUrl}"`, `scope="${scopes.join(' ')}"`];
