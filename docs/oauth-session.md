@@ -22,7 +22,7 @@ immediate.
 | Login transactions | `src/oauth/transactions.mjs` | Server-side state of each sign-in. The browser only carries opaque handles; the resume handle exists only after a verified passkey and still needs the transaction cookie. 5 min TTL. |
 | Control plane | `src/oauth/control-plane.mjs` | Loopback only, Host `localhost:<port>`, exact Origin and JSON on every POST. `/login` (passkey approval, shows client, callback host, scopes and the write scope), `/enroll` (ticket printed on the terminal, single use, 15 min), `/` (sessions, revoke, revoke all, kill switch; releasing the kill switch needs a passkey). |
 | Resource server | `src/oauth/resource-server.mjs` | Streamable HTTP, stateless, JSON responses. Global OAuth (initialize and tools/list too). Facade over inner catalogs: scope per tool, activity admitted per `tools/call`, session re-checked before a result leaves. |
-| T3 catalog | `src/oauth/t3-tools.mjs`, `src/oauth/session-writes.mjs` | The eight existing read tools (read config) and, when configured, the write catalog without `leaseId`, authorized by the session. |
+| T3 catalog | `src/oauth/t3-tools.mjs`, `src/oauth/session-writes.mjs` | The eight existing read tools and optional write catalog without `leaseId`. OAuth/all authorizes live inventory in consented environments; restricted mode retains the read ACL and write snapshot. |
 | Rehearsal tools | `src/oauth/rehearsal-tools.mjs` | `rehearsal_now`, `rehearsal_echo`, `rehearsal_notes` (read) and `rehearsal_note_write` (write, in memory). No backend. |
 | Entry point | `bin/t3-connector-oauth.mjs` | `serve`, `rehearsal`, `--version`. |
 
@@ -44,8 +44,12 @@ Two listeners:
 4. Login mode `button` (default): page with a top-level link to
    `http://localhost:7435/login#handoff=…`. Mode `302`: immediate redirect there. Mode `oob`: the page
    shows a code to type into the local page. All modes also show the code and poll, as a fallback.
-5. The local page shows the client, callback host, scopes and the write scope (backend inventory
-   taken now and frozen into the sign-in), then asks for the passkey with
+5. The local page shows the client, callback host, effective scopes and environment consent. In
+   `all` mode it explains read and write access to every current and future project of the configured
+   environments (Polaris and Sirius in this deployment), automatic inclusion of new projects,
+   one-hour idle expiry and local revocation. Read-only sessions also show this consent; their
+   effective OAuth scopes still forbid writes. Restricted mode shows the write inventory snapshot.
+   It then asks for the passkey with
    `userVerification: required`, RP ID `localhost`, origin `http://localhost:7435`.
 6. On success the browser returns to `/resume` on the public origin. With the transaction cookie the
    AS creates the session, issues a code and redirects to the client callback with `code`, the
@@ -71,29 +75,52 @@ Two listeners:
 
 ### Writes
 
-`session-writes.mjs` reuses the existing `Dispatcher` unchanged (journal reservation before any
-await, target and workspace preflight, `uncertain` before sending, no resend of uncertain
-operations, final synchronous authorization immediately before the single outbound call). Only its
-structural `gate` is replaced by `SessionWriteGate`, keyed by session id:
+`T3_CONNECTOR_OAUTH_PROJECTS=all` selects dynamic authorization for both reads and writes.
+The session freezes the policy, configured environment aliases, environment IDs, logical
+`destination` values and action catalog, **without project IDs**. Refresh never changes this
+consent. A configured host can be offline at sign-in and become usable later; an empty inventory
+is valid. New environments or changed identities/destinations require new consent.
 
-- grants: the inventory frozen when the user approved the sign-in (environments unavailable then get
-  no grant; projects created later need a new sign-in);
-- caller: `oauth:<subject>|oauth-issuer:<issuer>`, built by the new
-  `identidadeSessaoOAuth()` in `src/escrita/identidade.mjs` (additive export). It is stable across
-  refresh and sign-ins, so the dedupe key survives them;
-- journal: `<oauth state>/write-journal.sqlite`, separate from the lease journal;
-- fail closed: when the Dispatcher closes its gate (journal failure, uncertain send), every OAuth
-  session ends;
-- targets outside the frozen grant are refused before the Dispatcher runs, so a model asking for an
-  unapproved project gets `scope_denied` without ending the session.
-- reconciliation: a write refused during preflight, before its target is recorded (e.g.
-  `thread_not_found`, workspace refusals), is journaled `rejected` without a target.
-  `t3_reconciliar_escrita` answers exactly that record as `{state: "rejected",
-  observation: null, sent: false}` after the same authority checks as a dispatch (active session of
-  the same caller, environment grant, action) and a re-check after its audit; an audit failure fails
-  closed. Every other record is reconciled by the Dispatcher unchanged (the lease path is not
-  touched), including a write refused by the final authorization check after its target was
-  recorded, which stays `uncertain` as before.
+The OAuth-only read loader validates the same endpoint identities, transports and token paths,
+but ignores `allowedProjects` in this mode. It never edits the shared config. Read and write
+configurations must contain exactly the same aliases, environment IDs and logical destinations;
+boot fails on divergence. Read-only deployments need no write config. Reads still use read-only
+backend credentials. The eight tool names and schemas remain unchanged. Each call owns its live
+scope, filters deleted projects, and verifies thread membership in the chosen host before bounded
+thread reads or subscriptions. Search preserves partial failures and pagination. No ID lookup
+falls back to another host.
+
+Writes use an operation-local `SessionWriteGate` and the existing `Dispatcher` with optional
+OAuth preflight hooks. Legacy callers do not use these hooks. Ordering remains:
+
+1. Check session, caller, consented environment and action.
+2. Atomically reserve the journal key, or dedupe/conflict without sending or fetching inventory.
+3. Fetch a verified live shell and resolve every thread reference and project root from it.
+4. Check workspace and prepare the connection.
+5. Revalidate live ownership and roots after preparation and any asynchronous canonicalization.
+6. Record `uncertain`, check authority synchronously, audit and recheck, invoke once, record receipt.
+
+The caller is `oauth:<subject>|oauth-issuer:<issuer>` and remains stable across sign-ins and refresh.
+The journal is `<oauth state>/write-journal.sqlite`, separate from the lease journal. Journal/audit
+failures and uncertain sends end every OAuth session. Missing/deleted projects or moved/deleted
+threads fail before invoking T3; rejected operations stay journaled without costing a reconnect.
+Existing worktrees must have canonical paths equal to current project roots; unsupported worktree
+plans remain refused. Fork, merge-back and delegated actions validate all source/target references.
+
+Reconciliation authorizes the current session/caller/environment/action and the caller-bound
+journal record, without requiring a historical project's continued existence. It never repeats a
+mutation. A targetless rejected record returns `{state: "rejected", observation: null, sent: false}`;
+other targetless states remain refused. Authority is rechecked after observation and audit.
+
+There is an unavoidable race between the last live GET and the remote mutation RPC. Stronger
+atomic ownership guarantees require a backend revision/predicate checked by that RPC. The
+connector revalidation does not claim atomicity with the backend.
+
+With `T3_CONNECTOR_OAUTH_PROJECTS` unset (or `restricted`), the sandbox-compatible legacy mode
+keeps the read `allowedProjects` ACL and the write inventory frozen at sign-in. Its optional
+`T3_CONNECTOR_OAUTH_WRITE_PROJECTS=alias:projectId,…` narrows that snapshot. It does not provide
+future-project access. Setting this variable with `all` is a boot error. The stdio ACL validator,
+Ponte gate, lease TTL and `grantFromInventory` snapshot remain unchanged.
 
 ## 2. What ChatGPT does, and why the token lifetimes are what they are
 
@@ -164,12 +191,12 @@ Guarantees:
 | Stolen refresh token | `private_key_jwt` required, rotation, reuse ends the session, session check on refresh | A thief who also holds the client key can refresh; first use of a stolen token can win the race against the legitimate client. |
 | Forged client / client impersonation | CIMD allowlist, JWKS signature check, `aud`, short lifetime, `jti` replay cache | Compromise of the client's signing key (OpenAI side) is out of our reach. |
 | Authorization code interception | PKCE S256, single use, 60 s, exact callback, client binding; reuse ends the session | — |
-| Login CSRF / transaction swap / phishing link | Transaction cookie bound to the browser that started `/authorize`, handoff and resume handles single use, approval page shows client, callback host and write scope | A user tricked into approving an attacker-initiated sign-in still grants access; the page is the defence. |
+| Login CSRF / transaction swap / phishing link | Transaction cookie bound to the browser that started `/authorize`, handoff and resume handles single use, approval page shows client, callback host, scopes and environment policy | A user tricked into approving an attacker-initiated sign-in still grants access; the page is the defence. |
 | Mix-up | `iss` on every callback, fixed issuer | — |
 | Cross-site driving of the control plane | Loopback only, exact Host (DNS rebinding), exact Origin and JSON on every POST, CSP, no framing | A local process can call the control plane directly: it can list, revoke and kill (DoS), not approve sign-ins (needs a passkey) nor release the kill switch. |
 | Malicious enrollment | Ticket printed only on the starting terminal, single use, 15 min | Anyone with terminal access to the host can enroll. |
 | Passkey assertion replay | Challenge per transaction, 120 s, consumed before verification, counter check, UV required | Synced passkeys are not device-bound. |
-| Prompt injection driving writes | Frozen grants, typed actions only, journal/dedupe, no resend of uncertain writes | Within an active session any approved action can be invoked without another passkey; that is the accepted trade-off of the UX. |
+| Prompt injection driving writes | Consented environment boundary, live inventory/ownership, typed actions, workspace checks, journal/dedupe, no resend of uncertain writes | In all mode injection or a compromised bearer can reach every current and future project of the consented hosts during the active session. Human action restrictions are policy; the passkey is not per-action approval. |
 | Activity forgery | Only `tools/call` counts | Any client with a valid token can keep the session alive with harmless calls; the connector cannot see human presence. |
 | Connector host compromise | State directory 0700, files 0600, HMAC-only token storage | Root or same-user malware controls everything (as with the lease). |
 | Ingress / tunnel | TLS at the ingress; no trust in forwarded headers | The ingress sees bearer tokens and data. |
@@ -193,7 +220,8 @@ Guarantees:
 | `T3_CONNECTOR_OAUTH_CLIENTS` | `https://chatgpt.com/oauth/client.json` | Comma-separated allowlist of CIMD client ids. |
 | `T3_CONNECTOR_OAUTH_ALLOWED_ORIGINS` | `https://chatgpt.com` | Browser `Origin` values accepted on `/mcp` (requests without `Origin` are accepted). |
 | `T3_CONNECTOR_OAUTH_WRITE_CONFIG` | unset | Path to a write config (`write.json` format). Unset: no write tools. |
-| `T3_CONNECTOR_OAUTH_WRITE_PROJECTS` | unset (full inventory) | `alias:projectId,…`: only these projects enter the write grant shown and frozen at sign-in; environments not listed get none. Use it for sandboxes. |
+| `T3_CONNECTOR_OAUTH_PROJECTS` | `restricted` | `all`: read/write consent for all current and future projects of configured environments, with live inventory per call. Ignores the shared read ACL only inside OAuth. Read/write environment sets must match. |
+| `T3_CONNECTOR_OAUTH_WRITE_PROJECTS` | unset | Restricted mode only: `alias:projectId,…` narrows the frozen write snapshot for sandboxes. Conflicts with `all`; boot fails. |
 | `T3_CONNECTOR_CONFIG` | `~/.config/t3-connector/config.json` | Read config (same as `t3-connector`). |
 | `T3_CONNECTOR_OAUTH_VERBOSE` | unset | `1` echoes the redacted event log to stderr. |
 | `T3_CONNECTOR_OAUTH_RESOURCE` | unset | Tunnel mode (5.1): the exact canonical MCP resource named by the tunnel service. Exact HTTPS URL with a path; compared verbatim. |
@@ -267,8 +295,11 @@ Automated (in `npm test`):
 - scope: absent → default, mixed → supported subset, explicit unsupported-only → `invalid_scope`; kill switch and passkeys survive restart, sessions do not;
 - control plane refuses foreign Host, Origin, non-JSON and missing tickets; public listener refuses
   foreign Host and browser Origins;
-- T3 catalog: eight reads + write catalog without `leaseId`; write scope shown and frozen; dedupe
-  across refresh and sign-ins; unavailable environment and late projects refused; revocation during
+- T3 catalog: eight reads + write catalog without `leaseId`; all-mode environment consent and
+  projects created after sign-in readable/writable in the same session on both hosts; empty and
+  recovered inventories; unchanged stdio ACL/config bytes; concurrent scopes; deleted/moved targets,
+  workspace roots, cross-host references and mismatched identities refused with zero invokes;
+  restricted sandbox snapshots preserved; dedupe across refresh/sign-ins; revocation during
   preflight stops the send; journal failure ends all sessions; channel identities and lease ids are
   never accepted by the session gate; no secret or raw identifier in the event log, including
   client-controlled strings.
@@ -310,10 +341,10 @@ Continue → passkey without recreating the connection.
 3. **Absolute cap.** Implemented: off, to honour "no interaction while active". Recommendation:
    keep off; set `T3_CONNECTOR_OAUTH_MAX_AGE_SECONDS` if a daily passkey is acceptable.
 4. **Write catalog.** Implemented: the same actions as the lease path (including `acceptAlways`,
-   rollback and full-access launch), limited by the frozen inventory. Recommendation: decide whether
-   any of these should be excluded from the session profile before the first real use.
-5. **Read scope.** Implemented: reads follow the read config allowlist (`projetosPermitidos`), not
-   the write grant. Recommendation: keep; it matches the existing read connector.
+   rollback and full-access launch). Marcus chose full read/write access to every current and future
+   project of the consented environments in all mode. Human restrictions on actions remain policy.
+5. **Read scope.** OAuth/all resolves live inventory per call with read-only credentials. Restricted
+   OAuth and the stdio read connector keep the read ACL. Shared configs stay unchanged.
 6. **Fail closed on uncertain writes.** Implemented: an uncertain send ends every OAuth session
    (parity with the lease gate). Recommendation: keep until real failure modes are observed.
 7. **Cut-over.** Not done. The lease bridge stays until an authorized cut-over after the E2E.

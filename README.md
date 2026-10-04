@@ -370,6 +370,17 @@ it keeps calling tools, and needs a new passkey after an idle window (default 1 
 alongside the stdio connectors and does not use the write lease. Design, configuration, threat
 model and rehearsal: [`docs/oauth-session.md`](docs/oauth-session.md).
 
+Set `T3_CONNECTOR_OAUTH_PROJECTS=all` for read/write access to all current and future projects
+of the configured, consented environments. Each call resolves live inventory; new projects are
+included automatically without another sign-in. Read/write configs must match by alias,
+environment ID and logical destination. The OAuth-only loader ignores `allowedProjects` without
+changing the shared file; the stdio read ACL and Ponte lease snapshot remain unchanged. The
+consent page shows environments, effective scopes, one-hour idle expiry and local revoke.
+
+The default `restricted` mode preserves the sandbox read ACL and write snapshot at sign-in.
+`T3_CONNECTOR_OAUTH_WRITE_PROJECTS` is available only in that mode and conflicts with `all`.
+See [`examples/oauth-all-projects.env`](examples/oauth-all-projects.env) for configuration.
+
 ## Development
 
 ```sh

@@ -41,7 +41,7 @@ try {
   }
   const files = info.files.map((f) => f.path).sort();
   const allowed = [/^bin\/[\w-]+\.mjs$/, /^src\/((escrita|oauth)\/)?[\w-]+\.mjs$/, /^web\/[\w-]+\.(js|html)$/,
-    /^examples\/config\.json$/, /^docs\/adr\/\d{4}-[\w-]+\.md$/,
+    /^examples\/config\.json$/, /^examples\/oauth-all-projects\.env$/, /^docs\/adr\/\d{4}-[\w-]+\.md$/,
     /^(README|SECURITY|CHANGELOG)\.md$/, /^LICENSE$/, /^package\.json$/];
   for (const f of files) if (!allowed.some((r) => r.test(f))) fail(`file outside the allowlist: ${f}`);
   for (const f of ['bin/t3-connector.mjs', 'bin/t3-connector-write.mjs', 'bin/t3-connector-oauth.mjs', 'LICENSE', 'README.md', 'SECURITY.md', 'web/aprovacao.html'])

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- OAuth `T3_CONNECTOR_OAUTH_PROJECTS=all`: environment-based read/write consent for all current
+  and future projects, live inventories and isolated scopes per call, final ownership/workspace
+  validation before sending, and historical reconciliation without requiring deleted projects.
+  Consent includes read-only sessions, idle expiry and local revoke. Read/write environment
+  divergence and conflicting `T3_CONNECTOR_OAUTH_WRITE_PROJECTS` fail at boot. Restricted sandbox
+  mode, stdio read ACL and Ponte lease snapshots remain supported and unchanged.
+
 ## 0.8.0
 
 - OAuth session profile: tunnel mode (`T3_CONNECTOR_OAUTH_RESOURCE`,
