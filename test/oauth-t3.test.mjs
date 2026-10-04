@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { startConnector } from './oauth-apoio.mjs';
 import { ambientesFalsos } from './apoio.mjs';
 import { memoryJournal } from './escrita-fixtures.mjs';
-import { t3Tools } from '../src/oauth/t3-tools.mjs';
+import { t3Tools, parseWriteProjects } from '../src/oauth/t3-tools.mjs';
 import { SessionWriteGate, writeToolName } from '../src/oauth/session-writes.mjs';
 import { SessionAuthority } from '../src/oauth/session-authority.mjs';
 import { ACTIONS } from '../src/escrita/adapters.mjs';
@@ -23,9 +23,9 @@ function conexaoFalsa(alias, environmentId, { projetos = [{ id: 'app', name: 'ap
   return c;
 }
 
-async function montar({ local = {}, remoto = {}, journal = { ...memoryJournal(), audit: () => {} } } = {}) {
+async function montar({ local = {}, remoto = {}, journal = { ...memoryJournal(), audit: () => {} }, writeProjects = null } = {}) {
   const l = conexaoFalsa('local', 'env-p', local), r = conexaoFalsa('remoto', 'env-s', remoto);
-  const c = await startConnector({ tools: t3Tools({ ambientes: ambientesFalsos(), conexoes: [l, r], journal }) });
+  const c = await startConnector({ tools: t3Tools({ ambientes: ambientesFalsos(), conexoes: [l, r], journal, writeProjects }) });
   const data = res => JSON.parse(res.data.result.content[0].text);
   const send = (at, { environment = 'local', id = 'op-1', text = 'hi', threadId = 'thread' } = {}) => c.callTool(at, writeToolName('thread.send'), { environment, operationId: id, input: { threadId, text, clientRequestId: id, delivery: 'start_immediately' } });
   return { c, l, r, data, send, journal };
@@ -149,4 +149,18 @@ test('SessionWriteGate never accepts lease/channel identities or unknown session
   gate.audit = () => authority.revoke(sid);
   assert.throws(() => gate.dispatch(me, sid, target, () => { sent = true; }, 'op'), /lease_closed/);
   assert.equal(sent, false);
+});
+
+test('write project allowlist narrows the sign-in grant (sandbox)', async t => {
+  const { c, l, r, data, send } = await montar({ writeProjects: parseWriteProjects('local:outro') }); t.after(c.close);
+  const s = await c.signIn();
+  assert.deepEqual(s.view.data.writes.environments.map(e => [e.alias, e.projects]), [['local', ['outro']]]);
+  assert.deepEqual(s.view.data.writes.unavailable.map(u => [u.alias, u.reason]), [['remoto', 'no_projects_allowed']]);
+  const at = s.tokens.access_token;
+  assert.match((await send(at)).data.result.content[0].text, /^scope_denied/);
+  assert.equal(data(await send(at, { id: 'op-2', threadId: 't-outro' })).state, 'completed');
+  assert.match((await send(at, { environment: 'remoto', id: 'op-3', threadId: 't-outro' })).data.result.content[0].text, /^environment_not_in_lease/);
+  assert.equal(l.calls.filter(x => x.m).length, 1); assert.equal(r.calls.length, 0);
+  assert.throws(() => parseWriteProjects('nocolon'), /alias:projectId/);
+  assert.equal(parseWriteProjects(''), null);
 });

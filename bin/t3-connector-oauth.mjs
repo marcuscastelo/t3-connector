@@ -16,7 +16,7 @@ import { loadOAuthConfig } from '../src/oauth/config.mjs';
 import { createOAuthConnector } from '../src/oauth/connector.mjs';
 import { rehearsalTools } from '../src/oauth/rehearsal-tools.mjs';
 import { perRequestSource } from '../src/oauth/resource-server.mjs';
-import { t3Tools } from '../src/oauth/t3-tools.mjs';
+import { t3Tools, parseWriteProjects } from '../src/oauth/t3-tools.mjs';
 import { carregarConfig } from '../src/config.mjs';
 import { carregarConfigEscrita } from '../src/escrita/config.mjs';
 
@@ -53,8 +53,10 @@ async function serve() {
   const readConfig = await carregarConfig();
   const writeFile = process.env.T3_CONNECTOR_OAUTH_WRITE_CONFIG;
   const writeConfig = writeFile ? await carregarConfigEscrita(writeFile) : null;
-  const envs = `read ${readConfig.ambientes.map(a => a.alias).join(', ')}; ${writeConfig ? `write ${writeConfig.ambientes.map(a => a.alias).join(', ')}` : 'no writes (T3_CONNECTOR_OAUTH_WRITE_CONFIG unset)'}`;
-  await start({ config, tools: t3Tools({ readConfig, writeConfig }), serverName: 't3-connector', banner: envs });
+  const writeProjects = parseWriteProjects(process.env.T3_CONNECTOR_OAUTH_WRITE_PROJECTS);
+  if (writeProjects) for (const alias of writeProjects.keys()) if (!writeConfig?.ambientes.some(a => a.alias === alias)) throw new Error(`T3_CONNECTOR_OAUTH_WRITE_PROJECTS: unknown write environment ${alias}`);
+  const envs = `read ${readConfig.ambientes.map(a => a.alias).join(', ')}; ${writeConfig ? `write ${writeConfig.ambientes.map(a => a.alias).join(', ')}${writeProjects ? ` (projects limited: ${[...writeProjects].map(([a, ids]) => `${a}=${ids.size}`).join(', ')})` : ''}` : 'no writes (T3_CONNECTOR_OAUTH_WRITE_CONFIG unset)'}`;
+  await start({ config, tools: t3Tools({ readConfig, writeConfig, writeProjects }), serverName: 't3-connector', banner: envs });
 }
 
 const commands = { serve, rehearsal };

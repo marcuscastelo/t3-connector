@@ -185,6 +185,7 @@ Guarantees:
 | `T3_CONNECTOR_OAUTH_CLIENTS` | `https://chatgpt.com/oauth/client.json` | Comma-separated allowlist of CIMD client ids. |
 | `T3_CONNECTOR_OAUTH_ALLOWED_ORIGINS` | `https://chatgpt.com` | Browser `Origin` values accepted on `/mcp` (requests without `Origin` are accepted). |
 | `T3_CONNECTOR_OAUTH_WRITE_CONFIG` | unset | Path to a write config (`write.json` format). Unset: no write tools. |
+| `T3_CONNECTOR_OAUTH_WRITE_PROJECTS` | unset (full inventory) | `alias:projectId,…`: only these projects enter the write grant shown and frozen at sign-in; environments not listed get none. Use it for sandboxes. |
 | `T3_CONNECTOR_CONFIG` | `~/.config/t3-connector/config.json` | Read config (same as `t3-connector`). |
 | `T3_CONNECTOR_OAUTH_VERBOSE` | unset | `1` echoes the redacted event log to stderr. |
 

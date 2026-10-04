@@ -70,7 +70,10 @@ const describe = action => action === 'thread.send' ? SEND_DESCRIPTION
   : action;
 export const writeToolName = action => `t3_escrever_${action.replaceAll('.', '_').replaceAll('-', '_')}`;
 
-export function sessionWrites({ conexoes, journal, authority, issuer, inventoryMs = 15000, audit = e => journal.audit(e) }) {
+// `allowedProjects` (optional, Map alias → Set of project ids) narrows the grant offered at sign-in
+// to those projects; an environment without an entry gets no grant. Without it the grant is the
+// full inventory, as with the lease.
+export function sessionWrites({ conexoes, journal, authority, issuer, allowedProjects = null, inventoryMs = 15000, audit = e => journal.audit(e) }) {
   const gate = new SessionWriteGate({ authority, issuer, audit });
   const registros = conexoes.map(c => c.registro);
   const porAlias = new Map(conexoes.map(c => [c.registro.alias, c]));
@@ -84,7 +87,9 @@ export function sessionWrites({ conexoes, journal, authority, issuer, inventoryM
     await Promise.all(conexoes.map(async c => {
       const r = c.registro;
       try {
-        const projects = await Promise.race([c.inventario(), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), inventoryMs).unref())]);
+        if (allowedProjects && !allowedProjects.has(r.alias)) throw new Error('no_projects_allowed');
+        let projects = await Promise.race([c.inventario(), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), inventoryMs).unref())]);
+        if (allowedProjects) projects = projects.filter(p => allowedProjects.get(r.alias).has(p.id));
         if (!projects.length) throw new Error('sem_projetos');
         grants.push(grantFromInventory({ alias: r.alias, environmentId: r.environmentId, label: r.alias, destination: r.destination, projects, actions: r.acoes }));
       } catch (e) { unavailable.push({ alias: r.alias, environmentId: r.environmentId, reason: /^[a-z_]+$/.test(e.message) ? code(e.message) : 'environment_unavailable' }); }
