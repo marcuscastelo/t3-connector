@@ -349,9 +349,12 @@ The exact resource is the one the tunnel service puts in the rewritten protected
 When that value cannot be read from the tunnel side, a temporary opt-in capture can record it:
 set `T3_CONNECTOR_OAUTH_RESOURCE_CAPTURE_FILE` (absolute path in an owner-only directory) and
 `T3_CONNECTOR_OAUTH_RESOURCE_CAPTURE_MATCH` (the tunnel ID) together. A refused resource is then also
-written to that file (0600, atomic) only when it is a plain https URL — no query, fragment or
-credentials, at most 512 characters — that contains the tunnel ID; anything else stays hash-only.
-The request is refused exactly as before. Remove both settings and the file once the resource is
+written to that file (0600, atomic, no temporary leftovers) only when it is already a canonical https
+URL — lowercase host, optional port, a path of unreserved characters only (no percent encoding,
+query, fragment or credentials), the tunnel ID as a whole path segment, at most 512 characters;
+anything else stays hash-only. This is a request-supplied candidate, not trusted discovery: confirm
+it against its hash before configuring it. The request is refused exactly as before. Use a private
+directory reserved for this diagnostic under trusted ancestors. Remove both settings and the file once the resource is
 configured.
 Read it from the tunnel side (the tunnel client's logged discovery URLs and status UI, or the
 rewritten metadata), never from request values, and restart with it set.

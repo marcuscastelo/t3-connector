@@ -1,12 +1,14 @@
-import { writeFileSync, renameSync, lstatSync } from 'node:fs';
+import { writeFileSync, renameSync, lstatSync, rmSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 // Temporary, opt-in diagnostic for setting up tunnel mode: the hosted tunnel names the MCP resource
 // and /authorize refuses any other value, logging only its hash. With both settings present, the
-// refused value is ALSO written to one local file, but only when it is a plain https URL (no
-// query, fragment or credentials, at most 512 characters) that contains the configured tunnel ID,
-// so nothing else a request carries is ever persisted. The refusal itself is unchanged. Remove the
+// refused value is ALSO written to one local file, but only when it passes the conservative shape
+// below (canonical https URL, unreserved path characters only, the tunnel ID as a whole path
+// segment, at most 512 characters); nothing else a request carries is persisted. Use a private
+// directory reserved for this diagnostic, under trusted ancestors (the check is on the immediate
+// directory only). The refusal itself is unchanged. Remove the
 // settings (and the file) once the resource is configured.
 const TUNNEL_ID = /^tunnel_[A-Za-z0-9]+$/;
 
@@ -19,13 +21,18 @@ export function parseResourceCapture(env) {
   return { file, match };
 }
 
-// Returns the normalized value when it qualifies for capture, otherwise null.
+// Returns the value when it qualifies for capture, otherwise null. Conservative on purpose: the value
+// must already be in canonical form (no parser repair: backslashes, empty userinfo, IDN, unicode),
+// lowercase https host with an optional port, a path of unreserved characters only (no percent
+// encoding, so no encoded query/fragment/control payload), the tunnel ID as one whole path segment,
+// and at most 512 characters. This is a request-supplied candidate, not trusted discovery.
+const SHAPE = /^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)+(:[0-9]{1,5})?(\/[A-Za-z0-9._~-]+)+$/;
 export function capturableResource(value, match) {
-  if (typeof value !== 'string' || value.length > 512 || /[?#\s]/.test(value)) return null;
+  if (typeof value !== 'string' || value.length > 512 || !SHAPE.test(value)) return null;
   let u;
   try { u = new URL(value); } catch { return null; }
-  if (u.protocol !== 'https:' || u.username || u.password || u.search || u.hash) return null;
-  return u.href.includes(match) ? u.href : null;
+  if (u.href !== value || u.protocol !== 'https:' || u.username || u.password || u.search || u.hash) return null;
+  return u.pathname.split('/').includes(match) ? value : null;
 }
 
 export function resourceCapture(settings, { now = () => new Date() } = {}) {
@@ -33,13 +40,18 @@ export function resourceCapture(settings, { now = () => new Date() } = {}) {
   return value => {
     const resource = capturableResource(value, settings.match);
     if (!resource) return false;
+    let tmp = null;
     try {
       const dir = dirname(settings.file), d = lstatSync(dir);
       if (!d.isDirectory() || d.isSymbolicLink() || d.uid !== process.getuid() || (d.mode & 0o077)) return false;
-      const tmp = join(dir, `.resource-capture-${randomBytes(6).toString('hex')}`);
+      tmp = join(dir, `.resource-capture-${randomBytes(6).toString('hex')}`);
       writeFileSync(tmp, JSON.stringify({ t: now().toISOString(), resource }) + '\n', { mode: 0o600, flag: 'wx' });
       renameSync(tmp, settings.file);
+      tmp = null;
       return true;
-    } catch { return false; }
+    } catch { return false; } finally {
+      // Never leave a partial or unpublished capture behind.
+      if (tmp) try { rmSync(tmp, { force: true }); } catch {}
+    }
   };
 }

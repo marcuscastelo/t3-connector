@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync, statSync, readdirSync, chmodSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, statSync, readdirSync, chmodSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startConnector, http, freePort } from './oauth-apoio.mjs';
@@ -21,14 +21,25 @@ test('resource capture: opt-in settings go together, absolute path, tunnel ID ma
   for (const bad of ['abc', 'tunnel_', 'tunnel_a b', '.*']) assert.throws(() => parseResourceCapture({ T3_CONNECTOR_OAUTH_RESOURCE_CAPTURE_FILE: '/x/f', T3_CONNECTOR_OAUTH_RESOURCE_CAPTURE_MATCH: bad }), /tunnel ID/, bad);
 });
 
-test('resource capture: only plain https URLs containing the tunnel ID qualify', () => {
-  assert.equal(capturableResource(`https://edge.example.com/v1/mcp/${T}`, T), `https://edge.example.com/v1/mcp/${T}`);
-  assert.equal(capturableResource(`https://EDGE.example.com/v1/mcp/${T}`, T), `https://edge.example.com/v1/mcp/${T}`);
+test('resource capture: only canonical https URLs with the tunnel ID as a path segment qualify', () => {
+  const ok = `https://edge.example.com/v1/mcp/${T}`;
+  assert.equal(capturableResource(ok, T), ok);
+  assert.equal(capturableResource(`https://edge.example.com:8443/${T}/mcp`, T), `https://edge.example.com:8443/${T}/mcp`);
+  const longOk = 'https://edge.example.com/' + 'a'.repeat(512 - 'https://edge.example.com/'.length - T.length - 1) + '/' + T;
+  assert.equal(longOk.length, 512); assert.equal(capturableResource(longOk, T), longOk);
   for (const v of [
-    `http://edge.example.com/v1/mcp/${T}`, `https://edge.example.com/v1/mcp/${T}?state=s`, `https://edge.example.com/v1/mcp/${T}?`,
-    `https://edge.example.com/v1/mcp/${T}#f`, `https://u:p@edge.example.com/v1/mcp/${T}`, `https://edge.example.com/v1/mcp/other`,
-    `https://edge.example.com/v1/mcp/${T} x`, 'https://edge.example.com/' + 'a'.repeat(600) + T, 'not a url', 42, undefined,
-  ]) assert.equal(capturableResource(v, T), null, String(v).slice(0, 80));
+    // query/fragment/credentials, plain or percent-encoded (review F1)
+    `${ok}?state=s`, `${ok}?`, `${ok}#f`, `${ok}%3Fstate%3DSYNTHETIC_STATE`, `${ok}%23code%3DSYNTHETIC_CODE`, `${ok}%253Ftoken%253DX`, `${ok}%0A`,
+    `https://u:p@edge.example.com/v1/mcp/${T}`, `https://@edge.example.com/v1/mcp/${T}`, `https://%75@edge.example.com/${T}`,
+    // parser repair, unicode, IDN, case, controls (review F1/F2)
+    `https:\\edge.example.com\\v1\\mcp\\${T}`, `https:/edge.example.com/${T}`, `https://é.example/${T}`, `https://edge.example.com/${T}/é`,
+    `https://EDGE.example.com/v1/mcp/${T}`, `${ok}\u0000`, `${ok}\u007f`, `${ok} x`, `${ok}\t`,
+    'https://edge.example.com/' + 'é'.repeat(180) + '/' + T, longOk + 'a',
+    // tunnel ID not a whole path segment
+    `https://${T}.example/anything`, `https://edge.example.com/prefix_${T}_suffix`, `https://edge.example.com/v1/mcp/other`,
+    `https://edge.example.com/v1/../${T}`, `https://edge.example.com/./${T}`,
+    `http://edge.example.com/v1/mcp/${T}`, 'not a url', 42, undefined,
+  ]) assert.equal(capturableResource(v, T), null, String(v).slice(0, 90));
 });
 
 test('resource capture: writes one 0600 file atomically, refuses an unsafe directory, never throws', () => {
@@ -43,6 +54,12 @@ test('resource capture: writes one 0600 file atomically, refuses an unsafe direc
   assert.deepEqual(readdirSync(dir), ['resource.json']);
   chmodSync(dir, 0o755);
   assert.equal(cap(`https://edge.example.com/v1/mcp/${T}/x`), false);
+  chmodSync(dir, 0o700);
+  // Failed publication (destination is a directory): no capture and no leftover temporary file (review F3).
+  const d2 = mkdtempSync(join(tmpdir(), 't3c-cap-')); chmodSync(d2, 0o700); mkdirSync(join(d2, 'resource.json'));
+  const cap2 = resourceCapture({ file: join(d2, 'resource.json'), match: T });
+  for (let i = 0; i < 3; i++) assert.equal(cap2(`https://edge.example.com/v1/mcp/${T}`), false);
+  assert.deepEqual(readdirSync(d2), ['resource.json']);
   assert.equal(resourceCapture(null)(`https://edge.example.com/v1/mcp/${T}`), false);
 });
 
