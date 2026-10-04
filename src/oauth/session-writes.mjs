@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Dispatcher, ACTIONS, schemaForAction, parseAction, SEND_DESCRIPTION } from '../escrita/adapters.mjs';
+import { Dispatcher, ACTIONS, schemaForAction, parseAction, chaveOperacao, SEND_DESCRIPTION } from '../escrita/adapters.mjs';
 import { grantDoAmbiente } from '../escrita/gate.mjs';
 import { grantFromInventory, escopoDosGrants } from '../escrita/scope.mjs';
 import { identidadeSessaoOAuth, exigirIdentidade } from '../escrita/identidade.mjs';
@@ -116,9 +116,34 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     await precheck(principal, c, action, input);
     return { environment: { alias: c.registro.alias, environmentId: c.registro.environmentId }, ...await dispatchers.get(c.registro.alias).dispatch(identity(principal), principal.sid, { operationId, action, input }) };
   }
+  // A write refused before sending (e.g. thread_not_found, workspace_plan_required) is journaled
+  // `rejected` without a target, and Dispatcher.reconcile cannot answer for it
+  // (reconciliation_target_unknown). For that case only, answer locally that nothing was sent,
+  // after the same authority checks dispatch makes (active session of the same caller, grant for
+  // the environment and the action). The journal key is caller-bound, so another subject never
+  // finds the record. Every other record goes to Dispatcher.reconcile unchanged; the lease path is
+  // not touched.
+  function rejectedBeforeSend(principal, c, operationId) {
+    const caller = exigirIdentidade(identity(principal));
+    const key = chaveOperacao({ environmentId: c.registro.environmentId, destination: c.registro.destination, caller, operationId });
+    let record;
+    try { record = journal.get(key); } catch { gate.close(); fail('journal_failed'); }
+    if (!record || record.target || record.state !== 'rejected') return null;
+    const status = gate.status(principal.sid);
+    if (!status.active || status.scope.caller !== caller) fail('lease_closed');
+    const grant = grantDoAmbiente(status.scope, { environmentId: c.registro.environmentId, destination: c.registro.destination });
+    if (!grant) fail('ambiente_fora_da_lease');
+    if (!grant.actions.includes(record.action)) fail('scope_denied');
+    gate.audit({ event: 'reconciled_rejected', operationId: redact(operationId), sid: redact(principal.sid), action: record.action });
+    return { operationId, state: 'rejected', observation: null, sent: false };
+  }
+
   async function reconcile(principal, { environment, operationId }) {
     const c = resolve(environment);
-    return { environment: { alias: c.registro.alias, environmentId: c.registro.environmentId }, ...await dispatchers.get(c.registro.alias).reconcile(identity(principal), principal.sid, operationId) };
+    const env = { alias: c.registro.alias, environmentId: c.registro.environmentId };
+    const local = rejectedBeforeSend(principal, c, operationId);
+    if (local) return { environment: env, ...local };
+    return { environment: env, ...await dispatchers.get(c.registro.alias).reconcile(identity(principal), principal.sid, operationId) };
   }
 
   const error = e => {

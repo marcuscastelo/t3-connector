@@ -8,6 +8,7 @@ import { SessionWriteGate, writeToolName } from '../src/oauth/session-writes.mjs
 import { SessionAuthority } from '../src/oauth/session-authority.mjs';
 import { ACTIONS } from '../src/escrita/adapters.mjs';
 import { identidadeCanal, identidadeSessaoOAuth } from '../src/escrita/identidade.mjs';
+import { Dispatcher } from '../src/escrita/adapters.mjs';
 
 // Same shape as the fake write connection of escrita-controller.test.mjs: two environments with the
 // same project and thread IDs, so routing must keep them apart.
@@ -163,4 +164,50 @@ test('write project allowlist narrows the sign-in grant (sandbox)', async t => {
   assert.equal(l.calls.filter(x => x.m).length, 1); assert.equal(r.calls.length, 0);
   assert.throws(() => parseWriteProjects('nocolon'), /alias:projectId/);
   assert.equal(parseWriteProjects(''), null);
+});
+
+// C1: a write refused before sending is journaled `rejected` without a target.
+test('reconcile reports a write refused before sending as rejected, sent:false, without touching the backend', async t => {
+  const { c, l, data, send } = await montar(); t.after(c.close);
+  const tok = (await c.signIn()).tokens;
+  const refused = await send(tok.access_token, { id: 'op-gone', threadId: 'archived-thread' });
+  assert.match(refused.data.result.content[0].text, /^thread_not_found/);
+  const callsBefore = l.calls.length;
+  const rec = data(await c.callTool(tok.access_token, 't3_reconciliar_escrita', { environment: 'local', operationId: 'op-gone' }));
+  assert.deepEqual({ state: rec.state, sent: rec.sent, observation: rec.observation, env: rec.environment.alias }, { state: 'rejected', sent: false, observation: null, env: 'local' });
+  assert.equal(l.calls.length, callsBefore, 'no prepare/invoke/observation call');
+  // after refresh and after a new sign-in (same subject) it still answers
+  const t2 = (await c.refresh(tok.refresh_token)).data;
+  assert.equal(data(await c.callTool(t2.access_token, 't3_reconciliar_escrita', { environment: 'local', operationId: 'op-gone' })).state, 'rejected');
+  const t3 = (await c.signIn()).tokens;
+  assert.equal(data(await c.callTool(t3.access_token, 't3_reconciliar_escrita', { environment: 'local', operationId: 'op-gone' })).sent, false);
+  // unknown operations and other environments keep the existing errors
+  const unknown = await c.callTool(t3.access_token, 't3_reconciliar_escrita', { environment: 'local', operationId: 'never-sent' });
+  assert.match(unknown.data.result.content[0].text, /operation_unknown/);
+  const otherEnv = await c.callTool(t3.access_token, 't3_reconciliar_escrita', { environment: 'remoto', operationId: 'op-gone' });
+  assert.match(otherEnv.data.result.content[0].text, /operation_unknown/);
+});
+
+test('another subject cannot see a rejected record; a session without the environment grant is refused', async t => {
+  const { c, data, send } = await montar({ remoto: { falhaInventario: true } }); t.after(c.close);
+  const tok = (await c.signIn()).tokens;
+  await send(tok.access_token, { id: 'op-gone', threadId: 'archived-thread' });
+  const { authority, tokens } = c.connector;
+  const mint = (sub, grants) => {
+    const sid = authority.create({ sub, clientId: 'https://client.example/oauth/client.json', credentialId: 'k', scope: 'connector:read connector:write', resource: `${c.issuer}/mcp`, grants });
+    const code = tokens.issueCode({ sid, clientId: 'https://client.example/oauth/client.json', redirectUri: 'r', codeChallenge: 'C', resource: `${c.issuer}/mcp`, scope: 'connector:read connector:write' });
+    return tokens.consumeCode(code, { clientId: 'https://client.example/oauth/client.json', verifyPkce: () => true });
+  };
+  const ownGrants = authority.check(tokens.resolveAccess(tok.access_token).sid).grants;
+  const other = mint('local:anotherSubject01', ownGrants);
+  assert.match((await c.callTool(other.access_token, 't3_reconciliar_escrita', { environment: 'local', operationId: 'op-gone' })).data.result.content[0].text, /operation_unknown/);
+  const noGrant = mint(c.connector.subject, { scopeVersion: 2, runtimeMode: 'full-access', environments: [] });
+  assert.match((await c.callTool(noGrant.access_token, 't3_reconciliar_escrita', { environment: 'local', operationId: 'op-gone' })).data.result.content[0].text, /^environment_not_in_lease/);
+  assert.equal(data(await c.callTool(tok.access_token, 't3_reconciliar_escrita', { environment: 'local', operationId: 'op-gone' })).state, 'rejected');
+});
+
+test('lease path unchanged: Dispatcher.reconcile still refuses a targetless record', async () => {
+  const record = { hash: 'h', state: 'rejected', action: 'thread.send', operationId: 'x', environmentId: 'e', destination: 't3://e' };
+  const d = new Dispatcher({ gate: {}, adapter: {}, journal: { reserve: () => true, get: () => record, put() {} }, environmentId: 'e', destination: 't3://e' });
+  await assert.rejects(d.reconcile(identidadeCanal({ organization: 'o', tunnelId: 'tunnel_x' }), 'lease', 'x'), /reconciliation_target_unknown/);
 });
