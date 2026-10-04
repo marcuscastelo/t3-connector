@@ -86,6 +86,12 @@ structural `gate` is replaced by `SessionWriteGate`, keyed by session id:
   session ends;
 - targets outside the frozen grant are refused before the Dispatcher runs, so a model asking for an
   unapproved project gets `scope_denied` without ending the session.
+- reconciliation: a write refused before the send boundary (e.g. `thread_not_found`) is journaled
+  `rejected` without a target. `t3_reconciliar_escrita` answers it as `{state: "rejected",
+  observation: null, sent: false}` after the same authority checks as a dispatch (active session of
+  the same caller, environment grant, action) and a re-check after its audit; an audit failure fails
+  closed. Every other record is reconciled by the Dispatcher unchanged (the lease path is not
+  touched).
 
 ## 2. What ChatGPT does, and why the token lifetimes are what they are
 
@@ -236,6 +242,15 @@ Automated (in `npm test`):
   preflight stops the send; journal failure ends all sessions; channel identities and lease ids are
   never accepted by the session gate; no secret or raw identifier in the event log, including
   client-controlled strings.
+
+Composition harness (not in `npm test`): `node test/composition/harness.mjs <supervisionar-transporte.mjs>`
+runs a synthetic OAuth client through an ingress proxy supervised by the Ponte's transport
+supervisor helper, into this AS/RS and the session writes over a real SQLite journal and a doubled
+backend that counts sends. It covers an ingress outage (same session after refresh, idle not
+renewed), a response lost after the write reached the server (reconcile, repeat the same
+operationId, one send) and an outstanding send while the ingress dies (uncertain, fail closed, no
+resend, reconcilable after a new sign-in). It is not the OpenAI tunnel-client and says nothing about
+client-side retries.
 
 End to end with ChatGPT (to run, needs authorization): first access with passkey → read and write
 → at least 10 minutes of refresh rotations without a new passkey while calling tools → idle expiry
