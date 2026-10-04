@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.2
+
 - OAuth tunnel mode: `T3_CONNECTOR_OAUTH_ADVERTISED_RESOURCE` advertises an exact, reachable
   resource in the local protected resource metadata while only `T3_CONNECTOR_OAUTH_RESOURCE` (the
   hosted tunnel endpoint, which tunnel-client may not reach) is accepted for authorization, tokens
