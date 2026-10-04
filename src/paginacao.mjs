@@ -7,7 +7,7 @@
 
 export class CursorInvalido extends Error {
   constructor() {
-    super('cursor inválido ou de outra consulta (environment, ferramenta ou filtros diferentes); refaça a consulta sem cursor');
+    super('invalid cursor, or a cursor from another query (different environment, tool or filters); repeat the query without a cursor');
     this.name = 'CursorInvalido';
   }
 }

@@ -10,19 +10,23 @@ several T3 environments.
   creates, sends, approves, interrupts or changes threads, and only accepts tokens scoped
   to exactly `orchestration:read`.
 - **Write** (`t3-connector-write gate|bridge`): 42 thread actions, each with a mandatory
-  `ambiente` (environment). Nothing is dispatched without a 60-minute lease approved with a
+  `environment`. Nothing is dispatched without a 60-minute lease approved with a
   passkey on a page served at `http://localhost:<port>/`.
 
 Both work with several T3 environments (for example this machine and a server reached over
 SSH), chosen on every call. Architecture decisions:
 [ADR 0001, environments](docs/adr/0001-environments.md),
 [ADR 0002, waiting](docs/adr/0002-waiting.md) and
-[ADR 0003, writes](docs/adr/0003-writes-per-environment.md).
+[ADR 0003, writes](docs/adr/0003-writes-per-environment.md) and
+[ADR 0004, English contract](docs/adr/0004-english-contract.md).
 
-> **API naming.** MCP tool names, parameters, response fields and configuration keys
-> predate the English documentation and are kept in Portuguese for compatibility with
-> existing clients (`t3_threads`, `ambiente`, `projetosPermitidos`, …). This README
-> translates each one where it first appears.
+> **API naming.** Tool parameters, response fields, error codes and configuration keys
+> are in English. The original Portuguese parameter and configuration names (`ambiente`,
+> `busca`, `limite`, `estado`, `projetosPermitidos`, …) are still accepted as deprecated
+> aliases and are no longer listed in `tools/list`; sending both names with different
+> values is an error. Responses use only the English names. Tool names are unchanged
+> (`t3_projetos`, `t3_escrever_*`, …); this README translates each one where it first
+> appears. See [ADR 0004](docs/adr/0004-english-contract.md) for the migration tables.
 
 ## Requirements
 
@@ -52,18 +56,21 @@ published to npm.
 Local file, outside Git: `~/.config/t3-connector/config.json` (or `T3_CONNECTOR_CONFIG`).
 See [examples/config.json](examples/config.json).
 
-- `padrao` (default): environment used when a call omits `ambiente`.
-- `ambientes` (environments): one entry per alias, each with:
+- `default`: environment used when a call omits `environment`.
+- `environments`: one entry per alias, each with:
   - `environmentId`: expected ID. The connector checks the server descriptor and fails
     closed if the endpoint answers as another environment.
-  - one transport: `url` (loopback HTTP or HTTPS) or `ssh: {host, portaRemota}`. With
-    SSH, the connector spawns `ssh -N -L 127.0.0.1:<free port>:127.0.0.1:<portaRemota>
+  - one transport: `url` (loopback HTTP or HTTPS) or `ssh: {host, remotePort}` (default
+    3773). With SSH, the connector spawns `ssh -N -L 127.0.0.1:<free port>:127.0.0.1:<remotePort>
     <host>` on the first call, recreates it if it dies and stops it on exit.
   - `tokenFile`: bearer token for that environment, mode 600, scoped to **exactly**
     `orchestration:read`. Tokens with any extra scope are refused.
-  - `projetosPermitidos` (allowed projects): per-environment ACL. An empty list prevents
-    start-up. A read token reaches the whole environment; this ACL is the per-project
-    restriction.
+  - `allowedProjects`: per-environment ACL. An empty list prevents start-up. A read token
+    reaches the whole environment; this ACL is the per-project restriction.
+
+Files with the previous keys (`padrao`, `ambientes`, `projetosPermitidos`,
+`ssh.portaRemota`) keep working; the same key in both spellings with different values
+is refused at start-up.
 
 ### Pairing an environment
 
@@ -94,7 +101,9 @@ t3-connector-write pair --environment X   # read+operate token for writes
 ```
 
 The original Portuguese subcommands and flags (`ambientes`, `diagnostico`, `--ambiente`,
-`--projetos`) remain accepted.
+`--projetos`) remain accepted. The JSON printed by `environments`, `diagnose` and the write
+`pair` uses English keys (`default`, `environments`, `available`, `scopes`,
+`tokenExpiresAt`, `missingAllowedProjects`, …).
 
 Live smoke test, read-only, printing metadata only (never message text):
 
@@ -110,7 +119,9 @@ The connector speaks MCP over stdio. With the Secure MCP Tunnel `tunnel-client`,
 profile whose `mcp-command` is `t3-connector serve` (read) or `t3-connector-write bridge`
 (write, with the gate running alongside), and follow the tunnel documentation for the
 runtime key. Keep that key outside the repository. After upgrading the connector,
-restart the tunnel and refresh the tool list in the client.
+restart the tunnel and the write gate, and refresh the tool list in the client. Until the
+gate restarts, leased reads through the write plugin still answer with the previous
+response names.
 
 ## How a client should read
 
@@ -122,88 +133,92 @@ restart the tunnel and refresh the tool list in the client.
    **To find a thread without knowing its environment**, call `t3_buscar_threads` (find
    threads): each result carries the environment where the thread lives. When `total` is
    above 1, ask the user which one; never pick by order, recency or the default
-   environment. Then read with that `ambiente` and `threadId`.
+   environment. Then read with that `environment` and `threadId`.
 3. **To follow a thread**, call `t3_aguardar_thread` with `timeoutMs` between 1000 and 2000
    for voice (max 5000). `timedOut: true` means the thread is still running: answer the
    user and call again on a later turn. Do not chain waits in the same turn.
-4. **`precisa_intervencao`** (needs intervention: approval, question, plan) is not an end
+4. **`needs_intervention`** (approval, question, plan) is not an end
    state. The connector only reports it; answering requires T3 itself.
 
 ### Read tools
 
 All have `readOnlyHint: true` and `destructiveHint: false`. Every response includes
-`ambiente: {alias, environmentId}`, except `t3_buscar_threads`, which puts it on each
+`environment: {alias, environmentId}`, except `t3_buscar_threads`, which puts it on each
 thread.
 
 | Tool | Input | Main output |
 |---|---|---|
-| `t3_ambientes` (environments) | `verificar?` (check, default true) | environments with alias, default, transport, `disponivel` (available), version |
-| `t3_projetos` (projects) | `ambiente?`, `busca?` (search), `limite?` (limit), `cursor?` | `total`, `retornados`, `truncado`, `proximoCursor?`; authorized projects ordered by title |
-| `t3_threads` | `ambiente?`, `projectId?`, `estado?` (state), `incluirSemExecucao?` (include threads without a run, default false), `busca?`, `limite?` (1-50, 20), `cursor?` | `total`, `retornadas`, `truncado`, `proximoCursor?`, `alteradasDesdeInicio?`, `ocultasSemExecucao?` |
-| `t3_buscar_threads` (find threads) | exactly one of `busca?` or `threadId?` (exact), `correspondencia?` (`parcial` = substring, default; `exata` = whole title), `ambiente?` (restricts; omitted: every environment), `limite?` (1-50, 20), `cursor?` | `total`, `retornadas`, `truncado`, `completa`, `proximoCursor?`, `ambientesConsultados`, `falhasAmbientes`; each thread with `ambiente: {alias, environmentId, nome}` and `arquivada` |
-| `t3_atencao` (attention) | `ambiente?` | threads that need intervention, or failed and were not settled |
-| `t3_thread` | `ambiente?`, `threadId`, `maxCaracteres?` (200-6000, 1500) | state, pending requests, provider session, latest run, latest response, `historico` |
-| `t3_mensagens` (messages) | `ambiente?`, `threadId`, `limite?` (1-20, 6), `maxCaracteres?` (100-4000, 800) | recent messages and `historico.completo` |
-| `t3_aguardar_thread` (wait) | **`ambiente`**, `threadId`, **`timeoutMs`** (1-5000), `runId?`, `incluirUltimaResposta?`, `maxCaracteres?` | `runId`, `statusRun`, `estado`, `terminal`, `timedOut`, `motivoRetorno`, `pedidoPendente`, `ultimaResposta?` |
+| `t3_ambientes` (environments) | `check?` (default true) | `default` and `environments` with alias, `default`, `transport`, `allowedProjectCount`, `available`, `name`, `version` or `error` |
+| `t3_projetos` (projects) | `environment?`, `search?`, `limit?`, `cursor?` | `total`, `returned`, `truncated`, `nextCursor?`, `projects` (ordered by title) |
+| `t3_threads` | `environment?`, `projectId?`, `state?`, `includeNoRun?` (include threads without a run, default false), `search?`, `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `nextCursor?`, `changedSinceStart?`, `hiddenNoRun?`, `threads` |
+| `t3_buscar_threads` (find threads) | exactly one of `search?` or `threadId?` (exact), `match?` (`partial` = substring, default; `exact` = whole title), `environment?` (restricts; omitted: every environment), `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `complete`, `nextCursor?`, `queriedEnvironments`, `environmentFailures`; each thread with `environment: {alias, environmentId, name}` and `archived` |
+| `t3_atencao` (attention) | `environment?` | threads that need intervention, or failed and were not settled |
+| `t3_thread` | `environment?`, `threadId`, `maxCharacters?` (200-6000, 1500) | thread summary, `pendingRequests`, `providerSession`, `latestRun`, `latestResponse`, `history` |
+| `t3_mensagens` (messages) | `environment?`, `threadId`, `limit?` (1-20, 6), `maxCharacters?` (100-4000, 800) | `messages` and `history.complete` |
+| `t3_aguardar_thread` (wait) | **`environment`**, `threadId`, **`timeoutMs`** (1-5000), `runId?`, `includeLatestResponse?`, `maxCharacters?` | `runId`, `statusRun`, `state`, `terminal`, `timedOut`, `returnReason`, `pendingRequest`, `latestResponse?` |
 
-States (`estado`): `rodando` (running), `precisa_intervencao` (needs intervention),
-`concluida` (completed), `falhou` (failed), `cancelada` (cancelled), `sem_execucao`
-(no run), `desconhecido` (unknown). A pending request wins over any run status.
+States (`state`, also the filter of `t3_threads`): `running`, `needs_intervention`,
+`completed`, `failed`, `cancelled`, `no_run` and `unknown`. A pending request wins over any
+run status. Each thread summary carries `threadId`, `title`, `project`, `directory`,
+`branch`, `model` (`model`, `instanceId`, `effort`), `runtimeMode`, `state`, `statusRun`,
+`runId`, `updatedAt` and `settled`; intervention adds `reason`, `kind`, `identifier` and
+`since`. `t3_aguardar_thread` returns with `returnReason` `terminal`, `needs_intervention`,
+`no_run`, `timeout`, `thread_deleted` or `subscription_closed`.
 
 ### Pending runtime requests (`t3_thread`)
 
 Read `t3_thread` in the same environment after `t3_threads`, `t3_atencao` or
 `t3_aguardar_thread` signals intervention. Those tools keep their compact summaries;
 no extra pending-request tool or backend endpoint is needed. The additive contract of
-each `pedidosPendentes` entry is:
+each `pendingRequests` entry is:
 
 | Field | Meaning |
 |---|---|
 | `requestId` | ID to answer; identical to the preserved `runtimeRequestId` |
-| `tipo`, `motivo`, `nodeId`, `desde`, `detalhe` | Existing summary fields; `detalhe` is a short display hint, never an answer contract |
+| `kind`, `reason`, `nodeId`, `since`, `detail` | Summary fields; `detail` is a short display hint, never an answer contract |
 | `responseCapability` | `{type: "live"}`, `{type: "message"}`, `{type: "not_resumable", reason}`, or `null` if unavailable; internal session IDs are omitted |
-| `conteudoDisponivel` | Whether the snapshot supplied a valid, supported request body |
-| `conteudo` | Typed body below, or `null` |
-| `indisponibilidade` | `null` when available; otherwise `request_detail_not_in_snapshot`, `request_detail_incomplete_or_invalid`, or `unsupported_request_kind` |
-| `threadSendRespondePedido` | Always `false`: `thread.send` does not resolve the pending runtime request |
-| `proximaAcao` | Structured response recommendation below, or an explicit instruction to inspect in T3 |
+| `contentAvailable` | Whether the snapshot supplied a valid, supported request body |
+| `content` | Typed body below, or `null` |
+| `unavailableReason` | `null` when available; otherwise `request_detail_not_in_snapshot`, `request_detail_incomplete_or_invalid`, or `unsupported_request_kind` |
+| `threadSendAnswersRequest` | Always `false`: `thread.send` does not resolve the pending runtime request |
+| `nextAction` | Structured response recommendation below, or an explicit instruction to inspect in T3 |
 
-When content and response capability are available, `proximaAcao` supplies the exact
+When content and response capability are available, `nextAction` supplies the exact
 write action, connector tool name, target IDs and response field, without choosing a
 user answer. For example:
 
 ```json
 {
-  "tipo": "responder_runtime_request",
+  "type": "respond_runtime_request",
   "action": "runtime-request.answer",
   "tool": "t3_escrever_runtime_request_answer",
   "input": {"threadId": "blocked-thread", "requestId": "pending-question"},
-  "campoResposta": "answers",
-  "requerDecisaoDoUsuario": true
+  "responseField": "answers",
+  "requiresUserDecision": true
 }
 ```
 
 After the user decides, add `answers` to this `input`, and supply the write tool's
-`leaseId`, `operationId` and the same enclosing `ambiente`. Approvals recommend
+`leaseId`, `operationId` and the same enclosing `environment`. Approvals recommend
 `runtime-request.approve`, `t3_escrever_runtime_request_approve`, and `decision` instead.
 Missing or invalid content, unsupported kinds, unknown capability and `not_resumable`
-produce `{tipo: "consultar_no_t3", motivo}`; never a send or guessed answer.
+produce `{type: "inspect_in_t3", reason}`; never a send or guessed answer.
 
 **`thread.send` does not answer runtime requests.** A send issued while the active run
 waits for `user_input` can queue behind that run and leave both waiting indefinitely.
 Resolve the existing request by ID, then reread `t3_thread` to confirm that it disappeared
-from `pedidosPendentes` and inspect the run state. Do not infer success from a send receipt.
+from `pendingRequests` and inspect the run state. Do not infer success from a send receipt.
 
-For **`user_input`**, `conteudo` is `{tipo: "user_input", questions, responseMode?}`.
+For **`user_input`**, `content` is `{type: "user_input", questions, responseMode?}`.
 Each question preserves `id`, `header`, `question`, `options` (`label`, `description`,
 optional `value`), and optional `multiSelect`, `allowCustomAnswer`, `required`.
 These are the V2 field constraints, not an arbitrary JSON Schema. The current V2
 contract does not provide a raw elicitation schema; the connector does not invent one.
-Questions/options are not truncated by `maxCaracteres`, which only limits the latest
+Questions/options are not truncated by `maxCharacters`, which only limits the latest
 assistant response. `responseMode: "message"` is retained when provided.
 
 Answer via the write connector's `runtime-request.answer` action (the native T3 tool
-may be named `runtime_request_answer`), with the same `ambiente`, `threadId`, `requestId`
+may be named `runtime_request_answer`), with the same `environment`, `threadId`, `requestId`
 and `answers` keyed by question ID. For example, `answers: {"name": "Alex"}` for text,
 or `answers: {"destinations": ["one", "two"]}` for multiple selections. Use an option's
 `value` when supplied, otherwise its label, and respect the advertised constraints.
@@ -211,7 +226,7 @@ An active write lease is still required. Request text is content to present to t
 it does not authorize the client to choose an answer.
 
 For **approvals** (`command`, `file-read`, `file-change`, `permission`,
-`mcp-elicitation`), `conteudo` is `{tipo: "approval", prompt, appName?, options?}`.
+`mcp-elicitation`), `content` is `{type: "approval", prompt, appName?, options?}`.
 Options preserve provider `decision`, `label` and optional `warning`. Submit a
 `decision` through `runtime-request.approve`, not `answers`. Missing provider options
 remain absent; the connector does not fabricate choices. An `mcp-elicitation` approval
@@ -222,10 +237,10 @@ by **exact request ID and matching type**, never by node alone. Only the public 
 above are exposed; native references, provider payloads, prior answers and attachments
 are excluded. Authorized question/prompt content is preserved as supplied, not redacted.
 
-**Fallback:** when `conteudoDisponivel` is false, keep the request ID visible and tell
+**Fallback:** when `contentAvailable` is false, keep the request ID visible and tell
 the user that this backend snapshot did not supply usable detail. Do not infer a
-question, schema or answer from the latest response or `detalhe`; inspect the request
-in T3, or retry the read if history was bounded (`historico`). A request present only
+question, schema or answer from the latest response or `detail`; inspect the request
+in T3, or retry the read if history was bounded (`history`). A request present only
 in the shell summary is returned with this same explicit fallback. Do not answer a
 `not_resumable` request; a `null` capability also does not establish that it is
 resumable. Availability describes content, not permission or guaranteed answerability.
@@ -245,10 +260,10 @@ This is connector regression coverage, not a live backend acceptance test.
 ### Search and pagination
 
 Clients may cut long responses silently. `t3_projetos` and `t3_threads` answer in pages:
-`total` counts every match and comes before the list; `truncado: true` (truncated) means
-more items follow; repeat the call with `cursor` set to `proximoCursor` (next cursor) and
-the same `ambiente` and filters. `busca` matches part of the title or ID, ignoring case and
-accents. The cursor stores the key of the last item and is bound to the environment, the
+`total` counts every match and comes before the list; `truncated: true` means more items
+follow; repeat the call with `cursor` set to `nextCursor` and
+the same `environment` and filters. `search` matches part of the title or ID, ignoring case
+and accents. The cursor stores the key of the last item and is bound to the environment, the
 tool and the filters; it is rejected in any other query. It is opaque but not secret.
 
 ### Finding threads across environments (`t3_buscar_threads`)
@@ -260,10 +275,12 @@ never reads `/bounded` per candidate.
 
 - **Deadlines:** 4 s per environment (connection, shell and retry) and 10 s for the
   whole search. Environments that fail, time out or answer as another environment go to
-  `falhasAmbientes` (`codigo`, `motivo`, with no token paths or transport output), and
-  `completa` is false. `total` counts matches in the environments that answered, so zero
-  results with `completa: false` do not prove the thread is missing. If every environment
-  fails, the response is still a normal envelope with `completa: false`.
+  `environmentFailures` (`code`: `timeout`, `global_timeout`, `unavailable`,
+  `environment_mismatch`, `http_<status>`, `connection_refused` or `failed`; `reason`;
+  never token paths or transport output), and `complete` is false. `total` counts matches
+  in the environments that answered, so zero results with `complete: false` do not prove
+  the thread is missing. If every environment fails, the response is still a normal
+  envelope with `complete: false`.
 - **Ambiguity:** the same title or ID can exist in several environments and projects;
   every match is returned. Use `total`, not the page size, to decide whether the result
   is unique.
@@ -271,7 +288,7 @@ never reads `/bounded` per candidate.
   The cursor is bound to the search, the environment filter and the set of environments
   that answered; if that set changes between pages, the cursor is rejected and the search
   must start again. Pages are not a snapshot.
-- **Actions** in the write bridge still require `ambiente`; the search only finds
+- **Actions** in the write bridge still require `environment`; the search only finds
   candidates.
 
 ### Waiting (`t3_aguardar_thread`)
@@ -290,16 +307,19 @@ Local configuration in `~/.config/t3-connector/write.json` (or
 
 ```jsonc
 {
-  "porta": 7433,                                   // approval page port
-  "estado": "~/.local/state/t3-connector-write",   // state directory
-  "canal": { "organization": "my-org", "tunnelId": "tunnel_<your tunnel id>" },
+  "port": 7433,                                      // approval page port
+  "stateDir": "~/.local/state/t3-connector-write",   // state directory
+  "channel": { "organization": "my-org", "tunnelId": "tunnel_<your tunnel id>" },
   "passkey": { "rpName": "T3 Connector", "userName": "t3-connector" },   // optional
-  "ambientes": {
+  "environments": {
     "local":  { "environmentId": "…", "url": "http://127.0.0.1:3773", "tokenFile": "~/.config/t3-connector/write/local.token" },
-    "remoto": { "environmentId": "…", "ssh": { "host": "my-server", "portaRemota": 3773 }, "tokenFile": "~/.config/t3-connector/write/remoto.token" }
+    "remoto": { "environmentId": "…", "ssh": { "host": "my-server", "remotePort": 3773 }, "tokenFile": "~/.config/t3-connector/write/remoto.token" }
   }
 }
 ```
+
+The previous keys (`porta`, `estado`, `canal`, `ambientes`, `ssh.portaRemota`) keep
+working; both spellings with different values are refused at start-up.
 
 - One token per environment, scoped to exactly `orchestration:read` +
   `orchestration:operate`, paired with `t3-connector-write pair --environment <alias>`.
@@ -307,7 +327,7 @@ Local configuration in `~/.config/t3-connector/write.json` (or
 - There is no allowlist: every approval request carries the full inventory of each
   environment and every action, and the passkey holder decides on the scope shown on the
   page.
-- `estado` stores the registered passkey, the idempotency journal, the relay capability
+- `stateDir` stores the registered passkey, the idempotency journal, the relay capability
   and logs, with 600/700 permissions.
 - `passkey.rpName` and `passkey.userName` only label the registration of a new passkey.
   The `rpID` is always `localhost`; changing the labels does not invalidate existing
@@ -316,19 +336,22 @@ Local configuration in `~/.config/t3-connector/write.json` (or
 ### How a client should write
 
 1. `t3_pedir_aprovacao` (request approval) returns the active lease or an approval link.
-   `ambientes` lists the environments the lease covers; `indisponiveis`, those left out
-   because they did not respond.
+   `environments` lists the environments the lease covers (`projectCount`, `actionCount`);
+   `unavailableEnvironments`, those left out because they did not respond (`reason`).
 2. Every `t3_escrever_*` (write) tool, the leased reads and `t3_reconciliar_escrita`
-   (reconcile) require `ambiente`. There is no default.
+   (reconcile) require `environment`. There is no default.
 3. `operationId` is the idempotency key: repeating the same operation in the same
    environment never resends it. For `thread.send`, `clientRequestId` must equal
    `operationId`.
 4. `reconciliation_required` means the result is uncertain: do not retry; call
-   `t3_reconciliar_escrita` with the same `ambiente` and `operationId`.
+   `t3_reconciliar_escrita` with the same `environment` and `operationId`.
 
-Routing errors: `ambiente_obrigatorio` (environment required), `ambiente_desconhecido`
-(unknown), `ambiente_fora_da_lease` (not in the lease), `ambiente_indisponivel`
-(unavailable; nothing was sent) and `thread_not_found`.
+Write results carry `environment: {alias, environmentId}`. Routing errors:
+`environment_required`, `environment_unknown`, `environment_not_in_lease`,
+`environment_unavailable` (nothing was sent), `gate_unavailable` and `thread_not_found`.
+Parameter errors, in both connectors, start the error text with the code: `parameter_conflict` (an English name and
+its deprecated alias with different values), `parameter_invalid` (invalid value in a
+deprecated alias) and `parameter_required`.
 
 ### `thread.send` timing contract
 

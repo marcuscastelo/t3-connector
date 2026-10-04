@@ -5,7 +5,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { criarPonteEscrita } from '../src/escrita/ponte-mcp.mjs';
 import { ambientesFalsos, conectarMcp } from './apoio.mjs';
 
-// Tool and parameter names are the stable API; every human-readable description is English.
+// Tool names are the stable API; parameters and every human-readable description are English.
 const PORTUGUES = /\b(não|para|com|uma|ou|somente|leitura|padrão|obrigatório|ambiente não|pedido|exige)\b/i;
 
 function textos(tools) {

@@ -37,7 +37,7 @@ function conecta(porta) {
 const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export function criarTransporteSsh({ host, portaRemota = 3773, prontoEmMs = 15000, spawnImpl = spawn, portaLivreImpl = portaLivre }) {
-  if (!/^[A-Za-z0-9._-]+$/.test(host)) throw new ErroT3(`host SSH inválido: ${host}`);
+  if (!/^[A-Za-z0-9._-]+$/.test(host)) throw new ErroT3(`invalid SSH host: ${host}`);
   let atual = null;
 
   function iniciar() {
@@ -62,7 +62,7 @@ export function criarTransporteSsh({ host, portaRemota = 3773, prontoEmMs = 1500
       }
       estado.filho.kill('SIGTERM');
       const detalhe = estado.stderr.trim().split('\n').at(-1) ?? '';
-      throw new ErroT3(`túnel SSH até ${host} não abriu${detalhe ? `: ${detalhe}` : ''}`, { codigo: 'indisponivel' });
+      throw new ErroT3(`SSH tunnel to ${host} did not open${detalhe ? `: ${detalhe}` : ''}`, { codigo: 'indisponivel' });
     })();
     // Falha na subida marca o estado como encerrado: o próximo uso recria o túnel.
     estado.pronto.catch(() => { estado.saiu = true; });
@@ -79,7 +79,7 @@ export function criarTransporteSsh({ host, portaRemota = 3773, prontoEmMs = 1500
       return new Promise((resolve, reject) => {
         const aoAbortar = () =>
           reject(signal.reason?.name === 'TimeoutError'
-            ? new ErroT3(`túnel SSH até ${host} não abriu no prazo da chamada`, { codigo: 'prazo' })
+            ? new ErroT3(`SSH tunnel to ${host} did not open within the call deadline`, { codigo: 'prazo' })
             : new Cancelada());
         if (signal.aborted) return aoAbortar();
         signal.addEventListener('abort', aoAbortar, { once: true });

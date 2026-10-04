@@ -33,10 +33,11 @@ tunnel keeps that rule and reuses the SSH identity the operator already has
 ## Decision
 
 - The config lists environments by alias. Each has an expected `environmentId`, a
-  transport (loopback/HTTPS `url` or `ssh: {host, portaRemota}`), its own token file and
-  its own `projetosPermitidos` (allowed projects).
-- Every tool accepts `ambiente` (alias or environmentId). When omitted, the config
-  `padrao` (default) applies. Waiting requires `ambiente`.
+  transport (loopback/HTTPS `url` or `ssh: {host, remotePort}`), its own token file and
+  its own `allowedProjects`. (Key and parameter names as renamed by
+  [ADR 0004](0004-english-contract.md); the original Portuguese names remain aliases.)
+- Every tool accepts `environment` (alias or environmentId). When omitted, the config
+  `default` applies. Waiting requires `environment`.
 - There is no mutable global selector: the environment is chosen on every call.
 - On connect, the connector checks the descriptor (`environmentId` as expected, protocol
   2) and the session (scopes exactly `orchestration:read`). Any mismatch fails closed.
@@ -49,7 +50,8 @@ tunnel keeps that rule and reuses the SSH identity the operator already has
   and 10 s in total; failures are reported per environment and the result is marked
   incomplete instead of failing. It never chooses among candidates. Reads by ID and every
   write action keep requiring a single environment, with no fallback.
-- Every response carries `ambiente: {alias, environmentId}`.
+- Every response carries `environment: {alias, environmentId}` (`ambiente` before
+  [ADR 0004](0004-english-contract.md)).
 - The SSH tunnel is a child process of the connector on a free loopback port. It starts on
   the first call to that environment and is recreated if it dies. The connector only
   terminates processes it created.

@@ -37,36 +37,36 @@ export function resumirPedidoRuntime(projecao, pedido, threadId) {
     const schema = pedido.kind === 'user_input' ? perguntas : aprovacao;
     const parsed = schema.safeParse(item);
     if (parsed.success && (pedido.kind === 'user_input' || item.requestKind === pedido.kind)) {
-      conteudo = { tipo: pedido.kind === 'user_input' ? 'user_input' : 'approval', ...parsed.data };
+      conteudo = { type: pedido.kind === 'user_input' ? 'user_input' : 'approval', ...parsed.data };
     } else {
       indisponibilidade = 'request_detail_incomplete_or_invalid';
     }
   }
   const response = capacidade.safeParse(pedido.responseCapability);
   const responseCapability = response.success ? response.data : null;
-  const action = conteudo?.tipo === 'user_input' ? 'runtime-request.answer' : 'runtime-request.approve';
+  const action = conteudo?.type === 'user_input' ? 'runtime-request.answer' : 'runtime-request.approve';
   const bloqueio = !conteudo ? indisponibilidade
     : !responseCapability ? 'response_capability_unavailable'
     : responseCapability.type === 'not_resumable' ? 'request_not_resumable' : null;
   const proximaAcao = bloqueio
-    ? { tipo: 'consultar_no_t3', motivo: bloqueio }
+    ? { type: 'inspect_in_t3', reason: bloqueio }
     : {
-      tipo: 'responder_runtime_request', action,
+      type: 'respond_runtime_request', action,
       tool: `t3_escrever_${action.replaceAll('.', '_').replaceAll('-', '_')}`,
       input: { ...(threadId ? { threadId } : {}), requestId: pedido.id },
-      campoResposta: conteudo.tipo === 'user_input' ? 'answers' : 'decision',
-      requerDecisaoDoUsuario: true,
+      responseField: conteudo.type === 'user_input' ? 'answers' : 'decision',
+      requiresUserDecision: true,
     };
   return {
     runtimeRequestId: pedido.id, requestId: pedido.id,
-    tipo: pedido.kind, motivo: motivoDoPedido(pedido.kind),
-    nodeId: pedido.nodeId ?? null, desde: pedido.createdAt,
-    detalhe: detalheDoPedido(projecao, pedido),
+    kind: pedido.kind, reason: motivoDoPedido(pedido.kind),
+    nodeId: pedido.nodeId ?? null, since: pedido.createdAt,
+    detail: detalheDoPedido(projecao, pedido),
     responseCapability,
-    conteudo, conteudoDisponivel: conteudo !== null,
-    indisponibilidade: conteudo ? null : indisponibilidade,
-    threadSendRespondePedido: false,
-    proximaAcao,
+    content: conteudo, contentAvailable: conteudo !== null,
+    unavailableReason: conteudo ? null : indisponibilidade,
+    threadSendAnswersRequest: false,
+    nextAction: proximaAcao,
   };
 }
 

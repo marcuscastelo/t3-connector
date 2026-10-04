@@ -5,7 +5,7 @@
 // depois passa o par (environment, threadId) escolhido.
 //
 // Um environment que falha ou não responde no prazo não derruba a busca: entra em
-// `falhasAmbientes` e `completa` fica false. Zero resultados com `completa: false` não
+// `environmentFailures` e `complete` fica false. Zero resultados com `complete: false` não
 // prova que a thread não existe.
 
 import { Cancelada, ErroT3 } from './t3.mjs';
@@ -20,7 +20,7 @@ export class EntradaInvalida extends Error {}
 export class CoberturaMudou extends CursorInvalido {
   constructor() {
     super();
-    this.message = 'os environments que responderam mudaram desde a primeira página; refaça a busca sem cursor';
+    this.message = 'the environments that answered changed since the first page; repeat the search without a cursor';
   }
 }
 
@@ -37,29 +37,31 @@ function correrComSinal(promessa, signal) {
 /** Código e motivo sem detalhes internos (caminho do token, stack, saída do ssh). */
 function falhaSanitizada(e) {
   if (e instanceof ErroT3) {
-    if (e.codigo === 'prazo') return { codigo: 'prazo', motivo: 'environment não respondeu no prazo' };
-    if (e.codigo === 'indisponivel') return { codigo: 'indisponivel', motivo: 'T3 indisponível nesse environment' };
-    if (e.codigo === 'environment_divergente') return { codigo: 'environment_divergente', motivo: 'endpoint respondeu como outro environment' };
-    if (e.status === 401 || e.status === 403) return { codigo: `http_${e.status}`, motivo: 'T3 recusou o token desse environment' };
-    if (e.status) return { codigo: `http_${e.status}`, motivo: `T3 respondeu ${e.status}` };
-    return { codigo: 'conexao_recusada', motivo: 'conexão recusada (token, escopo ou protocolo); veja t3_ambientes' };
+    if (e.codigo === 'prazo') return { code: 'timeout', reason: 'environment did not respond in time' };
+    if (e.codigo === 'indisponivel') return { code: 'unavailable', reason: 'T3 unavailable in this environment' };
+    if (e.codigo === 'environment_divergente') return { code: 'environment_mismatch', reason: 'endpoint answered as another environment' };
+    if (e.status === 401 || e.status === 403) return { code: `http_${e.status}`, reason: 'T3 refused the token of this environment' };
+    if (e.status) return { code: `http_${e.status}`, reason: `T3 answered ${e.status}` };
+    return { code: 'connection_refused', reason: 'connection refused (token, scope or protocol); see t3_ambientes' };
   }
-  return { codigo: 'falha', motivo: 'falha ao consultar o environment' };
+  return { code: 'failed', reason: 'failed to query the environment' };
 }
 
-function validar({ busca, threadId, correspondencia }) {
+function validar({ search: busca, threadId, match }) {
   const temBusca = busca !== undefined;
   const temId = threadId !== undefined;
-  if (temBusca === temId) throw new EntradaInvalida('informe exatamente um entre `busca` e `threadId`');
-  if (temBusca && !busca.trim()) throw new EntradaInvalida('`busca` vazia');
-  if (temId && correspondencia !== undefined) throw new EntradaInvalida('`correspondencia` só vale com `busca`; `threadId` é sempre exato');
+  if (temBusca === temId) throw new EntradaInvalida('pass exactly one of `search` and `threadId`');
+  if (temBusca && !busca.trim()) throw new EntradaInvalida('`search` is empty');
+  if (temId && match !== undefined) throw new EntradaInvalida('`match` only applies to `search`; `threadId` is always exact');
 }
 
-function criterio({ busca, threadId, correspondencia = 'parcial' }) {
+// As partes da assinatura do cursor mantêm os rótulos antigos (parcial/exata): um cursor
+// emitido antes da troca dos nomes dos parâmetros continua valendo.
+function criterio({ search: busca, threadId, match = 'partial' }) {
   if (threadId !== undefined) {
     return { casa: (t) => t.id === threadId, partes: ['threadId', threadId] };
   }
-  if (correspondencia === 'exata') {
+  if (match === 'exact') {
     const alvo = normalizar(busca);
     return { casa: (t) => normalizar(t.title) === alvo || t.id === busca, partes: ['exata', busca] };
   }
@@ -79,7 +81,7 @@ export async function buscarThreads(ambientes, args, {
 } = {}) {
   validar(args);
   const { casa, partes } = criterio(args);
-  const selecionados = (args.ambiente !== undefined ? [ambientes.resolver(args.ambiente)] : [...ambientes.registros])
+  const selecionados = (args.environment !== undefined ? [ambientes.resolver(args.environment)] : [...ambientes.registros])
     .sort((a, b) => comparador()([a.environmentId], [b.environmentId]));
 
   const total = AbortSignal.timeout(prazoTotalMs);
@@ -94,19 +96,19 @@ export async function buscarThreads(ambientes, args, {
         sinal,
       );
       const projetos = new Map((shell.projects ?? []).map((p) => [p.id, p]));
-      const ambiente = { ...ambientes.identidade(r), nome: info?.nome ?? null };
+      const ambiente = { ...ambientes.identidade(r), name: info?.nome ?? null };
       const threads = shell.threads
         .filter((t) => r.escopo.projetoPermitido(t.projectId) && !t.deletedAt && casa(t))
         .map((t) => {
           const item = resumir(t, projetos.get(t.projectId));
-          return { threadId: item.threadId, titulo: item.titulo, ambiente, ...item, arquivada: Boolean(t.archivedAt) };
+          return { threadId: item.threadId, title: item.title, environment: ambiente, ...item, archived: Boolean(t.archivedAt) };
         });
       resultados.set(r.environmentId, { ok: true, ambiente, threads });
     } catch (e) {
       if (signal?.aborted || e instanceof Cancelada) throw new Cancelada();
       const falha = total.aborted
-        ? { codigo: 'prazo_global', motivo: 'busca atingiu o prazo total antes da resposta desse environment' }
-        : proprio.aborted ? { codigo: 'prazo', motivo: 'environment não respondeu no prazo' } : falhaSanitizada(e);
+        ? { code: 'global_timeout', reason: 'the search reached its total deadline before this environment answered' }
+        : proprio.aborted ? { code: 'timeout', reason: 'environment did not respond in time' } : falhaSanitizada(e);
       resultados.set(r.environmentId, { ok: false, falha: { ...ambientes.identidade(r), ...falha } });
     }
   }
@@ -119,7 +121,7 @@ export async function buscarThreads(ambientes, args, {
       if (total.aborted) {
         resultados.set(r.environmentId, {
           ok: false,
-          falha: { ...ambientes.identidade(r), codigo: 'prazo_global', motivo: 'busca atingiu o prazo total antes de consultar esse environment' },
+          falha: { ...ambientes.identidade(r), code: 'global_timeout', reason: 'the search reached its total deadline before querying this environment' },
         });
         continue;
       }
@@ -131,15 +133,15 @@ export async function buscarThreads(ambientes, args, {
   const ordem = selecionados.map((r) => resultados.get(r.environmentId));
   const sucesso = ordem.filter((x) => x.ok);
   const falhasAmbientes = ordem.filter((x) => !x.ok).map((x) => x.falha);
-  const chave = (t) => [t.ambiente.environmentId, t.threadId];
+  const chave = (t) => [t.environment.environmentId, t.threadId];
   const comparar = comparador();
   const itens = sucesso.flatMap((x) => x.threads).sort((a, b) => comparar(chave(a), chave(b)));
 
-  const filtro = args.ambiente !== undefined ? selecionados[0].environmentId : null;
+  const filtro = args.environment !== undefined ? selecionados[0].environmentId : null;
   const consulta = assinatura(['t3_buscar_threads', ...partes, filtro, selecionados.map((r) => r.environmentId), sucesso.map((x) => x.ambiente.environmentId)]);
   let pagina;
   try {
-    pagina = paginar({ itens, consulta, cursor: args.cursor, limite: args.limite ?? 20, chave, comparar });
+    pagina = paginar({ itens, consulta, cursor: args.cursor, limite: args.limit ?? 20, chave, comparar });
   } catch (e) {
     // Mesma consulta com outra cobertura: diz por que o cursor deixou de valer.
     if (e instanceof CursorInvalido && args.cursor && mesmaConsultaOutraCobertura(args.cursor, consulta)) throw new CoberturaMudou();
@@ -148,13 +150,13 @@ export async function buscarThreads(ambientes, args, {
 
   return {
     total: itens.length,
-    ...(args.busca !== undefined ? { busca: args.busca, correspondencia: args.correspondencia ?? 'parcial' } : { threadId: args.threadId }),
-    retornadas: pagina.pagina.length,
-    truncado: pagina.truncado,
-    completa: falhasAmbientes.length === 0,
-    ...(pagina.proximoCursor ? { proximoCursor: pagina.proximoCursor } : {}),
-    ambientesConsultados: sucesso.map((x) => ({ ...x.ambiente, encontradas: x.threads.length })),
-    falhasAmbientes,
+    ...(args.search !== undefined ? { search: args.search, match: args.match ?? 'partial' } : { threadId: args.threadId }),
+    returned: pagina.pagina.length,
+    truncated: pagina.truncado,
+    complete: falhasAmbientes.length === 0,
+    ...(pagina.proximoCursor ? { nextCursor: pagina.proximoCursor } : {}),
+    queriedEnvironments: sucesso.map((x) => ({ ...x.ambiente, found: x.threads.length })),
+    environmentFailures: falhasAmbientes,
     threads: pagina.pagina,
   };
 }
