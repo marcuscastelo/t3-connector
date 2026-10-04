@@ -165,6 +165,34 @@ each `pedidosPendentes` entry is:
 | `conteudoDisponivel` | Whether the snapshot supplied a valid, supported request body |
 | `conteudo` | Typed body below, or `null` |
 | `indisponibilidade` | `null` when available; otherwise `request_detail_not_in_snapshot`, `request_detail_incomplete_or_invalid`, or `unsupported_request_kind` |
+| `threadSendRespondePedido` | Always `false`: `thread.send` does not resolve the pending runtime request |
+| `proximaAcao` | Structured response recommendation below, or an explicit instruction to inspect in T3 |
+
+When content and response capability are available, `proximaAcao` supplies the exact
+write action, connector tool name, target IDs and response field, without choosing a
+user answer. For example:
+
+```json
+{
+  "tipo": "responder_runtime_request",
+  "action": "runtime-request.answer",
+  "tool": "t3_escrever_runtime_request_answer",
+  "input": {"threadId": "blocked-thread", "requestId": "pending-question"},
+  "campoResposta": "answers",
+  "requerDecisaoDoUsuario": true
+}
+```
+
+After the user decides, add `answers` to this `input`, and supply the write tool's
+`leaseId`, `operationId` and the same enclosing `ambiente`. Approvals recommend
+`runtime-request.approve`, `t3_escrever_runtime_request_approve`, and `decision` instead.
+Missing or invalid content, unsupported kinds, unknown capability and `not_resumable`
+produce `{tipo: "consultar_no_t3", motivo}`; never a send or guessed answer.
+
+**`thread.send` does not answer runtime requests.** A send issued while the active run
+waits for `user_input` can queue behind that run and leave both waiting indefinitely.
+Resolve the existing request by ID, then reread `t3_thread` to confirm that it disappeared
+from `pedidosPendentes` and inspect the run state. Do not infer success from a send receipt.
 
 For **`user_input`**, `conteudo` is `{tipo: "user_input", questions, responseMode?}`.
 Each question preserves `id`, `header`, `question`, `options` (`label`, `description`,
@@ -205,6 +233,14 @@ resumable. Availability describes content, not permission or guaranteed answerab
 This projection uses the V2 contract recorded in [reference/README.md](reference/README.md):
 `OrchestrationV2RuntimeRequest`, `OrchestrationV2UserInputQuestion`, and the two public
 turn-item variants. It also applies to scoped `t3_thread` reads through the write plugin.
+
+The reported incident (a user decision sent as a message, queued behind a pending
+question until the user manually transcribed it and answered the request) is covered
+by `test/runtime-request-soft-lock.test.mjs`, with synthetic IDs and question content.
+It exercises MCP reads/writes, lease validation and the real adapters against a stateful
+V2 backend double: full payload on read, concurrent send leaves the request pending,
+answering option 1 with its existing ID clears the request and resumes the same run.
+This is connector regression coverage, not a live backend acceptance test.
 
 ### Search and pagination
 

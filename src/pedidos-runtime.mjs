@@ -25,7 +25,7 @@ const capacidade = z.discriminatedUnion('type', [
   z.object({ type: z.literal('not_resumable'), reason: z.string() }),
 ]);
 
-export function resumirPedidoRuntime(projecao, pedido) {
+export function resumirPedidoRuntime(projecao, pedido, threadId) {
   // Several requests may share a node. A node/title match cannot identify a question.
   const tipoItem = pedido.kind === 'user_input' ? 'user_input_request' : 'approval_request';
   const item = (projecao.turnItems ?? []).find(i => i.requestId === pedido.id && i.type === tipoItem);
@@ -43,14 +43,30 @@ export function resumirPedidoRuntime(projecao, pedido) {
     }
   }
   const response = capacidade.safeParse(pedido.responseCapability);
+  const responseCapability = response.success ? response.data : null;
+  const action = conteudo?.tipo === 'user_input' ? 'runtime-request.answer' : 'runtime-request.approve';
+  const bloqueio = !conteudo ? indisponibilidade
+    : !responseCapability ? 'response_capability_unavailable'
+    : responseCapability.type === 'not_resumable' ? 'request_not_resumable' : null;
+  const proximaAcao = bloqueio
+    ? { tipo: 'consultar_no_t3', motivo: bloqueio }
+    : {
+      tipo: 'responder_runtime_request', action,
+      tool: `t3_escrever_${action.replaceAll('.', '_').replaceAll('-', '_')}`,
+      input: { ...(threadId ? { threadId } : {}), requestId: pedido.id },
+      campoResposta: conteudo.tipo === 'user_input' ? 'answers' : 'decision',
+      requerDecisaoDoUsuario: true,
+    };
   return {
     runtimeRequestId: pedido.id, requestId: pedido.id,
     tipo: pedido.kind, motivo: motivoDoPedido(pedido.kind),
     nodeId: pedido.nodeId ?? null, desde: pedido.createdAt,
     detalhe: detalheDoPedido(projecao, pedido),
-    responseCapability: response.success ? response.data : null,
+    responseCapability,
     conteudo, conteudoDisponivel: conteudo !== null,
     indisponibilidade: conteudo ? null : indisponibilidade,
+    threadSendRespondePedido: false,
+    proximaAcao,
   };
 }
 
@@ -62,5 +78,5 @@ export function resumirPedidosRuntime(projecao, thread) {
   if (resumo && !(projecao.runtimeRequests ?? []).some(p => p.id === resumo.id)) {
     pendentes.push(resumo);
   }
-  return pendentes.map(p => resumirPedidoRuntime(projecao, p));
+  return pendentes.map(p => resumirPedidoRuntime(projecao, p, thread.id));
 }

@@ -247,7 +247,7 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
     {
       title: 'Thread state and latest response',
       description:
-        'Detailed state of an authorized thread, latest response and pending runtime requests. pedidosPendentes includes requestId, responseCapability and conteudo: user_input questions with IDs/options/field constraints, or approval prompt/options. Answer questions with runtime-request.answer (answers keyed by question ID); approvals use runtime-request.approve (decision). If conteudoDisponivel is false, do not infer an answer: inspect the request in T3. Pass the thread ambiente. Read-only.',
+        'Detailed state of an authorized thread, latest response and pending runtime requests. pedidosPendentes includes requestId, responseCapability, proximaAcao and conteudo: user_input questions with IDs/options/field constraints, or approval prompt/options. Follow proximaAcao: answer questions with runtime-request.answer (answers keyed by question ID); approvals use runtime-request.approve (decision). thread.send does NOT answer a pending runtime request and can remain queued behind the blocked run. If conteudoDisponivel is false, do not infer an answer: inspect the request in T3. Pass the thread ambiente. Read-only.',
       inputSchema: {
         ambiente: campoAmbiente,
         threadId: z.string().min(1),

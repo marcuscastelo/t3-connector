@@ -18,6 +18,9 @@ test('textual user_input exposes full question and response capability, without 
   assert.equal(r.runtimeRequestId, r.requestId);
   assert.equal(r.conteudoDisponivel, true);
   assert.equal(r.indisponibilidade, null);
+  assert.equal(r.proximaAcao.action, 'runtime-request.answer');
+  assert.equal(r.proximaAcao.campoResposta, 'answers');
+  assert.equal(r.threadSendRespondePedido, false);
   assert.deepEqual(r.responseCapability, { type: 'live' });
   assert.doesNotMatch(JSON.stringify(r), /secret|nativeRequestRef|providerSessionId|previous/);
 });
@@ -40,6 +43,8 @@ test('approval exposes prompt, app and provider decisions/warnings, separately f
     const r = resumirPedidoRuntime(projecao({ turnItems: [{ type: 'approval_request', requestId: 'req-1', requestKind: kind, prompt: 'Allow access?', appName: 'Example', options, questions: [question], nativePayload: 'hidden' }] }), pedido({ kind }));
     assert.deepEqual(r.conteudo, { tipo: 'approval', prompt: 'Allow access?', appName: 'Example', options: [{ decision: 'accept', label: 'Allow', warning: 'Untrusted input' }, { decision: 'decline', label: 'Reject' }] });
     assert.doesNotMatch(JSON.stringify(r), /hidden|questions/);
+    assert.equal(r.proximaAcao.action, 'runtime-request.approve');
+    assert.equal(r.proximaAcao.campoResposta, 'decision');
     const encoded = parseAction('runtime-request.approve', { threadId: 'thread-1', requestId: r.requestId, decision: r.conteudo.options[1].decision });
     assert.equal(encoded.spec.encode(encoded.input).decision, 'decline');
   }
@@ -49,6 +54,7 @@ test('absent provider options are not invented; non-resumable status is explicit
   const r = resumirPedidoRuntime(projecao({ turnItems: [{ type: 'approval_request', requestId: 'req-1', requestKind: 'command', prompt: 'Run build?' }] }), pedido({ responseCapability: { type: 'not_resumable', reason: 'Session closed', internal: 'hidden' } }));
   assert.deepEqual(r.conteudo, { tipo: 'approval', prompt: 'Run build?' });
   assert.deepEqual(r.responseCapability, { type: 'not_resumable', reason: 'Session closed' });
+  assert.deepEqual(r.proximaAcao, { tipo: 'consultar_no_t3', motivo: 'request_not_resumable' });
 });
 
 test('same-node unrelated request and wrong item type cannot supply the payload', () => {
@@ -75,6 +81,7 @@ test('missing detail and unsupported kind never fabricate a question or approval
   const r = resumirPedidoRuntime(projecao(), pedido({ kind: 'user_input' }));
   assert.equal(r.indisponibilidade, 'request_detail_not_in_snapshot');
   assert.equal(r.conteudo, null);
+  assert.deepEqual(r.proximaAcao, { tipo: 'consultar_no_t3', motivo: 'request_detail_not_in_snapshot' });
   assert.equal(resumirPedidoRuntime(projecao(), pedido({ kind: 'auth_refresh' })).indisponibilidade, 'unsupported_request_kind');
 });
 
@@ -85,6 +92,13 @@ test('shell-only pending request stays visible; resolved requests are excluded',
   assert.equal(r.responseCapability, null);
   assert.equal(r.conteudoDisponivel, false);
   assert.deepEqual(resumirPedidosRuntime(projecao({ pedidos: [pedido({ status: 'resolved' })] }), t), []);
+});
+
+test('valid content with unknown capability recommends inspection instead of sending or answering', () => {
+  const r = resumirPedidoRuntime(projecao({ turnItems: [input()] }), pedido({ kind: 'user_input', responseCapability: undefined }));
+  assert.equal(r.conteudoDisponivel, true);
+  assert.deepEqual(r.proximaAcao, { tipo: 'consultar_no_t3', motivo: 'response_capability_unavailable' });
+  assert.equal(r.threadSendRespondePedido, false);
 });
 
 test('t3_thread exposes the contract through MCP and scoped write-plugin reads', async (t) => {
