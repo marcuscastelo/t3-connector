@@ -47,9 +47,9 @@
   environment, across every configured environment (or one, with `environment`). Each
   result carries `environment: {alias, environmentId, name}`. Deadlines of 4 s per
   environment and 10 s in total; environments that fail are listed in
-  `environmentFailures` with `complete: false` instead of failing the search. Ambiguous matches are all returned,
-  ordered by environment and thread ID, with a cursor bound to the environments that
-  answered. Existing tools and write actions are unchanged and still take one environment.
+  `environmentFailures` with `complete: false` instead of failing the search. Ambiguous
+  matches are all returned, ordered by environment and thread ID, with a cursor bound to
+  the environments that answered. Existing tools and write actions are unchanged and still take one environment.
 
 ## 0.5.0
 
