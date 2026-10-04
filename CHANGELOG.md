@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.0
+
 - OAuth session profile: tunnel mode (`T3_CONNECTOR_OAUTH_RESOURCE`,
   `T3_CONNECTOR_OAUTH_TUNNEL_PORT`). The MCP resource is served on a loopback listener for an
   OpenAI Secure MCP Tunnel client, bound to the exact resource the tunnel names, while the public
