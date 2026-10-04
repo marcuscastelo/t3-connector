@@ -13,7 +13,7 @@ export const DEFAULTS = {
   accessTokenSeconds: 60,
   refreshTokenSeconds: 86400,
   maxAgeSeconds: 0,
-  loginMode: 'button',
+  loginMode: 'public',
   clients: [CHATGPT_CLIENT_ID],
   allowedOrigins: ['https://chatgpt.com'],
 };
@@ -36,6 +36,7 @@ export function loadOAuthConfig(env = process.env, { rehearsal = false } = {}) {
   if (u.protocol !== 'https:' && !localhostHttp) throw new Error('T3_CONNECTOR_OAUTH_ISSUER must be https (http://localhost only for local rehearsal)');
   if (u.origin !== issuer) throw new Error('T3_CONNECTOR_OAUTH_ISSUER must be an origin without path, query or fragment');
   const cfg = {
+    projectPolicy: env.T3_CONNECTOR_OAUTH_PROJECTS || 'restricted',
     issuer,
     publicPort,
     localPort: int('T3_CONNECTOR_OAUTH_LOCAL_PORT', env.T3_CONNECTOR_OAUTH_LOCAL_PORT, 1, 65535) ?? DEFAULTS.localPort,
@@ -44,13 +45,15 @@ export function loadOAuthConfig(env = process.env, { rehearsal = false } = {}) {
     accessTokenSeconds: int('T3_CONNECTOR_OAUTH_ACCESS_TOKEN_SECONDS', env.T3_CONNECTOR_OAUTH_ACCESS_TOKEN_SECONDS, 30, 3600) ?? DEFAULTS.accessTokenSeconds,
     refreshTokenSeconds: int('T3_CONNECTOR_OAUTH_REFRESH_TOKEN_SECONDS', env.T3_CONNECTOR_OAUTH_REFRESH_TOKEN_SECONDS, 300, 30 * 86400) ?? DEFAULTS.refreshTokenSeconds,
     maxAgeSeconds: int('T3_CONNECTOR_OAUTH_MAX_AGE_SECONDS', env.T3_CONNECTOR_OAUTH_MAX_AGE_SECONDS, 0, 365 * 86400) ?? DEFAULTS.maxAgeSeconds,
-    loginMode: env.T3_CONNECTOR_OAUTH_LOGIN_MODE || DEFAULTS.loginMode,
+    loginMode: env.T3_CONNECTOR_OAUTH_LOGIN_MODE || (localhostHttp ? 'button' : DEFAULTS.loginMode),
     clients: list(env.T3_CONNECTOR_OAUTH_CLIENTS) ?? DEFAULTS.clients,
     allowedOrigins: list(env.T3_CONNECTOR_OAUTH_ALLOWED_ORIGINS) ?? DEFAULTS.allowedOrigins,
     verbose: env.T3_CONNECTOR_OAUTH_VERBOSE === '1',
     resource: null,
     tunnelPort: int('T3_CONNECTOR_OAUTH_TUNNEL_PORT', env.T3_CONNECTOR_OAUTH_TUNNEL_PORT, 1, 65535) ?? null,
   };
+  if (!['all', 'restricted'].includes(cfg.projectPolicy)) throw new Error('T3_CONNECTOR_OAUTH_PROJECTS must be all or restricted');
+  if (cfg.projectPolicy === 'all' && env.T3_CONNECTOR_OAUTH_WRITE_PROJECTS) throw new Error('T3_CONNECTOR_OAUTH_PROJECTS=all conflicts with T3_CONNECTOR_OAUTH_WRITE_PROJECTS');
   // Tunnel mode: the MCP resource is served on a loopback listener for a Secure MCP Tunnel client,
   // whose hosted discovery names the resource; the issuer stays the public AS origin. The resource
   // is one exact HTTPS URL (compared verbatim everywhere), and both settings go together.
@@ -64,6 +67,7 @@ export function loadOAuthConfig(env = process.env, { rehearsal = false } = {}) {
   if (Boolean(cfg.resource) !== Boolean(cfg.tunnelPort)) throw new Error('T3_CONNECTOR_OAUTH_RESOURCE and T3_CONNECTOR_OAUTH_TUNNEL_PORT go together (tunnel mode)');
   if (cfg.tunnelPort && (cfg.tunnelPort === cfg.publicPort || cfg.tunnelPort === cfg.localPort)) throw new Error('the tunnel port must differ from the public and local ports');
   if (!LOGIN_MODES.includes(cfg.loginMode)) throw new Error(`T3_CONNECTOR_OAUTH_LOGIN_MODE must be one of ${LOGIN_MODES.join(', ')}`);
+  if (cfg.loginMode === 'public' && u.protocol !== 'https:') throw new Error('T3_CONNECTOR_OAUTH_LOGIN_MODE=public requires an https issuer');
   if (cfg.localPort === cfg.publicPort) throw new Error('public and local ports must differ');
   if (cfg.maxAgeSeconds && cfg.maxAgeSeconds < cfg.idleSeconds) throw new Error('T3_CONNECTOR_OAUTH_MAX_AGE_SECONDS must be 0 (off) or at least the idle window');
   return cfg;

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { stopwatch } from './session-authority.mjs';
+import { Admission, deadline } from './limits.mjs';
 import { json, html, readBody, page, redact } from './http.mjs';
 
 // Local control-plane, served only on loopback with Host `localhost:<port>` (the WebAuthn RP is
@@ -16,22 +17,15 @@ const swaBundle = () => readFileSync(join(dirname(dirname(createRequire(import.m
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 const FETCH_SITES = new Set(['cross-site', 'same-origin', 'same-site', 'none']);
 
-export function controlPlane({ port, issuer, passkeys, subject, authority, tokens, transactions, killSwitch, enrollment, grantProvider = null, clock, wall, audit = () => {} }) {
+export function controlPlane({ port, issuer, passkeys, subject, authority, tokens, transactions, killSwitch, enrollment, consent, admin, clock, wall, audit = () => {} }) {
   const origin = `http://localhost:${port}`, host = `localhost:${port}`, time = stopwatch({ clock, wall });
   const challenges = new Map();
+  const adminAdmission = new Admission({ clock, wall, burst: 30, perMinute: 60 });
   let bundle;
-  const newChallenge = key => { const c = randomBytes(32).toString('base64url'); challenges.set(key, { c, at: time.mark() }); return c; };
+  const newChallenge = key => { for (const [id, v] of challenges) if (time.elapsed(v.at) >= CHALLENGE_MS) challenges.delete(id); if (!challenges.has(key) && challenges.size >= 128) throw Object.assign(new Error('challenge_capacity'), { status: 429 }); const c = randomBytes(32).toString('base64url'); challenges.set(key, { c, at: time.mark() }); return c; };
   const takeChallenge = key => { const v = challenges.get(key); challenges.delete(key); if (!v || time.elapsed(v.at) >= CHALLENGE_MS) throw new Error('challenge_expired'); return v.c; };
-  // Write scope shown on the approval page and frozen into the session: the backend inventory taken
-  // once per sign-in, when the page first shows the transaction (same snapshot rule as the lease).
-  const grantsFor = tx => (tx.grants ??= grantProvider && tx.scope.split(' ').includes('connector:write')
-    ? grantProvider().catch(() => ({ grants: null, unavailable: [{ reason: 'inventory_failed' }] }))
-    : Promise.resolve({ grants: null, unavailable: [] }));
-  const grantSummary = g => ({
-    environments: (g.grants?.environments ?? []).map(e => ({ alias: e.alias, environmentId: e.environmentId, projects: e.projects.map(p => p.name), actions: e.actions.length })),
-    unavailable: g.unavailable,
-  });
-  const txView = async tx => ({ clientId: tx.clientId, clientName: tx.clientName, returnsTo: new URL(tx.redirectUri).host, scope: tx.scope, resource: tx.resource, mode: tx.mode, writes: grantSummary(await grantsFor(tx)) });
+  const grantsFor = consent.grantsFor;
+  const txView = consent.view;
 
   async function api(p, d) {
     switch (p) {
@@ -42,6 +36,8 @@ export function controlPlane({ port, issuer, passkeys, subject, authority, token
         if (tx.epoch !== authority.epoch) throw new Error('transaction_not_found');
         return passkeys.options(newChallenge(`login:${tx.id}`));
       }
+      case '/api/credentials/options': return admin.options(d);
+      case '/api/credentials/verify': return admin.verify(d);
       case '/api/login/verify': {
         if (authority.killed) throw new Error('kill_switch');
         const tx = transactions.find(d);
@@ -49,8 +45,8 @@ export function controlPlane({ port, issuer, passkeys, subject, authority, token
         const { grants } = await grantsFor(tx);
         const credentialId = await passkeys.verify({ response: d.response, challenge, origin });
         // Re-checked after the awaits: a kill switch or revoke-all meanwhile cancels the sign-in.
-        if (authority.killed || tx.epoch !== authority.epoch) throw new Error('transaction_not_found');
-        const resume = transactions.approve(tx, { sub: subject, credentialId, grants });
+        if (authority.killed || tx.epoch !== authority.epoch || !passkeys.current(credentialId)) throw new Error('transaction_not_found');
+        const resume = transactions.approve(tx, { sub: subject, credentialId, credentialRp: 'localhost', credentialOrigin: origin, credentialGeneration: passkeys.version(credentialId), grants });
         audit({ event: 'local_login_approved', tx: redact(tx.id), credential: redact(credentialId), via: d.handoff ? 'handoff' : 'oob' });
         return { resume: `${issuer}/resume?h=${encodeURIComponent(resume)}`, via: d.handoff ? 'handoff' : 'oob' };
       }
@@ -92,14 +88,18 @@ export function controlPlane({ port, issuer, passkeys, subject, authority, token
     if (req.method !== 'POST') return json(res, 405, { error: 'method_not_allowed' });
     if (req.headers.origin !== origin) return json(res, 403, { error: 'origin_invalid' });
     if (!(req.headers['content-type'] ?? '').startsWith('application/json')) return json(res, 415, { error: 'json_only' });
-    let d;
-    try { d = JSON.parse((await readBody(req)) || '{}'); } catch (e) { return json(res, e.status ?? 400, { error: e.status ? e.message : 'bad_json' }); }
-    if (!d || typeof d !== 'object') return json(res, 400, { error: 'bad_json' });
-    try { return json(res, 200, await api(p, d)); } catch (e) {
-      if (e.status === 404) return json(res, 404, { error: 'not_found' });
-      audit({ event: 'local_error', path: p, error: /^[a-z_]+$/.test(e.message) ? e.message : 'rejected' });
-      return json(res, 400, { error: /^[a-z_]+$/.test(e.message) ? e.message : 'rejected' });
-    }
+    let release;
+    try {
+      if (p.startsWith('/api/credentials/')) { adminAdmission.take('local-admin'); release = adminAdmission.enter(); }
+      let d;
+      try { d = JSON.parse((await deadline(readBody(req), 5000)) || '{}'); } catch (e) { return json(res, e.status ?? 400, { error: e.status ? e.message : 'bad_json' }); }
+      if (!d || typeof d !== 'object') return json(res, 400, { error: 'bad_json' });
+      try { return json(res, 200, await api(p, d)); } catch (e) {
+        if (e.status === 404) return json(res, 404, { error: 'not_found' });
+        audit({ event: 'local_error', error: /^[a-z_]+$/.test(e.message) ? e.message : 'rejected' });
+        return json(res, e.status ?? 400, { error: /^[a-z_]+$/.test(e.message) ? e.message : 'rejected' });
+      }
+    } catch (e) { return json(res, e.status ?? 400, { error: /^[a-z_]+$/.test(e.message) ? e.message : 'rejected' }); } finally { release?.(); }
   };
 }
 
@@ -128,7 +128,7 @@ const loginPage = n => page('Approve sign-in', `<h1>Approve sign-in</h1>
 <script nonce="${n}">${api}
 let ref=null;const frag=new URLSearchParams(location.hash.slice(1)).get('handoff');history.replaceState(null,'',location.pathname);
 function row(k,v){const dt=document.createElement('dt');dt.textContent=k;const dd=document.createElement('dd');dd.textContent=v;$('view').append(dt,dd);}
-async function show(r){ref=r;const v=await api('/api/login/view',r);$('view').textContent='';row('Client',(v.clientName?v.clientName+' ':'')+'('+v.clientId+')');row('Returns to',v.returnsTo);row('Access',v.scope);row('Resource',v.resource);for(const e of v.writes.environments)row('Writes: '+e.alias,e.projects.join(', ')+' ('+e.actions+' actions, full-access)');for(const u of v.writes.unavailable)row('Unavailable',(u.alias||'')+' '+u.reason);$('approve').hidden=false;$('code').hidden=true;say('');}
+async function show(r){ref=r;const v=await api('/api/login/view',r);$('view').textContent='';row('Client',(v.clientName?v.clientName+' ':'')+'('+v.clientId+')');row('Returns to',v.returnsTo);row('Access',v.scope);row('Resource',v.resource);row('Consent',v.writes.consent);for(const e of v.writes.environments)row('Environment: '+e.alias,e.environmentId+' '+e.destination+'; '+(e.projects?e.projects.join(', '):'all current and future projects')+(v.scope.split(' ').includes('connector:write')&&e.actions>0?' ('+e.actions+' actions, full-access)':''));for(const u of v.writes.unavailable)row('Unavailable',(u.alias||'')+' '+u.reason);$('approve').hidden=false;$('code').hidden=true;say('');}
 $('find').onclick=()=>show({oob:$('oob').value}).catch(e=>say('Error: '+e.message));
 $('approve').onclick=async()=>{try{say('Waiting for passkey…');const o=await api('/api/login/options',ref);const response=await SimpleWebAuthnBrowser.startAuthentication({optionsJSON:o});const v=await api('/api/login/verify',{...ref,response});$('approve').hidden=true;
 if(v.via==='oob'){say('Approved. Go back to the sign-in page; it continues by itself. You can close this tab.');}else{say('Approved, returning…');location.replace(v.resume);}}catch(e){say('Error: '+e.message);}};
@@ -147,11 +147,16 @@ $('go').onclick=async()=>{try{const ticket=$('ticket').value.trim();const o=awai
 const adminPage = n => page('T3 Connector — local control', `<h1>Local control</h1>
 <p><a href="/enroll">Enroll a passkey</a></p>
 <p><button id="all" class="danger">Revoke all sessions</button> <button id="kill" class="danger">Kill switch</button> <button id="release" hidden>Release kill switch (passkey)</button></p>
+<p><button id="public-enroll">Authorize public passkey enrollment</button> <button id="credentials">Manage credentials (local passkey)</button></p><p id="enrollment-link"></p><div id="qr"></div><div id="credential-list"></div>
 <p id="s"></p><table><thead><tr><th>Session</th><th>Client</th><th>State</th><th>Idle (s)</th><th>Age (s)</th><th></th></tr></thead><tbody id="rows"></tbody></table>
 <script src="/vendor/swa.js"></script>
 <script nonce="${n}">${api}
 async function load(){const v=await api('/api/sessions');$('release').hidden=!v.killed;$('kill').hidden=v.killed;say((v.killed?'KILL SWITCH ON. ':'')+v.credentials+' passkey(s); tokens '+JSON.stringify(v.tokens));const tb=$('rows');tb.textContent='';
 for(const x of v.sessions){const tr=document.createElement('tr');for(const c of [x.sid.slice(0,8),x.clientId,x.state,x.idleSeconds,x.ageSeconds]){const td=document.createElement('td');td.textContent=c;tr.append(td);}const td=document.createElement('td');if(x.state==='active'){const b=document.createElement('button');b.className='danger';b.textContent='Revoke';b.onclick=()=>api('/api/sessions/revoke',{sid:x.sid}).then(load);td.append(b);}tr.append(td);tb.append(tr);}}
+async function administration(action,rp,credentialId){const proof=await api('/api/credentials/options',{action,...(rp?{rp}:{}),...(credentialId?{credentialId}:{})});const response=await SimpleWebAuthnBrowser.startAuthentication({optionsJSON:proof.options});return api('/api/credentials/verify',{handle:proof.handle,response});}
+function credentials(v){const box=$('credential-list');box.textContent='';for(const c of v.credentials){const p=document.createElement('p');p.textContent=c.rp+' ('+c.rpID+'): '+c.credentialId+' ['+c.state+']';const b=document.createElement('button');b.textContent=c.state==='active'?'Remove with local passkey':'Finish removal with local passkey';b.onclick=async()=>{try{const v=await administration('remove',c.rp,c.credentialId);credentials(v);load();}catch(e){say(e.message);}};p.append(b);box.append(p);}}
+$('credentials').onclick=async()=>{try{credentials(await administration('list'));}catch(e){say(e.message);}};
+$('public-enroll').onclick=async()=>{try{const v=await administration('enroll-public');const a=document.createElement('a');a.href=v.link;a.textContent='Open public enrollment (single use, 15 minutes)';a.rel='noreferrer';$('enrollment-link').replaceChildren(a);const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 '+(v.qr.size+8)+' '+(v.qr.size+8));svg.setAttribute('width','240');svg.setAttribute('height','240');const background=document.createElementNS(ns,'rect');background.setAttribute('width','100%');background.setAttribute('height','100%');background.setAttribute('fill','white');svg.append(background);for(const [x,y] of v.qr.cells){const rect=document.createElementNS(ns,'rect');rect.setAttribute('x',x+4);rect.setAttribute('y',y+4);rect.setAttribute('width','1');rect.setAttribute('height','1');rect.setAttribute('fill','black');svg.append(rect);}$('qr').replaceChildren(svg);say('Public enrollment authorized. Treat the link and QR as a temporary administrative capability.');}catch(e){say(e.message);}};
 $('all').onclick=()=>api('/api/sessions/revoke-all').then(load);
 $('kill').onclick=()=>api('/api/kill').then(load);
 $('release').onclick=async()=>{try{const o=await api('/api/release/options');const response=await SimpleWebAuthnBrowser.startAuthentication({optionsJSON:o});await api('/api/release/verify',{response});load();}catch(e){say('Error: '+e.message);}};

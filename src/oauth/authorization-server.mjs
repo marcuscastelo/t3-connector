@@ -4,11 +4,11 @@ import { json, html, redirect, readBody, cookies, page, esc, redact } from './ht
 
 // Embedded OAuth 2.1 authorization server (public routes). Authorization code + PKCE S256 only,
 // CIMD clients with private_key_jwt, RFC 9207 `iss` in every callback, RFC 8707 single resource.
-// The user authenticates with a passkey on the local control-plane, reached from /authorize by a
-// top-level navigation to localhost (button or 302) or by an out-of-band code.
+// Public mode authenticates at the issuer and requires explicit consent after UV. The existing
+// local button/302/OOB handoff remains available for desktop use and HTTP rehearsal.
 export const SCOPES = ['connector:read', 'connector:write'];
-export const LOGIN_MODES = ['button', '302', 'oob'];
-const COOKIE = 't3c_tx';
+export const LOGIN_MODES = ['button', '302', 'oob', 'public'];
+export const transactionCookie = issuer => issuer.startsWith('https://') ? '__Host-t3c_tx' : 't3c_tx';
 const VERIFIER = /^[A-Za-z0-9\-._~]{43,128}$/;
 const GRANT_TYPES = new Set(['authorization_code', 'refresh_token']);
 
@@ -38,8 +38,10 @@ export const pkceMatches = (verifier, challenge) => {
   return a.length === b.length && timingSafeEqual(a, b);
 };
 
-export function authorizationServer({ issuer, resource, localOrigin, loginMode = 'button', authority, tokens, clients, transactions, audit = () => {} }) {
+export function authorizationServer({ issuer, resource, localOrigin, loginMode = 'button', authority, tokens, clients, transactions, publicLogin = null, credentialCurrent = () => true, audit = () => {} }) {
   if (!LOGIN_MODES.includes(loginMode)) throw new Error('invalid_login_mode');
+  if (loginMode === 'public' && !issuer.startsWith('https://')) throw new Error('public_login_https_required');
+  const COOKIE = transactionCookie(issuer);
   const secureCookie = issuer.startsWith('https://') ? '; Secure' : '';
   const setCookie = (v, maxAge) => `${COOKIE}=${v}; HttpOnly${secureCookie}; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
   const errorPage = (res, status, message) => html(res, status, n => page('Sign-in error', `<h1>Sign-in failed</h1><p>${esc(message)}</p><p class="muted">Start the connection again from the client app.</p>`, n));
@@ -51,10 +53,13 @@ export function authorizationServer({ issuer, resource, localOrigin, loginMode =
   };
 
   async function authorize(req, res, url) {
+    if (loginMode === 'public') publicLogin.admitAuthorize(req);
     const q = Object.fromEntries(url.searchParams);
+    if ([...url.searchParams.values()].some(v => v.length > 2048) || url.searchParams.size > 16) return errorPage(res, 400, 'Invalid authorization request.');
     let client;
     try { client = await clients.resolve(q.client_id); } catch (e) {
       audit({ event: 'authorize_rejected', reason: e.description ?? e.message, clientId: redact(q.client_id) });
+      if (e.status === 429) return json(res, 429, { error: 'rate_limited' });
       return errorPage(res, 400, 'Unknown or invalid client.');
     }
     if (!client.redirectUris.includes(q.redirect_uri)) {
@@ -76,9 +81,11 @@ export function authorizationServer({ issuer, resource, localOrigin, loginMode =
     const asked = typeof q.scope === 'string' ? [...new Set(q.scope.split(' ').filter(s => SCOPES.includes(s)))] : null;
     if (asked && !asked.length) return back('invalid_scope', 'no_supported_scope');
     const scope = (asked ?? SCOPES).join(' ');
+    if (loginMode === 'public') transactions.cancelBrowser(cookies(req)[COOKIE]);
     const { tx, cookie, handoff } = transactions.create({ clientId: client.clientId, clientName: client.name, redirectUri: q.redirect_uri, state: q.state, codeChallenge: q.code_challenge, resource, scope, mode: loginMode, epoch: authority.epoch });
     audit({ event: 'authorize', tx: redact(tx.id), clientId: client.clientId, scope, resourceSent: q.resource !== undefined, mode: loginMode, browser: browser(req) });
     const headers = { 'Set-Cookie': setCookie(cookie, 300) };
+    if (loginMode === 'public') return html(res, 200, n => publicLogin.page(tx, n), headers);
     const localUrl = `${localOrigin}/login#handoff=${handoff}`;
     if (loginMode === '302') return redirect(res, localUrl, headers);
     return html(res, 200, n => page('Sign in', `<h1>T3 Connector sign-in</h1>
@@ -103,7 +110,9 @@ ${loginMode === 'button' ? `<p>Approve this sign-in with your passkey on the loc
     let sid;
     try {
       // A revoke-all or kill switch after this sign-in started cancels it, even if already approved.
-      if (tx.epoch !== authority.epoch) throw new Error('authority_reset'); sid = authority.create({ sub: tx.approved.sub, clientId: tx.clientId, credentialId: tx.approved.credentialId, scope: tx.scope, resource: tx.resource, grants: tx.approved.grants ?? null }); } catch (e) {
+      if (tx.epoch !== authority.epoch) throw new Error('authority_reset');
+      if (!credentialCurrent(tx.approved)) throw new Error('credential_removed');
+      sid = authority.create({ sub: tx.approved.sub, clientId: tx.clientId, credentialId: tx.approved.credentialId, credentialRp: tx.approved.credentialRp ?? 'localhost', credentialOrigin: tx.approved.credentialOrigin ?? null, scope: tx.scope, resource: tx.resource, grants: tx.approved.grants ?? null }); } catch (e) {
       audit({ event: 'resume_rejected', reason: e.message });
       return redirect(res, callback(tx.redirectUri, { error: 'access_denied', error_description: e.message, state: tx.state }), clear);
     }

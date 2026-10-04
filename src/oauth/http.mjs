@@ -6,10 +6,10 @@ export const redact = v => (v ? createHash('sha256').update(String(v)).digest('h
 export const nonce = () => randomBytes(16).toString('base64');
 export const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const SECURITY_HEADERS = { 'Cache-Control': 'no-store', Pragma: 'no-cache', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY' };
+export const SECURITY_HEADERS = { 'Content-Security-Policy': "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'", 'Cache-Control': 'no-store', Pragma: 'no-cache', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY' };
 
 export function json(res, status, body, headers = {}) {
-  res.writeHead(status, { ...SECURITY_HEADERS, 'Content-Type': 'application/json', ...headers });
+  res.writeHead(status, { ...SECURITY_HEADERS, ...(status === 429 ? { 'Retry-After': '1' } : {}), 'Content-Type': 'application/json', ...headers });
   res.end(JSON.stringify(body));
 }
 
@@ -19,7 +19,7 @@ export function html(res, status, render, headers = {}) {
   const n = nonce();
   res.writeHead(status, {
     ...SECURITY_HEADERS, 'Content-Type': 'text/html; charset=utf-8',
-    'Content-Security-Policy': `default-src 'none'; script-src 'nonce-${n}' 'self'; style-src 'nonce-${n}'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+    'Content-Security-Policy': `default-src 'none'; script-src 'nonce-${n}' 'self'; style-src 'nonce-${n}'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'`,
     ...headers,
   });
   res.end(render(n));
@@ -37,10 +37,10 @@ export async function readBody(req, limit = MAX_BODY) {
 }
 
 export function cookies(req) {
-  const out = {};
+  const out = Object.create(null);
   for (const part of (req.headers.cookie ?? '').split(';')) {
     const i = part.indexOf('='); if (i < 1) continue;
-    const k = part.slice(0, i).trim(); if (!(k in out)) out[k] = part.slice(i + 1).trim();
+    const k = part.slice(0, i).trim(); if (Object.hasOwn(out, k)) out[k] = null; else out[k] = part.slice(i + 1).trim();
   }
   return out;
 }

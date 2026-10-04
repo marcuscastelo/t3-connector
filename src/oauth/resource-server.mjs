@@ -14,6 +14,8 @@ import { json, readBody, redact } from './http.mjs';
 //   - shared sources: a long-lived inner server (the existing read catalog) with one client;
 //   - per-request sources: registerTools(server, principal) on a fresh inner server, so handlers
 //     get the verified principal by closure, never from tool arguments.
+//   - per-invocation sources: discovery uses a request-local server, but each tools/call opens
+//     its own server/context, including concurrent messages in one HTTP JSON-RPC batch.
 // The facade enforces, per tools/call: scope (read-only tools need connector:read, the others
 // connector:write), then admits activity (the only thing that restarts the idle window), forwards,
 // and re-checks the session before releasing the result. initialize, tools/list, ping and
@@ -41,6 +43,18 @@ export function sharedSource(server) {
 export function perRequestSource(registerTools, serverInfo = { name: 'oauth-inner', version: '1.0.0' }) {
   return { shared: false, async open(principal) { const s = new McpServer(serverInfo); registerTools(s, principal); const client = await pair(s, 'oauth-facade'); return { client, close: () => client.close() }; } };
 }
+export function perInvocationSource(createServer) {
+  const source = { shared: false, async open(principal) {
+    const client = await pair(createServer(principal), 'oauth-facade-invocation');
+    return { client, close: () => client.close() };
+  } };
+  source.callTool = async (principal, params, options) => {
+    const invocation = await source.open(principal);
+    try { return await invocation.client.callTool(params, undefined, options); }
+    finally { await invocation.close(); }
+  };
+  return source;
+}
 
 // `route` is the local path that serves MCP; by default the resource's own path. Behind a tunnel the
 // canonical resource lives on the tunnel service and the local route stays /mcp. Metadata is served
@@ -61,13 +75,13 @@ export function resourceServer({ issuer, resource, route, scopes, tokens, author
   async function facade(principal) {
     const opened = [];
     const clients = await Promise.all(sources.map(async src => {
-      if (src.shared) return src.client();
-      const o = await src.open(principal); opened.push(o); return o.client;
+      if (src.shared) return { client: await src.client(), src };
+      const o = await src.open(principal); opened.push(o); return { client: o.client, src };
     }));
     const catalog = new Map();
-    for (const client of clients) {
+    for (const { client, src } of clients) {
       const { tools } = await client.listTools();
-      for (const tool of tools) if (!catalog.has(tool.name)) catalog.set(tool.name, { tool, client });
+      for (const tool of tools) if (!catalog.has(tool.name)) catalog.set(tool.name, { tool, client, src });
     }
     const server = new Server(serverInfo, { capabilities: { tools: {} } });
     server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...catalog.values()].map(e => e.tool) }));
@@ -81,7 +95,8 @@ export function resourceServer({ issuer, resource, route, scopes, tokens, author
         return { isError: true, content: [{ type: 'text', text: 'session_expired: reconnect the connector' }] };
       }
       audit({ event: 'tool_call', tool: name, sid: redact(principal.sid) });
-      const result = await entry.client.callTool({ name, arguments: req.params.arguments ?? {} }, undefined, { signal: extra.signal, timeout: 15 * 60 * 1000 });
+      const params = { name, arguments: req.params.arguments ?? {} }, options = { signal: extra.signal, timeout: 15 * 60 * 1000 };
+      const result = await (entry.src.callTool ? entry.src.callTool(principal, params, options) : entry.client.callTool(params, undefined, options));
       // Session revoked or expired while the call ran: the fetched result does not leave.
       try { authority.check(principal.sid); } catch (e) {
         audit({ event: 'tool_result_withheld', tool: name, reason: e.message, sid: redact(principal.sid) });

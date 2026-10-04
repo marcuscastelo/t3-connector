@@ -13,17 +13,17 @@ export function authenticator({rpID=RPID}={}) {
  const cose=new Map([[1,2],[3,-7],[-1,1],[-2,new Uint8Array(Buffer.from(jwk.x,'base64url'))],[-3,new Uint8Array(Buffer.from(jwk.y,'base64url'))]]);
  const credential={id:b64(credentialId),publicKey:new Uint8Array(encodeCBOR(cose)),counter:0,transports:['internal']};
  function data(flags,counter) {const bytes=Buffer.alloc(37);createHash('sha256').update(rpID).digest().copy(bytes);bytes[32]=flags;bytes.writeUInt32BE(counter,33);return bytes;}
- function client(challenge,origin,type) {return Buffer.from(JSON.stringify({type,challenge,origin,crossOrigin:false}));}
+ function client(challenge,origin,type,context={}) {return Buffer.from(JSON.stringify({type,challenge,origin,crossOrigin:false,...context}));}
  return {credential,
- assertion(challenge,{origin=ORIGIN,uv=true,counter=1,badSignature=false}={}) {
-  const c=client(challenge,origin,'webauthn.get'),auth=data(uv?5:1,counter),sig=sign('sha256',Buffer.concat([auth,createHash('sha256').update(c).digest()]),privateKey);
+ assertion(challenge,{origin=ORIGIN,uv=true,counter=1,badSignature=false,up=true,context={}}={}) {
+  const c=client(challenge,origin,'webauthn.get',context),auth=data((uv?4:0)+(up?1:0),counter),sig=sign('sha256',Buffer.concat([auth,createHash('sha256').update(c).digest()]),privateKey);
   if(badSignature)sig[10]^=1;
   return {id:credential.id,rawId:credential.id,type:'public-key',clientExtensionResults:{},response:{clientDataJSON:b64(c),authenticatorData:b64(auth),signature:b64(sig)}};
  },
- registration(challenge,{origin=ORIGIN,uv=true}={}) {
+ registration(challenge,{origin=ORIGIN,uv=true,up=true,context={}}={}) {
   const length=Buffer.alloc(2);length.writeUInt16BE(credentialId.length);
-  const auth=Buffer.concat([data(uv?69:65,0),Buffer.alloc(16),length,credentialId,Buffer.from(credential.publicKey)]);
-  return {id:credential.id,rawId:credential.id,type:'public-key',clientExtensionResults:{},response:{clientDataJSON:b64(client(challenge,origin,'webauthn.create')),attestationObject:b64(encodeCBOR(new Map([['fmt','none'],['attStmt',new Map()],['authData',new Uint8Array(auth)]]))),transports:['internal']}};
+  const auth=Buffer.concat([data(64+(uv?4:0)+(up?1:0),0),Buffer.alloc(16),length,credentialId,Buffer.from(credential.publicKey)]);
+  return {id:credential.id,rawId:credential.id,type:'public-key',clientExtensionResults:{},response:{clientDataJSON:b64(client(challenge,origin,'webauthn.create',context)),attestationObject:b64(encodeCBOR(new Map([['fmt','none'],['attStmt',new Map()],['authData',new Uint8Array(auth)]]))),transports:['internal']}};
  }};
 }
 export function memoryJournal() {const m=new Map();return {get:k=>m.get(k),put:(k,v)=>m.set(k,v),reserve:(k,v)=>{if(m.has(k))return false;m.set(k,v);return true;}};}

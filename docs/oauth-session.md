@@ -5,7 +5,7 @@ ChatGPT using this code** (the spike harness was). Nothing here changes `t3-conn
 or `t3-connector-write` (stdio, passkey lease). Both keep working as before.
 
 Goal: a client such as ChatGPT connects once with OAuth, the user approves the first sign-in with a
-passkey (WebAuthn, user verification) on a local control page, and from then on the client reads
+passkey (WebAuthn, user verification) at the HTTPS issuer, explicitly consents, and then reads
 and writes through one MCP resource over HTTP. Rotating refresh keeps the connection alive without
 interaction while the client keeps calling tools. After a configurable idle window (default 1 h)
 without tool calls, the next call needs a new passkey sign-in. Revocation and the kill switch are
@@ -19,10 +19,12 @@ immediate.
 | Token store | `src/oauth/token-store.mjs` | Single-use codes (60 s), opaque access tokens (default 60 s, truncated to the idle deadline), rotating refresh tokens (24 h per generation). Used codes and consumed refresh tokens stay as tombstones until their session ends, so reuse ends the session at any time. Only HMACs of token values are stored. `redirect_uri` at `/token` is checked when sent and may be omitted (OAuth 2.1 with PKCE); the authorization request always requires the exact registered callback. |
 | Client registry | `src/oauth/clients.mjs` | Allowlisted CIMD clients only. `private_key_jwt` verified against the document's JWKS (ES256, RS256, PS256): signature, `iss`=`sub`=client, `aud`, numeric `exp` with at most 10 min of remaining validity, and when `iat` is present (it is optional in RFC 7523) at most 10 min from `iat` to `exp`; malformed time claims refused; `jti` replay cache; key rotation (one refetch on unknown `kid`). Client documents are read as a stream and cut at 64 KiB. No `none`, no secrets, no DCR. |
 | Authorization server | `src/oauth/authorization-server.mjs` | Metadata (also served at `/.well-known/openid-configuration`, which ChatGPT probes), `/authorize` (code + PKCE S256 only, exact callback, single resource, unknown scopes dropped, explicit request with no supported scope refused), `/resume`, `/token`, `/revoke`. RFC 9207 `iss` on every callback. |
-| Login transactions | `src/oauth/transactions.mjs` | Server-side state of each sign-in. The browser only carries opaque handles; the resume handle exists only after a verified passkey and still needs the transaction cookie. 5 min TTL. |
+| Login transactions | `src/oauth/transactions.mjs` | Server-side state of each sign-in. The browser only carries opaque handles; the resume handle exists only after a verified passkey and still needs the transaction cookie. 5 min TTL, at most 128 live transactions. Public lookup needs the cookie, mode, epoch and actual map membership. |
 | Control plane | `src/oauth/control-plane.mjs` | Loopback only, Host `localhost:<port>`, exact Origin and JSON on every POST. `/login` (passkey approval, shows client, callback host, scopes and the write scope), `/enroll` (ticket printed on the terminal, single use, 15 min), `/` (sessions, revoke, revoke all, kill switch; releasing the kill switch needs a passkey). |
+| Public sign-in / enrollment | `src/oauth/public-login.mjs`, `src/oauth/public-enrollment.mjs` | Separate issuer RP, UV then explicit consent, no private inventory before UV; locally authorized temporary browser-bound enrollment. |
+| Credential administration / storage | `src/oauth/credential-admin.mjs`, `src/oauth/credential-storage.mjs`, `src/oauth/passkeys.mjs` | Local action-bound UV, independent RP maps/files, canonical subject, bounded serialized verification/mutation and synchronous guarded persistence. |
 | Resource server | `src/oauth/resource-server.mjs` | Streamable HTTP, stateless, JSON responses. Global OAuth (initialize and tools/list too). Facade over inner catalogs: scope per tool, activity admitted per `tools/call`, session re-checked before a result leaves. |
-| T3 catalog | `src/oauth/t3-tools.mjs`, `src/oauth/session-writes.mjs` | The eight existing read tools (read config) and, when configured, the write catalog without `leaseId`, authorized by the session. |
+| T3 catalog | `src/oauth/t3-tools.mjs`, `src/oauth/session-writes.mjs` | The eight existing read tools and optional write catalog without `leaseId`. OAuth/all authorizes live inventory in consented environments; restricted mode retains the read ACL and write snapshot. |
 | Rehearsal tools | `src/oauth/rehearsal-tools.mjs` | `rehearsal_now`, `rehearsal_echo`, `rehearsal_notes` (read) and `rehearsal_note_write` (write, in memory). No backend. |
 | Entry point | `bin/t3-connector-oauth.mjs` | `serve`, `rehearsal`, `--version`. |
 
@@ -41,17 +43,107 @@ Two listeners:
 3. Browser opens `/authorize`. The AS validates the client document, exact callback, PKCE S256 and
    resource, creates a transaction and sets an `HttpOnly; SameSite=Lax` cookie (`Secure` when the
    issuer is HTTPS).
-4. Login mode `button` (default): page with a top-level link to
-   `http://localhost:7435/login#handoff=…`. Mode `302`: immediate redirect there. Mode `oob`: the page
-   shows a code to type into the local page. All modes also show the code and poll, as a fallback.
-5. The local page shows the client, callback host, scopes and the write scope (backend inventory
-   taken now and frozen into the sign-in), then asks for the passkey with
-   `userVerification: required`, RP ID `localhost`, origin `http://localhost:7435`.
-6. On success the browser returns to `/resume` on the public origin. With the transaction cookie the
-   AS creates the session, issues a code and redirects to the client callback with `code`, the
-   original `state` and `iss`.
+4. Login mode `public` (default for HTTPS): the issuer page shows the actual client, callback
+   host, effective scopes and resource. A deliberate button starts the public-RP passkey ceremony;
+   it does not start automatically. RP ID is the issuer hostname, origin is exactly the issuer.
+   No public page or fallback navigates to localhost. Missing public credentials require
+   administrative enrollment; the page never downgrades to the local RP.
+5. After UV, private inventory/policy is fetched once and frozen for this transaction. A second
+   deliberate button approves the connection, showing requested scopes, configured idle/max-age,
+   environment identities/destinations and unavailable hosts. Verbs and action counts follow the
+   effective scopes and configured write capabilities: read-only consent has no write actions,
+   and a deployment without write tools explicitly states that writing is unavailable, even if
+   the client requested `connector:write`. In `all` mode the boundary is read
+   and/or write of **all current and future projects** of the consented environments (Polaris and
+   Sirius in this deployment), with automatic inclusion; no unrequested write/read claim.
+   Restricted mode retains its write snapshot. Authentication alone creates no session or code.
+6. Approval returns the existing `/resume` handle. With the original cookie, the AS creates the
+   session and redirects to the exact registered callback with a code, original `state` and `iss`.
+   Parallel verify/consent/resume attempts cannot create a second approval or session.
+
+`button`, `302` and `oob` remain explicit desktop modes: top-level local link, immediate local
+redirect, or code typed into the local page, with the existing polling/OOB fallback. Their local
+RP remains `localhost`, origin `http://localhost:<local port>`. HTTP localhost rehearsal defaults
+to `button`; `public` is invalid with any HTTP issuer.
 7. Client exchanges the code at `/token` with `private_key_jwt` and the PKCE verifier and gets an
    access token and a refresh token.
+
+### Public credential enrollment and removal
+
+The original local credential and `passkeys.json` remain separate from `passkeys-public.json`.
+Public storage has schema version, exact issuer origin/RP ID and the **existing canonical subject**.
+Mismatch/corruption fails boot; changing issuer requires an explicit credential migration, not
+reinterpretation. Both files use atomic synchronous writes, mode 0600, in a 0700 state directory.
+Restart preserves keys/subject and ends all sessions, transactions and public enrollment tickets.
+
+On the local control page, **Authorize public passkey enrollment** requires a fresh local-passkey
+UV proof bound specifically to issuance. The protected response shows a link and locally rendered
+QR. A public assertion or kill-release proof cannot issue, reveal, list or remove credentials.
+`SIGUSR2` retains its existing local bootstrap behavior; there is no public signal/terminal issuer.
+
+The link is a 128-bit, single-use administrative capability in a URL fragment. It is stored only
+as a digest in memory, never logged or persisted. The page immediately removes the fragment;
+every POST requires that capability plus an enrollment-browser cookie. The first valid options
+request claims it atomically for that browser. One generation is outstanding, at most 15 minutes;
+replacement, kill, revoke-all, restart and success invalidate it. Challenges expire within 120 s.
+Generation/epoch/browser/freshness checks run after crypto and immediately before the synchronous
+credential commit. An invalid guess cannot consume an operator's valid ticket or a replacement.
+
+With no active capability, **all** public `/enroll`, `/enroll/options`, `/enroll/verify` routes
+return 404 before parsing or work. During an authorized window GET serves a generic page, not an
+authenticated enrollment; possession of the link grants power to add a public credential for the
+canonical subject. Protect the link/QR as administrative secrets. There is no public startup ticket,
+permanent registration endpoint, password/PIN fallback or proxy to the local handler.
+
+**Manage credentials** also needs fresh local, action-bound UV to list keys or remove the selected
+RP/key. Once bounded queue admission and synchronous durable intent persistence succeed,
+removal immediately ends that key's sessions/AT/RT and pending authenticated/approved
+transactions, blocks in-flight counter writes, and preserves other keys and the local recovery RP.
+The per-RP credential file stores `pendingDeletions` alongside its keys through a flushed
+owner-only temporary file and atomic rename. A pending/failed key stays stored but disabled;
+options omit it and verification cannot save its counter. Other counter/registration commits
+preserve the intent. The local list shows `active`, `pending` or `failed`; **Finish removal with
+local passkey** obtains a new action-bound proof and completes deletion without re-enabling it.
+Restart loads incomplete intents as `pending`, keeps those keys unusable and requires a fresh
+local proof to finish (no automatic deletion or restored authority). Success removes both key
+and intent. Queue overload or failure to persist the initial intent rejects admission before any
+revocation transition: the operation has not been accepted and must be retried. A failure after
+intent commit leaves the key disabled and its sessions/approvals canceled, even after restart.
+The last usable local key cannot be removed. Public keys cannot self-administer. Local bootstrap
+recovery remains a separately authorized, terminal-only mechanism, including during kill.
+
+### Public ceremony and browser controls
+
+`/authorize/passkey/options`, `/authorize/passkey/verify`, `/authorize/consent/view` and
+`/authorize/consent` require exact issuer Origin, JSON, opaque transaction handle and initiating
+cookie, live/unapproved `public` map member, TTL and authority epoch. Present `Sec-Fetch-Site`
+must be `same-origin`; absent metadata still requires all mandatory checks. Challenges are
+purpose/RP/origin/tx/cookie bound, consumed before verification, and expire at the earlier of
+120 s or transaction expiry. Authentication freshness is 120 s through consent. Options
+replacement cannot reset attempt budgets. A second authorize in the same browser cancels the
+older public transaction; its older tab fails clearly. Removed keys and canceled references cannot
+resume. `crossOrigin` other than absent/false, and any `topOrigin`, are refused for both RPs.
+UV, UP, signature, challenge, origin, RP and counter checks remain mandatory, including zero-counter
+synced keys. Verification, registration and final deletion run in a bounded per-RP queue with
+generation guards. Deletion-intent admission writes immediately outside that queue. Each guarded
+OAuth credential save updates disk, the live Map and its credential generation synchronously
+before returning, so every intent snapshots committed state, including another key's latest
+counter or a just-enrolled key. The unchanged core verifier's later identical Map update finishes
+before queued final deletion; it cannot restore a removed key.
+
+HTTPS cookies are host-only `__Host-t3c_tx` / `__Host-t3c_enroll`, Secure, HttpOnly, SameSite=Lax,
+Path=/, no Domain; duplicate names fail closed. HTTP rehearsal retains `t3c_tx`. Success/error
+responses have no-store, no-referrer, nosniff and framing denial; HTML uses nonce CSP with
+`frame-ancestors 'none'`, `object-src 'none'`, base/form denial and same-origin fetch/script.
+The pinned SimpleWebAuthn bundle is served by `/authorize/vendor/swa.js`; QR rendering uses
+local matrix data, with no external script, analytics, font or QR service. Client metadata remains
+escaped/textContent. Ceremony endpoints have no credentialed cross-origin CORS/preflight.
+
+**GET never approves or enrolls.** Existing OAuth navigation effects remain: authorize creates a
+transaction/cookie; resume consumes an already approved transaction and issues the bound code.
+Do not apply ceremony Fetch Metadata restrictions to OAuth top-level navigation or signed
+server-to-server token/revoke requests. AS browser routes stay on the public issuer, never the
+MCP-only tunnel listener; local administrative routes stay loopback-only.
 
 ### Steady state, idle, revocation
 
@@ -71,29 +163,61 @@ Two listeners:
 
 ### Writes
 
-`session-writes.mjs` reuses the existing `Dispatcher` unchanged (journal reservation before any
-await, target and workspace preflight, `uncertain` before sending, no resend of uncertain
-operations, final synchronous authorization immediately before the single outbound call). Only its
-structural `gate` is replaced by `SessionWriteGate`, keyed by session id:
+`T3_CONNECTOR_OAUTH_PROJECTS=all` selects dynamic authorization for both reads and writes.
+The session freezes the policy, configured environment aliases, environment IDs, logical
+`destination` values and action catalog, **without project IDs**. Refresh never changes this
+consent. A configured host can be offline at sign-in and become usable later; an empty inventory
+is valid. New environments or changed identities/destinations require new consent.
 
-- grants: the inventory frozen when the user approved the sign-in (environments unavailable then get
-  no grant; projects created later need a new sign-in);
-- caller: `oauth:<subject>|oauth-issuer:<issuer>`, built by the new
-  `identidadeSessaoOAuth()` in `src/escrita/identidade.mjs` (additive export). It is stable across
-  refresh and sign-ins, so the dedupe key survives them;
-- journal: `<oauth state>/write-journal.sqlite`, separate from the lease journal;
-- fail closed: when the Dispatcher closes its gate (journal failure, uncertain send), every OAuth
-  session ends;
-- targets outside the frozen grant are refused before the Dispatcher runs, so a model asking for an
-  unapproved project gets `scope_denied` without ending the session.
-- reconciliation: a write refused during preflight, before its target is recorded (e.g.
-  `thread_not_found`, workspace refusals), is journaled `rejected` without a target.
-  `t3_reconciliar_escrita` answers exactly that record as `{state: "rejected",
-  observation: null, sent: false}` after the same authority checks as a dispatch (active session of
-  the same caller, environment grant, action) and a re-check after its audit; an audit failure fails
-  closed. Every other record is reconciled by the Dispatcher unchanged (the lease path is not
-  touched), including a write refused by the final authorization check after its target was
-  recorded, which stays `uncertain` as before.
+The OAuth-only read loader validates the same endpoint identities, transports and token paths,
+but ignores `allowedProjects` in this mode. It never edits the shared config. Read and write
+configurations must contain exactly the same aliases, environment IDs and logical destinations;
+boot fails on divergence. Read-only deployments need no write config. Reads still use read-only
+backend credentials. The eight tool names and schemas remain unchanged. Each `tools/call` opens
+its own read server and live context, including concurrent messages in one accepted HTTP JSON-RPC
+batch. Catalog discovery owns a separate context and fetches no project inventory. Each inventory
+observation remains paired with that invocation's private project Set; deleted/empty observations
+cannot inherit another call's authority. Each call verifies thread membership in the chosen host
+before bounded thread reads or subscriptions. Search preserves partial failures and pagination. No ID lookup
+falls back to another host.
+
+Writes use an operation-local `SessionWriteGate` and the existing `Dispatcher` with optional
+OAuth preflight hooks. Legacy callers do not use these hooks. Ordering remains:
+
+1. Check session, caller, consented environment and action.
+2. Atomically reserve the journal key, or dedupe/conflict without sending or fetching inventory.
+3. Fetch a verified live shell and resolve every thread reference and project root from it.
+4. Check workspace and prepare the connection.
+5. Revalidate live ownership and roots after preparation and any asynchronous canonicalization.
+6. Record `uncertain`, check authority synchronously, audit and recheck, invoke once, record receipt.
+
+The caller is `oauth:<subject>|oauth-issuer:<issuer>` and remains stable across sign-ins and refresh.
+The journal is `<oauth state>/write-journal.sqlite`, separate from the lease journal. Journal/audit
+failures and uncertain sends end every OAuth session. Missing/deleted projects or moved/deleted
+threads fail before invoking T3; rejected operations stay journaled without costing a reconnect.
+A reservation error before any durable commit leaves no record and has sent nothing; another
+attempt still fails closed while storage remains unavailable. If reservation committed before
+reporting failure, its `preparing` record dedupes after storage recovery and fresh sign-in without
+sending. Stored `rejected`/`uncertain` operations likewise never resend on reconnection. Dedupe
+requires a durable record; an absent reservation cannot remember an operation that never sent.
+
+Existing worktrees must have canonical paths equal to current project roots; unsupported worktree
+plans remain refused. Fork, merge-back and delegated actions validate all source/target references.
+
+Reconciliation authorizes the current session/caller/environment/action and the caller-bound
+journal record, without requiring a historical project's continued existence. It never repeats a
+mutation. A targetless rejected record returns `{state: "rejected", observation: null, sent: false}`;
+other targetless states remain refused. Authority is rechecked after observation and audit.
+
+There is an unavoidable race between the last live GET and the remote mutation RPC. Stronger
+atomic ownership guarantees require a backend revision/predicate checked by that RPC. The
+connector revalidation does not claim atomicity with the backend.
+
+With `T3_CONNECTOR_OAUTH_PROJECTS` unset (or `restricted`), the sandbox-compatible legacy mode
+keeps the read `allowedProjects` ACL and the write inventory frozen at sign-in. Its optional
+`T3_CONNECTOR_OAUTH_WRITE_PROJECTS=alias:projectId,…` narrows that snapshot. It does not provide
+future-project access. Setting this variable with `all` is a boot error. The stdio ACL validator,
+Ponte gate, lease TTL and `grantFromInventory` snapshot remain unchanged.
 
 ## 2. What ChatGPT does, and why the token lifetimes are what they are
 
@@ -150,7 +274,7 @@ Guarantees:
   satisfies because leases are bound to the channel caller key).
 - Refresh therefore cannot extend or bypass a lease: they are different authorities with different
   stores. Writes through the bridge still need a lease; writes through HTTP need a live session.
-- The only edit to existing source is the additive `identidadeSessaoOAuth()` export.
+- OAuth wraps the existing crypto abstraction; the Ponte gate, lease and credential storage remain independent and unchanged.
 - Both paths may hold connections to the same backend with the same read+operate token if the
   operator points `T3_CONNECTOR_OAUTH_WRITE_CONFIG` at the existing `write.json` (only its
   `environments` are used). Their journals and dedupe namespaces stay separate.
@@ -164,12 +288,12 @@ Guarantees:
 | Stolen refresh token | `private_key_jwt` required, rotation, reuse ends the session, session check on refresh | A thief who also holds the client key can refresh; first use of a stolen token can win the race against the legitimate client. |
 | Forged client / client impersonation | CIMD allowlist, JWKS signature check, `aud`, short lifetime, `jti` replay cache | Compromise of the client's signing key (OpenAI side) is out of our reach. |
 | Authorization code interception | PKCE S256, single use, 60 s, exact callback, client binding; reuse ends the session | — |
-| Login CSRF / transaction swap / phishing link | Transaction cookie bound to the browser that started `/authorize`, handoff and resume handles single use, approval page shows client, callback host and write scope | A user tricked into approving an attacker-initiated sign-in still grants access; the page is the defence. |
+| Login CSRF / transaction swap / phishing link | Transaction cookie bound to the browser that started `/authorize`, handoff and resume handles single use, approval page shows client, callback host, scopes and environment policy | A user tricked into approving an attacker-initiated sign-in still grants access; the page is the defence. |
 | Mix-up | `iss` on every callback, fixed issuer | — |
 | Cross-site driving of the control plane | Loopback only, exact Host (DNS rebinding), exact Origin and JSON on every POST, CSP, no framing | A local process can call the control plane directly: it can list, revoke and kill (DoS), not approve sign-ins (needs a passkey) nor release the kill switch. |
-| Malicious enrollment | Ticket printed only on the starting terminal, single use, 15 min | Anyone with terminal access to the host can enroll. |
+| Malicious enrollment | Local action-bound UV issues public capability, browser/generation/epoch bound, single use, ≤15 min; guarded commit | A stolen capability authorizes enrollment; terminal-only local bootstrap remains a separate recovery path. |
 | Passkey assertion replay | Challenge per transaction, 120 s, consumed before verification, counter check, UV required | Synced passkeys are not device-bound. |
-| Prompt injection driving writes | Frozen grants, typed actions only, journal/dedupe, no resend of uncertain writes | Within an active session any approved action can be invoked without another passkey; that is the accepted trade-off of the UX. |
+| Prompt injection driving writes | Consented environment boundary, live inventory/ownership, typed actions, workspace checks, journal/dedupe, no resend of uncertain writes | In all mode injection or a compromised bearer can reach every current and future project of the consented hosts during the active session. Human action restrictions are policy; the passkey is not per-action approval. |
 | Activity forgery | Only `tools/call` counts | Any client with a valid token can keep the session alive with harmless calls; the connector cannot see human presence. |
 | Connector host compromise | State directory 0700, files 0600, HMAC-only token storage | Root or same-user malware controls everything (as with the lease). |
 | Ingress / tunnel | TLS at the ingress; no trust in forwarded headers | The ingress sees bearer tokens and data. |
@@ -189,11 +313,12 @@ Guarantees:
 | `T3_CONNECTOR_OAUTH_ACCESS_TOKEN_SECONDS` | 60 | Access token lifetime (30 … 3600). Keep it short for ChatGPT (section 2). |
 | `T3_CONNECTOR_OAUTH_REFRESH_TOKEN_SECONDS` | 86400 | Lifetime of each refresh token generation. |
 | `T3_CONNECTOR_OAUTH_MAX_AGE_SECONDS` | 0 (off) | Optional absolute session cap; when set, a new passkey is needed after it even with activity. |
-| `T3_CONNECTOR_OAUTH_LOGIN_MODE` | `button` | `button`, `302` or `oob`. |
+| `T3_CONNECTOR_OAUTH_LOGIN_MODE` | `public` for HTTPS, `button` for HTTP localhost rehearsal | `public` requires HTTPS; explicit `button`, `302`, `oob` preserve local desktop handoff. |
 | `T3_CONNECTOR_OAUTH_CLIENTS` | `https://chatgpt.com/oauth/client.json` | Comma-separated allowlist of CIMD client ids. |
 | `T3_CONNECTOR_OAUTH_ALLOWED_ORIGINS` | `https://chatgpt.com` | Browser `Origin` values accepted on `/mcp` (requests without `Origin` are accepted). |
 | `T3_CONNECTOR_OAUTH_WRITE_CONFIG` | unset | Path to a write config (`write.json` format). Unset: no write tools. |
-| `T3_CONNECTOR_OAUTH_WRITE_PROJECTS` | unset (full inventory) | `alias:projectId,…`: only these projects enter the write grant shown and frozen at sign-in; environments not listed get none. Use it for sandboxes. |
+| `T3_CONNECTOR_OAUTH_PROJECTS` | `restricted` | `all`: read/write consent for all current and future projects of configured environments, with live inventory per call. Ignores the shared read ACL only inside OAuth. Read/write environment sets must match. |
+| `T3_CONNECTOR_OAUTH_WRITE_PROJECTS` | unset | Restricted mode only: `alias:projectId,…` narrows the frozen write snapshot for sandboxes. Conflicts with `all`; boot fails. |
 | `T3_CONNECTOR_CONFIG` | `~/.config/t3-connector/config.json` | Read config (same as `t3-connector`). |
 | `T3_CONNECTOR_OAUTH_VERBOSE` | unset | `1` echoes the redacted event log to stderr. |
 | `T3_CONNECTOR_OAUTH_RESOURCE` | unset | Tunnel mode (5.1): the exact canonical MCP resource named by the tunnel service. Exact HTTPS URL with a path; compared verbatim. |
@@ -212,7 +337,7 @@ still need the public HTTPS issuer, and `/token` stays a direct public call.
 With `T3_CONNECTOR_OAUTH_RESOURCE` and `T3_CONNECTOR_OAUTH_TUNNEL_PORT` set:
 
 - the public listener serves only the authorization server (metadata, `/authorize`, `/resume`,
-  `/token`, `/revoke`); `/mcp` and the protected resource metadata answer 404 there;
+  `/token`, `/revoke`, public ceremonies/consent/vendor and capability-gated public enrollment); `/mcp` and the protected resource metadata answer 404 there;
 - the tunnel listener (`127.0.0.1:<tunnel port>`, Host `127.0.0.1:<port>` or `localhost:<port>`
   only, 421 otherwise) serves `/mcp` and its metadata, never the authorization server;
 - the metadata names the configured resource and the issuer as authorization server; `/authorize`
@@ -231,6 +356,42 @@ values are logged only when they belong to a fixed set (known MCP methods, tools
 catalog, `grant_type` values, `Sec-Fetch-Site` values, allowlisted client ids, our own error
 codes); anything else is logged as a hash, so a secret sent in the wrong position is not persisted.
 
+### 5.2 Admission, resource bounds and ingress requirements
+
+Application defaults (finite bounds, not a measured capacity claim):
+
+| Work | Bound / deadline |
+|---|---|
+| Public authorize | 10/min/socket source, burst 5; 128 live tx, one active tx per browser cookie |
+| Ceremony POSTs | 60/min/socket source, burst 30; 8 admitted workers, before body parsing |
+| Per transaction/capability | 5 options, ≥1 s spacing; 5 submitted failures; 120 s challenge/auth freshness |
+| Per RP crypto/mutations | 1 active + 8 queued, 10 s queue/work deadline, 32 credentials |
+| Rate buckets / local admin | 256 buckets; local admin 60/min burst 30, 8 workers, 16 proofs |
+| CIMD/JWKS | 4 single-flight loads, 5 s deadline, 64 KiB; 32 clients/callbacks, 16 keys, 4096 JTI replay entries |
+| HTTP | 64 connections/listener, 100 requests/socket, 5 s headers/body/keepalive, 10 s request/socket timeout, 64 KiB body; bounded JSON depth/nodes/strings |
+| Sessions/tokens | 128 live sessions; 65,536 token records globally, 4096 per family; reuse tombstones never evicted from a live family |
+| Audit | One 1 MiB file + one rotated file; repeated rejections aggregated for 60 s in a map of at most 128 entries |
+
+Overload is 429 with Retry-After; expired work cannot persist after timeout. A blocked crypto job
+holds its bounded slot until it settles. Operator recovery is through fresh transactions/tickets
+and replenished admission budgets, not a permanent subject-wide lockout. Token-capacity exhaustion
+ends the offending session and purges its family instead of dropping replay detection. Policy
+version 3 is required for live all-project scope; incompatible sessions fail closed. Changing
+configuration/policy requires restart and fresh consent, which already terminates old sessions.
+
+The app trusts only the socket peer for rate accounting. Behind ingress all users share that
+budget; spoofed forwarded IP/Host/proto headers never select identity. Deployment must enforce
+per-client edge throttles (authorize 10/min burst 5, ceremonies 60/min burst 30), ≤64 KiB bodies,
+finite header/body deadlines, bounded connections, no caching and no framing/header rewriting.
+Only the AS/public ceremony paths above may reach this listener; never proxy local `/api/*`, `/`,
+local enrollment or the MCP tunnel's listener. Pin the configured issuer Host. Configure HSTS
+at the HTTPS edge only after checking coverage. Disable query/body/cookie/Authorization logging
+for authorize/resume/token/revoke/enrollment and any proxy response dump: codes and OAuth state
+necessarily use callback/navigation URLs, while tickets use fragments and assertions use bodies.
+App audits never receive tickets, cookies, assertion bodies, codes or tokens. These edge controls
+and mobile/Bitwarden/hosted ChatGPT compatibility require separately authorized deployment/E2E;
+the software-authenticator loopback fixture does not prove them.
+
 ## 6. Local rehearsal
 
 ```sh
@@ -240,7 +401,10 @@ t3-connector-oauth rehearsal          # prints the MCP URL, the local control UR
 1. Open the printed `http://localhost:7435/enroll`, enter the ticket, create the passkey.
 2. Put an HTTPS ingress in front of `127.0.0.1:7434` and restart with
    `T3_CONNECTOR_OAUTH_ISSUER=https://<ingress host>` (the issuer must be the public origin).
-3. Create the client connection with `<issuer>/mcp`, OAuth. Approve with the passkey.
+3. On the local control page authorize public enrollment with the original local passkey, open
+   the fragment link/QR at the issuer and create the independent public credential. Then connect
+   with `<issuer>/mcp`, OAuth: public UV, explicit consent, registered callback. Set an explicit
+   desktop mode to continue testing the original local handoff instead.
 4. Call `rehearsal_now`, `rehearsal_note_write`; watch `http://localhost:7435/` (sessions) and
    `events.jsonl`. Use a short `T3_CONNECTOR_OAUTH_IDLE_SECONDS` to observe idle expiry.
 
@@ -248,7 +412,26 @@ The rehearsal state directory is separate from `serve`'s.
 
 ## 7. Acceptance criteria
 
-Automated (in `npm test`):
+Automated (in `npm test`), including `test/oauth-public.test.mjs` with software authenticators,
+synthetic keys/state, controlled HTTPS issuer identity over ephemeral loopback HTTP ingress and
+mutable fake inventories:
+
+- independent RP/storage/canonical subject and restart; strict clientData cross-origin validation,
+  signature/UP/UV/counter behavior; storage corruption/mismatch fail closed;
+- cookie-bound public UV then explicit consent; no private inventory before authentication;
+  single-use challenge/purpose/TTL/replacement/attempt budgets, scope-aware consent snapshot;
+- concurrent verify/consent/resume; wrong tabs/cookies, expiry/kill/revoke/removal during blocked
+  crypto/inventory and after approval refuse sessions/persistence;
+- local action-bound capability issuance/removal, atomic browser claim, single generation,
+  replacement/reset/restart invalidation, failed registration never consumes newer capability;
+- real HTTP removal queue rejection, timeout/epoch guard and storage failures, fresh local-UV
+  retry without restart, durable pending revocation after restart, and last-local-key protection;
+- revoked-key AT/RT/pending approvals rejected, in-flight counter cannot restore deleted key;
+- headers/CSP/cookies, escaped client metadata, no secrets in audit, bounded queues/maps/CIMD,
+  slow/oversized/malformed bodies, admission/attempt exhaustion and operator recovery;
+- all-mode newly created projects readable and writable in the same public session on both hosts,
+  unavailable-host recovery, identity mismatch and incompatible policy version denied; local/public
+  canonical caller dedupe/reconcile and existing stdio ACL unchanged;
 
 - idle boundary exact; refresh/initialize/tools/list/ping do not extend; a tool call does;
   suspended monotonic clock and wall rollback do not rejuvenate, alone or combined (idle and max
@@ -260,15 +443,23 @@ Automated (in `npm test`):
 - `private_key_jwt`: valid ES256/RS256/PS256; wrong key, tampered payload, `alg` none/HS256, wrong
   `aud`, expired, too long, future `iat`, missing `jti`, replay, no assertion → `invalid_client`;
   allowlist enforced before any fetch; key rotation;
-- full first access over HTTP in the three login modes with a software passkey; resume needs the
+- full first access over HTTP in the three local login modes with a software passkey; resume needs the
   original cookie and is single use; UV, origin and challenge failures refuse approval;
 - revoke, revoke all and kill switch immediate; kill blocks sign-in; release needs a passkey and
   revives nothing; sign-ins approved before a kill or revoke-all cannot resume afterwards;
 - scope: absent → default, mixed → supported subset, explicit unsupported-only → `invalid_scope`; kill switch and passkeys survive restart, sessions do not;
 - control plane refuses foreign Host, Origin, non-JSON and missing tickets; public listener refuses
   foreign Host and browser Origins;
-- T3 catalog: eight reads + write catalog without `leaseId`; write scope shown and frozen; dedupe
-  across refresh and sign-ins; unavailable environment and late projects refused; revocation during
+- T3 catalog: eight reads + write catalog without `leaseId`; all-mode environment consent and
+  projects created after sign-in readable/writable in the same session on both hosts; empty and
+  recovered inventories; unchanged stdio ACL/config bytes; concurrent scopes; deleted/moved targets,
+  workspace roots, cross-host references and mismatched identities refused with zero invokes;
+  actual HTTP batches with distinct/deleted/empty same-host inventory observations keep private
+  invocation scopes; consent text/rows reflect requested scopes, offered actions, no-write
+  deployments and configured idle/max-age; reservation/uncertain persistence/dispatch audit
+  failures invoke zero times, invoke/receipt failures exactly once, with journal state and fresh
+  sign-in retry assertions;
+  restricted sandbox snapshots preserved; dedupe across refresh/sign-ins; revocation during
   preflight stops the send; journal failure ends all sessions; channel identities and lease ids are
   never accepted by the session gate; no secret or raw identifier in the event log, including
   client-controlled strings.
@@ -282,7 +473,7 @@ operationId, one send) and an outstanding send while the ingress dies (uncertain
 resend, reconcilable after a new sign-in). It is not the OpenAI tunnel-client and says nothing about
 client-side retries.
 
-End to end with ChatGPT web, 04/10/2026, through a quick tunnel (rehearsal tools, then `serve`
+Historical local-handoff E2E (before public login), with ChatGPT web, 04/10/2026, through a quick tunnel (rehearsal tools, then `serve`
 with writes limited to one scratch project): **passed** — passkey enrollment and first access in 3
 apps; `private_key_jwt` with ChatGPT's real JWKS (RS256) at code and every refresh; proactive refresh
 and rotation with no reuse; real read; real launch/title/archive with ChatGPT's confirmation dialog
@@ -310,10 +501,10 @@ Continue → passkey without recreating the connection.
 3. **Absolute cap.** Implemented: off, to honour "no interaction while active". Recommendation:
    keep off; set `T3_CONNECTOR_OAUTH_MAX_AGE_SECONDS` if a daily passkey is acceptable.
 4. **Write catalog.** Implemented: the same actions as the lease path (including `acceptAlways`,
-   rollback and full-access launch), limited by the frozen inventory. Recommendation: decide whether
-   any of these should be excluded from the session profile before the first real use.
-5. **Read scope.** Implemented: reads follow the read config allowlist (`projetosPermitidos`), not
-   the write grant. Recommendation: keep; it matches the existing read connector.
+   rollback and full-access launch). Marcus chose full read/write access to every current and future
+   project of the consented environments in all mode. Human restrictions on actions remain policy.
+5. **Read scope.** OAuth/all resolves live inventory per call with read-only credentials. Restricted
+   OAuth and the stdio read connector keep the read ACL. Shared configs stay unchanged.
 6. **Fail closed on uncertain writes.** Implemented: an uncertain send ends every OAuth session
    (parity with the lease gate). Recommendation: keep until real failure modes are observed.
 7. **Cut-over.** Not done. The lease bridge stays until an authorized cut-over after the E2E.
@@ -321,8 +512,8 @@ Continue → passkey without recreating the connection.
 ## 9. Known limits
 
 - No DPoP / mTLS sender constraint on the ChatGPT hop; bearer profile.
-- Single local subject (one passkey owner per installation); multiple passkeys can be enrolled for it.
+- Single canonical subject (one owner per installation); independent local and public-RP credentials. Public mobile/sync/hosted E2E remains unverified.
 - Stateless MCP transport: no server-initiated notifications or standalone SSE stream.
-- The control plane has no separate admin login; any local process can revoke or kill.
+- Any local process can revoke or kill. Credential listing/enrollment issuance/removal and kill release each require local UV; the control page itself has no separate admin login.
 - `/.well-known/openid-configuration` returns the OAuth metadata (no ID tokens, no userinfo),
   because ChatGPT probes it; this is not an OpenID Provider.

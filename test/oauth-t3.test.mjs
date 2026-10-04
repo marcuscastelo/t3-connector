@@ -26,7 +26,7 @@ function conexaoFalsa(alias, environmentId, { projetos = [{ id: 'app', name: 'ap
 
 async function montar({ local = {}, remoto = {}, journal = { ...memoryJournal(), audit: () => {} }, writeProjects = null } = {}) {
   const l = conexaoFalsa('local', 'env-p', local), r = conexaoFalsa('remoto', 'env-s', remoto);
-  const c = await startConnector({ tools: t3Tools({ ambientes: ambientesFalsos(), conexoes: [l, r], journal, writeProjects }) });
+  const c = await startConnector({ tools: t3Tools({ ambientes: ambientesFalsos(), conexoes: [l, r], journal, writeProjects, projectPolicy: 'restricted' }) });
   const data = res => JSON.parse(res.data.result.content[0].text);
   const send = (at, { environment = 'local', id = 'op-1', text = 'hi', threadId = 'thread' } = {}) => c.callTool(at, writeToolName('thread.send'), { environment, operationId: id, input: { threadId, text, clientRequestId: id, delivery: 'start_immediately' } });
   return { c, l, r, data, send, journal };
@@ -51,7 +51,7 @@ test('catalog: eight read tools plus the write catalog without leaseId; no lease
   assert.equal(new Set(names).size, names.length);
 });
 
-test('sign-in shows and freezes the write scope; reads and writes work in the same session', async t => {
+test('restricted mode: sign-in shows and freezes the write scope; reads and writes work in the same session', async t => {
   const { c, l, r, data, send } = await montar(); t.after(c.close);
   const s = await c.signIn();
   assert.deepEqual(s.view.data.writes.environments.map(e => [e.alias, e.projects]), [['local', ['app', 'outro']], ['remoto', ['app', 'outro']]]);
@@ -81,7 +81,7 @@ test('write dedupe survives refresh and a new sign-in (stable subject), and noth
   assert.equal(conflict.data.result.isError, true);
 });
 
-test('environment unavailable at sign-in gets no grant; projects added later need a new sign-in', async t => {
+test('restricted mode: environment unavailable at sign-in gets no grant; projects added later need a new sign-in', async t => {
   const { c, l, r, send } = await montar({ remoto: { falhaInventario: true } }); t.after(c.close);
   const s = await c.signIn();
   assert.deepEqual(s.view.data.writes.unavailable.map(u => [u.alias, u.reason]), [['remoto', 'environment_unavailable']]);
@@ -152,7 +152,7 @@ test('SessionWriteGate never accepts lease/channel identities or unknown session
   assert.equal(sent, false);
 });
 
-test('write project allowlist narrows the sign-in grant (sandbox)', async t => {
+test('restricted mode: write project allowlist narrows the sign-in grant (sandbox)', async t => {
   const { c, l, r, data, send } = await montar({ writeProjects: parseWriteProjects('local:outro') }); t.after(c.close);
   const s = await c.signIn();
   assert.deepEqual(s.view.data.writes.environments.map(e => [e.alias, e.projects]), [['local', ['outro']]]);

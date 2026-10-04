@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+- OAuth credential saves now publish the persisted key/counter and generation synchronously
+  before deletion-intent admission can snapshot them. Deterministic HTTP interleavings prevent
+  survivor-counter rollback and lost successful enrollment after final deletion failure/restart.
+
+- Credential-removal recovery: bounded queue admission precedes durable per-RP deletion intent
+  and immediate revocation. Failed/pending keys remain disabled across restart and support fresh
+  local-passkey retry; other credential writes preserve intents. Local listing distinguishes
+  active/pending/failed keys and offers completion, preserving the last usable local key.
+
+- OAuth/all review fixes: isolate read servers/contexts per `tools/call`, including concurrent
+  messages in accepted HTTP JSON-RPC batches with distinct, deleted or empty inventories.
+  Public and desktop consent derive write actions from offered connections and effective scopes;
+  no-write deployments advertise no write capability, with configured idle/max-age. Failure
+  regressions assert exact invocation/journal states and no resend of durable operations after
+  fresh passkey sign-in, including a reservation that committed before reporting failure.
+
+- Public issuer passkey login (HTTPS default, `T3_CONNECTOR_OAUTH_LOGIN_MODE=public`): independent
+  issuer RP/storage sharing the canonical local subject, UV then explicit scope-aware consent,
+  cookie/purpose/epoch-bound ≤120 s ceremonies and existing PKCE callback/resume semantics.
+  Original local passkey and `button`/`302`/`oob` modes remain; HTTP rehearsal defaults to `button`.
+- Local action-bound passkey administration issues temporary browser-bound public enrollment
+  links/QRs and removes selected RP credentials with immediate token/session/pending approval
+  invalidation. Enrollment is 128-bit, one generation, ≤15 min; all public routes are 404 otherwise;
+  replacement/reset/restart/success cancel it, with guarded serialized credential persistence.
+- Public ceremony headers/cookies/cross-origin checks, bounded admission/maps/queues/credentials,
+  request/crypto/CIMD deadlines, session/token capacity, audit rotation/rejection aggregation and
+  software-authenticator race/negative tests. Hosted/mobile deployment remains separately unverified.
+
+- OAuth `T3_CONNECTOR_OAUTH_PROJECTS=all`: environment-based read/write consent for all current
+  and future projects, live inventories and isolated scopes per tool invocation (including HTTP
+  batches), final ownership/workspace validation before sending, and historical reconciliation
+  without requiring deleted projects.
+  Consent includes read-only sessions, idle expiry and local revoke. Read/write environment
+  divergence and conflicting `T3_CONNECTOR_OAUTH_WRITE_PROJECTS` fail at boot. Restricted sandbox
+  mode, stdio read ACL and Ponte lease snapshots remain supported and unchanged.
+
 ## 0.8.0
 
 - OAuth session profile: tunnel mode (`T3_CONNECTOR_OAUTH_RESOURCE`,

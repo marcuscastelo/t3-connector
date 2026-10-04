@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { carregarConfigOAuthAll } from '../src/oauth/project-policy.mjs';
 // OAuth session profile of the T3 Connector (experimental): MCP over HTTP with an embedded OAuth
 // authorization server and a local passkey control-plane. Independent of `t3-connector` (stdio,
 // read) and `t3-connector-write` (stdio, passkey lease), which keep working unchanged.
@@ -59,13 +60,13 @@ async function rehearsal() {
 
 async function serve() {
   const config = loadOAuthConfig(process.env);
-  const readConfig = await carregarConfig();
+  const readConfig = await (config.projectPolicy === 'all' ? carregarConfigOAuthAll() : carregarConfig());
   const writeFile = process.env.T3_CONNECTOR_OAUTH_WRITE_CONFIG;
   const writeConfig = writeFile ? await carregarConfigEscrita(writeFile) : null;
   const writeProjects = parseWriteProjects(process.env.T3_CONNECTOR_OAUTH_WRITE_PROJECTS);
   if (writeProjects) for (const alias of writeProjects.keys()) if (!writeConfig?.ambientes.some(a => a.alias === alias)) throw new Error(`T3_CONNECTOR_OAUTH_WRITE_PROJECTS: unknown write environment ${alias}`);
   const envs = `read ${readConfig.ambientes.map(a => a.alias).join(', ')}; ${writeConfig ? `write ${writeConfig.ambientes.map(a => a.alias).join(', ')}${writeProjects ? ` (projects limited: ${[...writeProjects].map(([a, ids]) => `${a}=${ids.size}`).join(', ')})` : ''}` : 'no writes (T3_CONNECTOR_OAUTH_WRITE_CONFIG unset)'}`;
-  await start({ config, tools: t3Tools({ readConfig, writeConfig, writeProjects }), serverName: 't3-connector', banner: envs });
+  await start({ config, tools: t3Tools({ readConfig, writeConfig, writeProjects, projectPolicy: config.projectPolicy }), serverName: 't3-connector', banner: envs });
 }
 
 const commands = { serve, rehearsal };
