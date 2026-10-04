@@ -52,6 +52,9 @@ export async function startConnector({ config = {}, loginMode = 'button', tools 
   const connector = createOAuthConnector({ config: cfg, tools, fetch: cimdFetch({ [CLIENT]: doc }), clock, wall, serverInfo: { name: 't3-connector-test', version: '0.0.0' } });
   await connector.listen();
   const issuer = cfg.issuer, local = `http://localhost:${localPort}`;
+  // Tunnel mode: tokens are bound to cfg.resource and MCP is served on the loopback tunnel listener.
+  const resource = cfg.resource ?? `${issuer}/mcp`;
+  const mcpUrl = cfg.tunnelPort ? `http://127.0.0.1:${cfg.tunnelPort}/mcp` : `${issuer}/mcp`;
   const passkey = authenticator({ rpID: 'localhost' });
   const localPost = (path, data, headers = {}) => http('POST', `${local}${path}`, { headers: { origin: local, 'content-type': 'application/json', ...headers }, body: JSON.stringify(data) });
 
@@ -76,7 +79,7 @@ export async function startConnector({ config = {}, loginMode = 'button', tools 
   async function signIn({ via = loginMode === 'oob' ? 'oob' : 'handoff', uv = true } = {}) {
     const verifier = randomBytes(32).toString('base64url'), state = randomBytes(8).toString('hex');
     const challenge = createHash('sha256').update(verifier).digest('base64url');
-    const auth = await http('GET', `${issuer}/authorize?${form({ response_type: 'code', client_id: CLIENT, redirect_uri: 'https://client.example/cb', code_challenge: challenge, code_challenge_method: 'S256', state, resource: `${issuer}/mcp`, scope: 'connector:read connector:write' })}`);
+    const auth = await http('GET', `${issuer}/authorize?${form({ response_type: 'code', client_id: CLIENT, redirect_uri: 'https://client.example/cb', code_challenge: challenge, code_challenge_method: 'S256', state, resource, scope: 'connector:read connector:write' })}`);
     const cookie = auth.headers['set-cookie']?.[0]?.split(';')[0];
     let ref;
     if (via === 'oob') ref = { oob: /class="big">([A-Z0-9]+)</.exec(auth.text)[1] };
@@ -94,17 +97,17 @@ export async function startConnector({ config = {}, loginMode = 'button', tools 
     const resume = await http('GET', resumeUrl, { headers: cookie ? { cookie } : {} });
     const cb = resume.headers.location ? new URL(resume.headers.location) : null;
     const code = cb?.searchParams.get('code');
-    const tokens = code ? await token({ grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: 'https://client.example/cb', resource: `${issuer}/mcp` }) : null;
+    const tokens = code ? await token({ grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: 'https://client.example/cb', resource }) : null;
     return { auth, cookie, view, verify, resume, cb, state, verifier, code, statusId, tokens: tokens?.data, tokenResponse: tokens };
   }
 
   let rpcId = 1;
-  const mcp = (at, method, params = {}, extra = {}) => http('POST', `${issuer}/mcp`, {
+  const mcp = (at, method, params = {}, extra = {}) => http('POST', mcpUrl, {
     headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...(at ? { authorization: `Bearer ${at}` } : {}), ...extra },
     body: JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method, params }),
   });
   const callTool = (at, name, args = {}) => mcp(at, 'tools/call', { name, arguments: args });
-  const refresh = (rt, extra = {}) => token({ grant_type: 'refresh_token', refresh_token: rt, resource: `${issuer}/mcp`, ...extra });
+  const refresh = (rt, extra = {}) => token({ grant_type: 'refresh_token', refresh_token: rt, resource, ...extra });
 
-  return { connector, issuer, local, keys, assertion: fresh, nextCounter: () => counter++, passkey, localPost, signIn, token, refresh, mcp, callTool, enrollPasskey, advance: ms => { mono += ms; wallMs += ms; }, close: () => connector.close() };
+  return { connector, issuer, local, resource, mcpUrl, keys, assertion: fresh, nextCounter: () => counter++, passkey, localPost, signIn, token, refresh, mcp, callTool, enrollPasskey, advance: ms => { mono += ms; wallMs += ms; }, close: () => connector.close() };
 }

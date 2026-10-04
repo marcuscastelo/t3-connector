@@ -42,9 +42,13 @@ export function perRequestSource(registerTools, serverInfo = { name: 'oauth-inne
   return { shared: false, async open(principal) { const s = new McpServer(serverInfo); registerTools(s, principal); const client = await pair(s, 'oauth-facade'); return { client, close: () => client.close() }; } };
 }
 
-export function resourceServer({ issuer, resource, scopes, tokens, authority, sources, serverInfo = { name: 't3-connector', version: '0.0.0' }, allowedOrigins = ['https://chatgpt.com'], audit = () => {} }) {
-  const path = new URL(resource).pathname;
-  const prmdUrl = `${new URL(resource).origin}/.well-known/oauth-protected-resource${path}`;
+// `route` is the local path that serves MCP; by default the resource's own path. Behind a tunnel the
+// canonical resource lives on the tunnel service and the local route stays /mcp. Metadata is served
+// at the RFC 9728 well-known path for the route (and the root alias); the challenge points at the
+// well-known URL of the canonical resource.
+export function resourceServer({ issuer, resource, route, scopes, tokens, authority, sources, serverInfo = { name: 't3-connector', version: '0.0.0' }, allowedOrigins = ['https://chatgpt.com'], audit = () => {} }) {
+  const path = route ?? new URL(resource).pathname;
+  const prmdUrl = `${new URL(resource).origin}/.well-known/oauth-protected-resource${new URL(resource).pathname}`;
   const prmd = protectedResourceMetadata({ issuer, resource, scopes });
 
   function unauthorized(res, e, rpc) {

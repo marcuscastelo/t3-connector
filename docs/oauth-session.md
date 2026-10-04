@@ -196,8 +196,34 @@ Guarantees:
 | `T3_CONNECTOR_OAUTH_WRITE_PROJECTS` | unset (full inventory) | `alias:projectId,…`: only these projects enter the write grant shown and frozen at sign-in; environments not listed get none. Use it for sandboxes. |
 | `T3_CONNECTOR_CONFIG` | `~/.config/t3-connector/config.json` | Read config (same as `t3-connector`). |
 | `T3_CONNECTOR_OAUTH_VERBOSE` | unset | `1` echoes the redacted event log to stderr. |
+| `T3_CONNECTOR_OAUTH_RESOURCE` | unset | Tunnel mode (5.1): the exact canonical MCP resource named by the tunnel service. Exact HTTPS URL with a path; compared verbatim. |
+| `T3_CONNECTOR_OAUTH_TUNNEL_PORT` | unset | Tunnel mode (5.1): loopback listener for the tunnel client. Set together with `T3_CONNECTOR_OAUTH_RESOURCE`. |
 
 The event log `<state>/events.jsonl` does not receive tokens, codes, cookies, handles or `state`.
+
+### 5.1 Tunnel mode (MCP through an OpenAI Secure MCP Tunnel)
+
+The Secure MCP Tunnel (`tunnel-client`, the transport of the stdio Ponte) can carry an HTTP MCP
+server with OAuth: it forwards the `Authorization` header to a private target, runs the protected
+resource discovery from the local network and rewrites the `resource` (and `resource_metadata`) to
+the tunnel service's own MCP URL. It does not publish browser routes, so `/authorize` and `/resume`
+still need the public HTTPS issuer, and `/token` stays a direct public call.
+
+With `T3_CONNECTOR_OAUTH_RESOURCE` and `T3_CONNECTOR_OAUTH_TUNNEL_PORT` set:
+
+- the public listener serves only the authorization server (metadata, `/authorize`, `/resume`,
+  `/token`, `/revoke`); `/mcp` and the protected resource metadata answer 404 there;
+- the tunnel listener (`127.0.0.1:<tunnel port>`, Host `127.0.0.1:<port>` or `localhost:<port>`
+  only, 421 otherwise) serves `/mcp` and its metadata, never the authorization server;
+- the metadata names the configured resource and the issuer as authorization server; `/authorize`
+  and `/token` accept only that exact resource, and tokens are bound to it;
+- an `/authorize` with another resource is refused (`invalid_target`) and logged as
+  `authorize_unknown_resource`, with the requested value only when it is a plain https URL (hashed
+  otherwise). That is how to read the tunnel's resource the first time: connect once with tunnel
+  mode off-target, read the event, set it.
+
+Tunnel client profile (`server_urls`, channel `main`): `http://127.0.0.1:<tunnel port>/mcp`.
+
 Session and credential ids are written as 8-hex hash prefixes at the sink. Request-controlled
 values are logged only when they belong to a fixed set (known MCP methods, tools present in the
 catalog, `grant_type` values, `Sec-Fetch-Site` values, allowlisted client ids, our own error

@@ -26,7 +26,12 @@ const redactIds = e => Object.fromEntries(ID_FIELDS.filter(k => typeof e[k] === 
 // Sessions and tokens live in memory, so a restart ends every session (new sign-in + passkey).
 export function createOAuthConnector({ config, tools, serverInfo, fetch, clock, wall, log = line => process.stderr.write(line + '\n') }) {
   const { issuer, publicPort, localPort, stateDir } = config;
-  const resource = `${issuer}/mcp`;
+  // Default: the public listener serves the AS and the MCP resource at <issuer>/mcp. Tunnel mode
+  // (config.resource + config.tunnelPort): the public listener serves only the AS, and the resource,
+  // named by the tunnel's hosted discovery, is served at /mcp on a loopback listener for the tunnel
+  // client. Tokens are bound to that exact resource either way.
+  const tunnel = Boolean(config.resource && config.tunnelPort);
+  const resource = tunnel ? config.resource : `${issuer}/mcp`;
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const eventsFile = join(stateDir, 'events.jsonl');
   // Identifiers (session ids, credential ids) are written as 8-hex hash prefixes whatever module
@@ -62,7 +67,7 @@ export function createOAuthConnector({ config, tools, serverInfo, fetch, clock, 
   const catalog = tools({ authority, issuer, stateDir, audit });
   const { sources } = catalog, grantProvider = catalog.grantProvider ?? null;
   const as = authorizationServer({ issuer, resource, localOrigin, loginMode: config.loginMode, authority, tokens, clients, transactions, audit });
-  const rs = resourceServer({ issuer, resource, scopes: SCOPES, tokens, authority, sources, serverInfo, allowedOrigins: config.allowedOrigins, audit });
+  const rs = resourceServer({ issuer, resource, route: tunnel ? '/mcp' : undefined, scopes: SCOPES, tokens, authority, sources, serverInfo, allowedOrigins: config.allowedOrigins, audit });
   const local = controlPlane({ port: localPort, issuer, passkeys, subject: stored.subject, authority, tokens, transactions, killSwitch, enrollment, grantProvider, clock, wall, audit });
   const publicHost = new URL(issuer).host;
 
@@ -71,6 +76,16 @@ export function createOAuthConnector({ config, tools, serverInfo, fetch, clock, 
     if (req.headers.host !== publicHost) { audit({ event: 'public_bad_host' }); return json(res, 421, { error: 'misdirected_request' }); }
     const url = new URL(req.url, issuer);
     if (await as(req, res, url)) return;
+    if (!tunnel && await rs(req, res, url)) return;
+    return json(res, 404, { error: 'not_found' });
+  }
+
+  // Loopback listener for the tunnel client: MCP resource and its metadata only, never the AS. It
+  // binds 127.0.0.1 and accepts only its own loopback Host, so the public ingress cannot reach it.
+  const tunnelHosts = tunnel ? new Set([`127.0.0.1:${config.tunnelPort}`, `localhost:${config.tunnelPort}`]) : new Set();
+  async function tunnelHandler(req, res) {
+    if (!tunnelHosts.has(req.headers.host)) { audit({ event: 'tunnel_bad_host' }); return json(res, 421, { error: 'misdirected_request' }); }
+    const url = new URL(req.url, `http://${req.headers.host}`);
     if (await rs(req, res, url)) return;
     return json(res, 404, { error: 'not_found' });
   }
@@ -82,14 +97,15 @@ export function createOAuthConnector({ config, tools, serverInfo, fetch, clock, 
 
   return {
     authority, tokens, clients, transactions, passkeys, enrollment, killSwitch, resource, localOrigin, stateDir, subject: stored.subject,
-    publicHandler: wrap(publicHandler, onError), localHandler: wrap(local, onError),
+    publicHandler: wrap(publicHandler, onError), localHandler: wrap(local, onError), tunnelHandler: tunnel ? wrap(tunnelHandler, onError) : null,
     async listen() {
       const listen = (handler, port, host) => new Promise((ok, ko) => { const s = createServer(handler); s.once('error', ko); s.listen(port, host, () => { servers.push(s); ok(s); }); });
       const pub = await listen(this.publicHandler, publicPort, '127.0.0.1');
       const loc = await listen(this.localHandler, localPort, '127.0.0.1');
       await listen(this.localHandler, loc.address().port, '::1').catch(() => {});
-      audit({ event: 'started', issuer, resource, localOrigin, credentials: credentials.size, killed: authority.killed });
-      return { publicPort: pub.address().port, localPort: loc.address().port };
+      const tun = tunnel ? await listen(this.tunnelHandler, config.tunnelPort, '127.0.0.1') : null;
+      audit({ event: 'started', issuer, resource, localOrigin, tunnelPort: tun ? tun.address().port : undefined, credentials: credentials.size, killed: authority.killed });
+      return { publicPort: pub.address().port, localPort: loc.address().port, tunnelPort: tun ? tun.address().port : undefined };
     },
     async close() { clearInterval(sweeper); await Promise.all(sources.map(src => src.close?.())); catalog.close?.(); await Promise.all(servers.map(s => new Promise(r => { s.closeAllConnections?.(); s.close(() => r()); }))); },
   };

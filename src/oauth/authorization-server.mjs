@@ -64,7 +64,13 @@ export function authorizationServer({ issuer, resource, localOrigin, loginMode =
     const back = (error, description) => { audit({ event: 'authorize_rejected', reason: description ?? error, clientId: client.clientId }); return redirect(res, callback(q.redirect_uri, { error, error_description: description, state: q.state })); };
     if (q.response_type !== 'code') return back('unsupported_response_type');
     if (q.code_challenge_method !== 'S256' || typeof q.code_challenge !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(q.code_challenge)) return back('invalid_request', 'pkce_s256_required');
-    if (q.resource !== undefined && q.resource !== resource) return back('invalid_target', 'unknown_resource');
+    if (q.resource !== undefined && q.resource !== resource) {
+      // The requested resource is logged only when it is a plain https URL, so the tunnel resource
+      // can be read from the events while setting up tunnel mode; anything else is hashed.
+      const plain = typeof q.resource === 'string' && q.resource.length <= 200 && /^https:\/\/[a-z0-9.-]+(:\d{1,5})?(\/[A-Za-z0-9._~\-/]*)?$/.test(q.resource);
+      audit({ event: 'authorize_unknown_resource', clientId: client.clientId, ...(plain ? { requested: q.resource } : { requestedHash: redact(q.resource) }) });
+      return back('invalid_target', 'unknown_resource');
+    }
     if (q.request !== undefined || q.request_uri !== undefined) return back('request_not_supported');
     if (authority.killed) return back('access_denied', 'kill_switch');
     // Absent scope means the full default scope. Unknown scopes are dropped (RFC 6749 §3.3), but an
