@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { changelogSection, checkRelease, readInputs, sha256, verifyAsset } from '../scripts/release.mjs';
+import { changelogSection, checkRelease, pack, readInputs, sha256, verifyAsset } from '../scripts/release.mjs';
 
 const CHANGELOG = `# Changelog
 
@@ -61,9 +61,11 @@ test('CHANGELOG precisa da seção da versão, não vazia, e Unreleased vazio', 
   assert.match(checkRelease(inputs({ changelog: `## Unreleased\n\n- pending\n\n${CHANGELOG}` })).join('\n'), /Unreleased" is not empty/);
 });
 
-test('versão que não é semver falha', () => {
-  const f = checkRelease(inputs({ tag: undefined, pkg: { version: '1.2' } }));
-  assert.match(f.join('\n'), /not semver/);
+test('só SemVer 2.0.0 sem build metadata passa', () => {
+  const comVersao = (v) => checkRelease(inputs({ tag: `v${v}`, pkg: { version: v },
+    lock: { version: v, packages: { '': { version: v } } }, sources: {}, changelog: `## ${v}\n\n- x\n` }));
+  for (const v of ['1.2.0', '0.6.0', '1.0.0-rc.1', '1.0.0-alpha-1.0']) assert.deepEqual(comVersao(v), [], v);
+  for (const v of ['1.2', '01.2.3', '1.2.3-01', '1.2.3-rc..1', '1.2.3+build.1']) assert.match(comVersao(v).join('\n'), /not semver/, v);
 });
 
 test('as fontes reais de versão são lidas e concordam com o package.json', () => {
@@ -88,4 +90,16 @@ test('verifyAsset confere checksum, nome do arquivo e versão do pacote', (t) =>
   assert.match(verifyAsset(tgz, '1.2.0').join('\n'), /does not match/);
   writeFileSync(`${tgz}.sha256`, `${sha256(tgz)}  other.tgz\n`);
   assert.match(verifyAsset(tgz, '1.2.0').join('\n'), /names other\.tgz/);
+});
+
+test('pack do repositório gera tgz, .sha256 e notas que verifyAsset aceita', (t) => {
+  const out = mkdtempSync(path.join(tmpdir(), 'release-pack-'));
+  t.after(() => rmSync(out, { recursive: true, force: true }));
+  const real = readInputs();
+  const notas = { ...real, changelog: `## ${real.pkg.version}\n\n- notes for the test\n` };
+  const { tgz, hash } = pack(out, notas);
+  assert.equal(path.basename(tgz), `t3-connector-${real.pkg.version}.tgz`);
+  assert.equal(hash, sha256(tgz));
+  assert.deepEqual(verifyAsset(tgz, real.pkg.version), []);
+  assert.equal(readFileSync(path.join(out, 'release-notes.md'), 'utf8'), '- notes for the test\n');
 });

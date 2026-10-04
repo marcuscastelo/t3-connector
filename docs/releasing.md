@@ -40,13 +40,20 @@ git push origin vX.Y.Z
 3. `package`: packs once, writes the checksum and notes, runs the package check on that
    exact `.tgz` and uploads it as a workflow artifact;
 4. `publish` (environment `release`, the only job with `contents: write`): verifies the
-   checksum and creates the GitHub Release with the `.tgz` and `.sha256`. A tag with a
-   suffix (`v1.0.0-rc.1`) becomes a pre-release.
+   checksum, refuses to publish if the tag no longer points at the tested commit, and
+   creates the GitHub Release with the `.tgz` and `.sha256`. A tag with a suffix
+   (`v1.0.0-rc.1`) becomes a pre-release.
 
 To require a manual approval before publishing, add required reviewers to the `release`
-environment in the repository settings. If a job fails, nothing is published: fix on
-`main`, delete the tag (`git push origin :refs/tags/vX.Y.Z`; `git tag -d vX.Y.Z`) and
-tag again. A published release is not overwritten; ship a new patch version instead.
+environment in the repository settings. A tag ruleset that blocks updating and deleting
+`v*` tags keeps a tested tag from being moved.
+
+If a job fails: for a transient failure with the tag unchanged, re-run the failed jobs.
+Otherwise, before touching the tag, cancel any run still in progress for it and check
+that no release or draft exists (`gh release view vX.Y.Z`); a failed job does not prove
+that nothing was published. If nothing was, fix on `main`, delete the tag
+(`git push origin :refs/tags/vX.Y.Z`; `git tag -d vX.Y.Z`) and tag again. A published
+release is never overwritten; ship a new patch version instead.
 
 ## 3. Update a running installation (manual, explicit approval)
 
@@ -54,26 +61,33 @@ No workflow updates a running connector. Whoever operates the installation decid
 update it, after reading the release notes:
 
 ```sh
+dir=/tmp/t3-connector-X.Y.Z
 gh release download vX.Y.Z --repo marcuscastelo/t3-connector \
-  --pattern 't3-connector-X.Y.Z.tgz*' --dir /tmp/t3-connector-X.Y.Z
-node scripts/release.mjs verify-asset /tmp/t3-connector-X.Y.Z/t3-connector-X.Y.Z.tgz --version X.Y.Z
+  --pattern 't3-connector-X.Y.Z.tgz*' --dir "$dir"
+(cd "$dir" && shasum -a 256 -c t3-connector-X.Y.Z.tgz.sha256)   # or sha256sum -c
+tar -xzOf "$dir/t3-connector-X.Y.Z.tgz" package/package.json | grep '"version"'
 ```
 
-`verify-asset` checks the `.sha256` and the version inside the artifact. Install it next
-to the current one, not over it, keeping the previous `.tgz`:
+From a checkout of this repository, `node scripts/release.mjs verify-asset
+"$dir/t3-connector-X.Y.Z.tgz" --version X.Y.Z` does both checks. Install the artifact next
+to the current installation, not over it, and keep the previous `.tgz`:
 
 ```sh
-npm install --omit=dev --ignore-scripts --prefix <new-dir> /tmp/t3-connector-X.Y.Z/t3-connector-X.Y.Z.tgz
+new=<new-dir>
+npm install --omit=dev --ignore-scripts --prefix "$new" "$dir/t3-connector-X.Y.Z.tgz"
 ```
 
-Point the MCP client or tunnel profile at `<new-dir>/node_modules/.bin/t3-connector serve`
-(and `t3-connector-write bridge`/`gate` for writes), then restart them. If your deployment
-has its own approval gate for the installed artifact, it applies here.
+Point the MCP client or tunnel profile at `"$new/node_modules/.bin/t3-connector" serve`
+(and `t3-connector-write bridge`/`gate` in the same directory for writes), then restart
+them. If your deployment has its own approval gate for the installed artifact, it
+applies here.
 
-Verify after the switch:
+Verify after the switch, calling the new binaries by path (a `t3-connector` on `PATH`
+may be another installation) with the same config environment the client uses:
 
-- `t3-connector --version` and `t3-connector-write --version` print `X.Y.Z`;
-- `t3-connector diagnose` reaches every configured environment;
+- `"$new/node_modules/.bin/t3-connector" --version` and
+  `"$new/node_modules/.bin/t3-connector-write" --version` print `X.Y.Z`;
+- `"$new/node_modules/.bin/t3-connector" diagnose` reaches every configured environment;
 - the client lists the expected tools and one read call (e.g. `t3_ambientes`) succeeds;
 - for writes: the gate's approval page loads and a lease can be approved.
 

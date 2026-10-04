@@ -20,7 +20,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
+// SemVer 2.0.0; build metadata (`+...`) is not supported by this release flow.
+const IDENT = '(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)';
+const SEMVER = new RegExp(`^(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-${IDENT}(?:\\.${IDENT})*)?$`);
 
 // Every place that declares the version, with how to read it.
 export const VERSION_SOURCES = [
@@ -42,7 +44,7 @@ export function changelogSection(changelog, version) {
 export function checkRelease({ tag, pkg, lock, sources, changelog }) {
   const failures = [];
   const version = pkg.version;
-  if (!SEMVER.test(version ?? '')) failures.push(`package.json version "${version}" is not semver`);
+  if (!SEMVER.test(version ?? '')) failures.push(`package.json version "${version}" is not semver (build metadata is not supported)`);
   if (tag !== undefined && tag !== `v${version}`) failures.push(`tag ${tag} ≠ v${version} from package.json`);
   if (lock.version !== version || lock.packages?.['']?.version !== version)
     failures.push(`package-lock.json version ${lock.version}/${lock.packages?.['']?.version} ≠ ${version}`);
