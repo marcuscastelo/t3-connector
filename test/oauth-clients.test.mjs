@@ -77,6 +77,50 @@ test('jwks_uri is supported and an unknown kid triggers one refetch (key rotatio
   assert.equal(f.calls.filter(u => u === 'https://client.example/jwks').length, 2);
 });
 
+test('an expired cache is served while one refetch runs; a transient failure keeps it for 24 h', async () => {
+  const k = clientKeys(), events = [];
+  let now = 0, mode = 'ok', release;
+  const f = cimdFetch(() => mode === 'ok' ? doc([k.jwk]) : undefined);
+  const fetch = async (url, init) => {
+    if (mode === 'hang') { f.calls.push(url); return new Promise((_, reject) => { release = () => reject(new Error('timeout')); }); }
+    if (mode === 'html') { f.calls.push(url); return new Response('<html>challenge</html>', { status: 200 }); }
+    if (mode === '503') { f.calls.push(url); return new Response('down', { status: 503 }); }
+    return f(url, init);
+  };
+  const reg = new ClientRegistry({ allowedClients: [CLIENT], fetch, clock: () => now, audit: e => events.push(e) });
+  await reg.authenticate(form(k.assertion()), { audiences: [TOKEN] });
+  assert.equal(f.calls.length, 1);
+
+  now += 11 * 60 * 1000; mode = 'hang';
+  const c = await reg.authenticate(form(k.assertion()), { audiences: [TOKEN] });
+  assert.equal(c.clientId, CLIENT, 'served from the stale copy without waiting');
+  await reg.resolve(CLIENT);
+  assert.equal(f.calls.length, 2, 'one refetch in flight, not one per request');
+  release(); await new Promise(r => setImmediate(r));
+  assert.equal(events.at(-1).event, 'client_refetch_failed');
+
+  for (const m of ['html', '503']) {
+    mode = m; await reg.resolve(CLIENT); await new Promise(r => setImmediate(r));
+    assert.equal((await reg.resolve(CLIENT)).clientId, CLIENT, `${m} keeps the copy`);
+  }
+
+  now += 24 * 60 * 60 * 1000; mode = '503';
+  await assert.rejects(reg.resolve(CLIENT), /cimd_fetch_status_503/, 'past 24 h the network is required');
+  mode = 'ok';
+  await reg.resolve(CLIENT);
+});
+
+test('a refetched document that no longer validates drops the stale copy', async () => {
+  const k = clientKeys();
+  let now = 0, d = doc([k.jwk]);
+  const reg = new ClientRegistry({ allowedClients: [CLIENT], fetch: cimdFetch(() => d), clock: () => now });
+  await reg.resolve(CLIENT);
+  now += 11 * 60 * 1000; d = doc([]);
+  await reg.resolve(CLIENT);
+  await new Promise(r => setImmediate(r));
+  await assert.rejects(reg.resolve(CLIENT), /jwks_missing/);
+});
+
 // Regressions from the independent review (REVISAO-CODEX.md F5, P1).
 test('assertion lifetime is bounded from iat; malformed time claims are refused', async () => {
   const k = clientKeys(), reg = new ClientRegistry({ allowedClients: [CLIENT], fetch: cimdFetch({ [CLIENT]: doc([k.jwk]) }) });

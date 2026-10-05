@@ -11,6 +11,7 @@ export const CHATGPT_CLIENT_ID = 'https://chatgpt.com/oauth/client.json';
 export const ASSERTION_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
 const MAX_DOC_BYTES = 64 * 1024;
 const CACHE_MS = 10 * 60 * 1000;
+const STALE_MS = 24 * 60 * 60 * 1000;
 const MAX_ASSERTION_LIFETIME_S = 10 * 60;
 const SKEW_S = 60;
 const ALGS = {
@@ -45,6 +46,10 @@ async function fetchJson(fetchImpl, url) {
   return JSON.parse(Buffer.concat(parts).toString('utf8'));
 }
 
+// Only a document that was fetched and parsed but failed validation (cimd_*) is authoritative.
+// Network errors, timeouts, any HTTP status and unparseable bodies (an HTML challenge page) are not.
+const transient = e => !/^cimd_/.test(e?.message ?? '');
+
 export class ClientRegistry {
   #cache = new Map();
   #loading = new Map();
@@ -55,14 +60,28 @@ export class ClientRegistry {
     Object.assign(this, { allowed: new Set(allowedClients), fetchImpl, wall, audit, time: stopwatch({ clock, wall }) });
   }
 
+  // Stale-while-revalidate: past CACHE_MS a cached document is still served at once while one refetch
+  // runs in the background, for up to STALE_MS. A transient failure of that refetch (network,
+  // timeout, 5xx, 429) keeps the copy, so one slow response from the client's host cannot fail a
+  // refresh and end the user's connection; a document that arrives but no longer validates drops it.
+  // A forced load (unknown kid) always waits for the network.
   async #load(clientId, { force = false } = {}) {
     const hit = this.#cache.get(clientId);
-    if (hit && !force && this.time.elapsed(hit.at) < CACHE_MS) return hit.client;
-    if (this.#loading.has(clientId)) return deadline(this.#loading.get(clientId), 5000);
-    if (this.#loading.size >= 4) throw new OAuthError('temporarily_unavailable', 'client_metadata_overload', 429);
-    const work = this.#fetchClient(clientId);
-    this.#loading.set(clientId, work);
-    work.finally(() => { if (this.#loading.get(clientId) === work) this.#loading.delete(clientId); }).catch(() => {});
+    const age = hit ? this.time.elapsed(hit.at) : Infinity;
+    if (hit && !force && age < CACHE_MS) return hit.client;
+    const stale = hit && !force && age < STALE_MS;
+    let work = this.#loading.get(clientId);
+    if (!work) {
+      if (this.#loading.size >= 4) { if (stale) return hit.client; throw new OAuthError('temporarily_unavailable', 'client_metadata_overload', 429); }
+      work = this.#fetchClient(clientId);
+      this.#loading.set(clientId, work);
+      work.finally(() => { if (this.#loading.get(clientId) === work) this.#loading.delete(clientId); }).catch(() => {});
+      work.catch(e => {
+        if (!transient(e)) { if (this.#cache.get(clientId) === hit) this.#cache.delete(clientId); return; }
+        if (hit) this.audit({ event: 'client_refetch_failed', clientId, reason: /^[a-z0-9_]{1,64}$/.test(e.message) ? e.message : 'fetch_failed', staleS: Math.round(age / 1000) });
+      });
+    }
+    if (stale) return hit.client;
     return deadline(work, 5000);
   }
   async #fetchClient(clientId) {

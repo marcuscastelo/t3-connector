@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- OAuth: an expired Client ID Metadata Document cache (10 min) is now served while one refetch
+  runs in the background, for up to 24 h. A transient refetch failure (network, timeout, HTTP
+  status, unparseable body) keeps the copy and is audited as `client_refetch_failed`; a document
+  that arrives but no longer validates drops it. Before, a single slow response from
+  chatgpt.com failed the token refresh and ChatGPT ended the connection, requiring a new
+  passkey login. A forced load (unknown `kid`) still waits for the network.
+
 ## 0.11.0
 
 - `thread.launch` accepts `workspaceStrategy` `{type: 'worktree', baseRef, branch?, startFromOrigin?}`
