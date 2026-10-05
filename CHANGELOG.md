@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.1
 
 - OAuth: an expired Client ID Metadata Document cache (10 min) is now served while one refetch
   runs in the background, for up to 24 h. A transient refetch failure (network, timeout, HTTP
