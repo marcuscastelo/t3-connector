@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.11.0
+
 - `thread.launch` accepts `workspaceStrategy` `{type: 'worktree', baseRef, branch?, startFromOrigin?}`
   and forwards it to T3 as is (it was refused with `workspace_plan_required`); `root` and
   `existing_worktree` (path still verified against an approved root) are unchanged.
