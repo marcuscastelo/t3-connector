@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.11.2
+
 - Read tools: one source-of-truth contract for thread state and model. `state` now gives an
   active run precedence over the newest run's outcome. Before, a queued message promoted to
   steer (or a cancelled queued run) made T3 report the newest run as `cancelled`, and the
