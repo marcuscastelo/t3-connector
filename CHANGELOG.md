@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.0
+
 - New read tool `t3_providers`: lists the provider instances of one environment from
   T3's `server.getConfig` (the source of Settings > Providers), with `orchestration:read`.
   Instances come in T3 order with exact IDs, including disabled and unavailable ones, and
