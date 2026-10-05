@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `thread.launch`, `delegated_task.request` and `thread.runtime-mode.set` now accept the four
+  native T3 `runtimeMode` values. Omitting the field preserves the existing `full-access` default.
+  Tool descriptions and the consent text now present `full-access` as the authorization ceiling.
+
 ## 0.11.1
 
 - OAuth: an expired Client ID Metadata Document cache (10 min) is now served while one refetch

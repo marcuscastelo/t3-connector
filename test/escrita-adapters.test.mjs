@@ -10,7 +10,26 @@ import { memoryJournal } from './escrita-fixtures.mjs';
 function dispatcher(s,adapter,journal=memoryJournal()) {return new Dispatcher({gate:s.gate,adapter,journal,environmentId:s.env.environmentId,destination:s.env.destination});}
 const send={operationId:'req1',action:'thread.send',input:{threadId:'thread',text:'hello',clientRequestId:'req1',delivery:'start_immediately'}};
 function adapter() {const calls=[];return {calls,verifyWorkspace:async()=>true,projectForThread:async()=> 'app',invoke:async(method,payload)=>{calls.push({method,payload});return {sequence:10};},receipt:r=>({sequence:r.sequence}),reconcile:async()=>({found:true})};}
-test('explicit launch adapter pins full-access/default; no generic RPC',()=>{const p=parseAction('thread.launch',{projectId:'app',title:'work',modelSelection:{instanceId:'codex',model:'model'},workspaceStrategy:{type:'root'},text:'task'});const wire=p.spec.encode(p.input);assert.equal(wire.runtimeMode,'full-access');assert.equal(wire.interactionMode,'default');assert.equal(p.spec.method,'orchestration.launchThread');assert.throws(()=>parseAction('arbitrary.rpc',{}));assert.throws(()=>parseAction('thread.launch',{...p.input,runtimeMode:'auto',type:'anything'}));});
+test('explicit launch adapter defaults to full-access/default; no generic RPC',()=>{const p=parseAction('thread.launch',{projectId:'app',title:'work',modelSelection:{instanceId:'codex',model:'model'},workspaceStrategy:{type:'root'},text:'task'});const wire=p.spec.encode(p.input);assert.equal(wire.runtimeMode,'full-access');assert.equal(wire.interactionMode,'default');assert.equal(p.spec.method,'orchestration.launchThread');assert.throws(()=>parseAction('arbitrary.rpc',{}));assert.throws(()=>parseAction('thread.launch',{...p.input,runtimeMode:'auto',type:'anything'}));});
+test('native runtime modes reach dispatch unchanged; omission keeps legacy full-access and invalid modes never send',async()=>{
+ const inputs={
+  'thread.launch':{projectId:'app',title:'work',modelSelection:{instanceId:'codex',model:'model'},workspaceStrategy:{type:'root'}},
+  'delegated_task.request':{parentThreadId:'thread',parentRunId:'run',parentNodeId:'node',task:'task',modelSelection:{instanceId:'codex',model:'model'}},
+  'thread.runtime-mode.set':{threadId:'thread'},
+ };
+ for(const [action,input] of Object.entries(inputs)) {
+  const s=setup();if(!s.env.actions.includes(action))s.env.actions.push(action);
+  const l=await s.grant(),a=adapter(),d=dispatcher(s,a);
+  for(const [i,mode] of [undefined,'approval-required','auto-accept-edits','auto','full-access'].entries()) {
+   await d.dispatch(s.caller,l.leaseId,{operationId:`mode-${i}`,action,input:{...input,...(mode===undefined?{}:{runtimeMode:mode})}});
+   assert.equal(a.calls.at(-1).payload.runtimeMode,mode??'full-access',action);
+   if(action!=='thread.runtime-mode.set')assert.equal(a.calls.at(-1).payload.interactionMode,'default');
+  }
+  const before=a.calls.length;
+  for(const runtimeMode of ['sandbox',null,1])await assert.rejects(d.dispatch(s.caller,l.leaseId,{operationId:'invalid',action,input:{...input,runtimeMode}}));
+  assert.equal(a.calls.length,before);
+ }
+});
 test('approval, dismissal and deletion map to exact V2 commands; stop fails closed',()=>{for(const [action,type,input] of [['runtime-request.approve','runtime-request.respond',{threadId:'t',requestId:'r',decision:'acceptForSession'}],['thread.user-input.dismiss','thread.user-input.dismiss',{threadId:'t',requestId:'r'}],['thread.delete','thread.delete',{threadId:'t'}]]){const p=parseAction(action,input);assert.equal(p.spec.encode(p.input).type,type);}assert.throws(()=>parseAction('thread.session.stop',{threadId:'t'}));});
 test('send mapping retains stable server command/message ids and dedupes concurrency',async()=>{const s=setup(),l=await s.grant(),a=adapter(),d=dispatcher(s,a);const results=await Promise.all([d.dispatch(s.caller,l.leaseId,send),d.dispatch(s.caller,l.leaseId,send)]);assert.equal(a.calls.length,1);assert.equal(a.calls[0].payload.commandId,a.calls[0].payload.messageId);assert.notEqual(a.calls[0].payload.commandId,'req1');assert.ok(results.some(r=>r.state==='completed'));await d.dispatch(s.caller,l.leaseId,send);assert.equal(a.calls.length,1);await assert.rejects(d.dispatch(s.caller,l.leaseId,{...send,input:{...send.input,text:'different'}}),/operation_conflict/);});
 test('lease rechecked after asynchronous target resolution',async()=>{const s=setup(),l=await s.grant(),a=adapter();a.projectForThread=async()=>{s.advance(3600000);return 'app';};await assert.rejects(dispatcher(s,a).dispatch(s.caller,l.leaseId,send));assert.equal(a.calls.length,0);});

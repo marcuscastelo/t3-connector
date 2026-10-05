@@ -11,7 +11,7 @@ export function consentService({ grantProvider, capabilities = { read: true, wri
     const canRead = scopes.includes('connector:read') && capabilities.read, canWrite = scopes.includes('connector:write') && capabilities.write;
     const text = [];
     if (canRead) text.push(all ? `Read access to all current and future projects and exposed thread content of ${names}.` : 'Read access follows the configured project allowlist (restricted mode).');
-    if (canWrite) text.push(all ? `Write access to all current and future projects of ${names}; actions run in full-access mode.` : 'Write access is restricted to the inventory approved for this sign-in; actions run in full-access mode.');
+    if (canWrite) text.push(all ? `Write access to all current and future projects of ${names}; actions may run up to full-access mode (the default).` : 'Write access is restricted to the inventory approved for this sign-in; actions may run up to full-access mode (the default).');
     if (canWrite && envs.some(e => e.actions?.includes('project.delete-force'))) text.push('Write access includes deleting projects: empty projects, and, only on an explicit request with force, a project together with its threads.');
     if (canWrite && envs.some(e => e.actions?.includes('t3_project_create'))) text.push('Write access includes native T3 operations: creating, updating and cloning projects, changing environment preferences, and creating, changing, deleting and running scheduled tasks.');
     if (scopes.includes('connector:write') && !capabilities.write) text.push('Writing is unavailable: this deployment offers no write tools.');

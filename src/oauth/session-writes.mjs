@@ -299,7 +299,7 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
       annotations: { readOnlyHint: true, destructiveHint: false },
     }, args => result(() => nativeRead(principal, name, args)));
     for (const action of [...ACTIONS, ...granted]) server.registerTool(writeToolName(action), {
-      description: PROJECT_DESCRIPTIONS[action] ? `${describe(action)} Chosen environment only.` : `${describe(action)} in the chosen environment; authorized by the connector's OAuth session (passkey sign-in), ${all ? 'all current and future projects of the consented environments' : 'limited to the projects approved at sign-in (restricted mode)'}; the work runs in full-access mode.`,
+      description: PROJECT_DESCRIPTIONS[action] ? `${describe(action)} Chosen environment only.` : `${describe(action)} in the chosen environment; authorized by the connector's OAuth session (passkey sign-in), ${all ? 'all current and future projects of the consented environments' : 'limited to the projects approved at sign-in (restricted mode)'}; authorization permits full-access; actions exposing runtimeMode accept an explicit T3 execution mode (default full-access).`,
       inputSchema: z.strictObject({ environment, operationId: z.string(), input: schemaForAction(action) }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     }, ({ environment: env, operationId, input }) => result(() => dispatch(principal, { environment: env, action, operationId, input })));

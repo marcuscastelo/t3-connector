@@ -201,8 +201,9 @@ reporting failure, its `preparing` record dedupes after storage recovery and fre
 sending. Stored `rejected`/`uncertain` operations likewise never resend on reconnection. Dedupe
 requires a durable record; an absent reservation cannot remember an operation that never sent.
 
-Existing worktrees must have canonical paths equal to current project roots; unsupported worktree
-plans remain refused. Fork, merge-back and delegated actions validate all source/target references.
+Existing worktrees must have canonical paths equal to current project roots. New worktrees
+(`workspaceStrategy.type=worktree`, with `baseRef`, optional `branch` and `startFromOrigin`)
+are forwarded to T3 as of 0.11.0. Fork, merge-back and delegated actions validate all source/target references.
 
 Reconciliation authorizes the current session/caller/environment/action and the caller-bound
 journal record, without requiring a historical project's continued existence. It never repeats a
@@ -218,6 +219,13 @@ keeps the read `allowedProjects` ACL and the write inventory frozen at sign-in. 
 `T3_CONNECTOR_OAUTH_WRITE_PROJECTS=alias:projectId,…` narrows that snapshot. It does not provide
 future-project access. Setting this variable with `all` is a boot error. The stdio ACL validator,
 Ponte gate, lease TTL and `grantFromInventory` snapshot remain unchanged.
+
+`thread.launch`, `delegated_task.request` and `thread.runtime-mode.set` accept an optional
+`runtimeMode`: `approval-required`, `auto-accept-edits`, `auto` or `full-access`. Omission keeps
+the existing `full-access` default, including the setter's old no-parameter behavior. T3 decides
+provider support; the connector forwards the selected mode without upgrading it. The consent's
+`full-access` is the authorization ceiling, not a requirement to use that execution mode.
+Interaction mode behavior is unchanged.
 
 #### Native T3 tools (opt-in)
 
