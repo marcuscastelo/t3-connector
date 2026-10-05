@@ -1,15 +1,20 @@
 {
   "name": "mcp-connector-kit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Generic MCP tool plumbing shared by the T3 Connector and the Fleet Connector: strict input schemas, JSON results and error mapping. No T3, Fleet or transport knowledge.",
+  "description": "Shared layer for building MCP connectors: tool plumbing (strict schemas, results, errors) and the OAuth session profile (authorization server, MCP resource server over Streamable HTTP, sessions with idle/max age, refresh, passkeys, control plane, audit). No T3 or Fleet knowledge.",
   "license": "MIT",
   "exports": {
-    ".": "./index.mjs"
+    ".": "./index.mjs",
+    "./oauth": "./oauth/index.mjs",
+    "./oauth/*": "./oauth/*.mjs",
+    "./testing": "./testing/index.mjs"
   },
   "files": [
     "index.mjs",
+    "oauth/",
+    "testing/",
     "README.md",
     "LICENSE"
   ],
@@ -20,6 +25,10 @@
     "test": "node --test test/*.test.mjs"
   },
   "peerDependencies": {
+    "@modelcontextprotocol/sdk": "1.32.0",
+    "@simplewebauthn/browser": "13.3.0",
+    "@simplewebauthn/server": "13.3.3",
+    "qrcode": "1.5.4",
     "zod": "^4.0.0"
   },
   "repository": {

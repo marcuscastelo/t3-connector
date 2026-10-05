@@ -54,8 +54,10 @@ jobs:
           npm pack --pack-destination ../../dist
           cd ../../dist
           tgz="mcp-connector-kit-$version.tgz"
-          files="$(tar -tzf "$tgz" | sort | tr '\n' ' ')"
-          [[ "$files" == "package/LICENSE package/README.md package/index.mjs package/package.json " ]] || { echo "::error::unexpected files: $files"; exit 1; }
+          # Only the kit's own sources: no dependencies, tests or other files.
+          unexpected="$(tar -tzf "$tgz" | grep -Ev '^package/(((oauth|testing)/)?[A-Za-z0-9_-]+\.mjs|package\.json|README\.md|LICENSE)$' || true)"
+          [[ -z "$unexpected" ]] || { echo "::error::unexpected files: $unexpected"; exit 1; }
+          tar -tzf "$tgz" | grep -qx 'package/oauth/connector.mjs' || { echo "::error::oauth/connector.mjs missing"; exit 1; }
           sha256sum "$tgz" > "$tgz.sha256"
           printf 'mcp-connector-kit %s: generic MCP tool plumbing shared by the T3 Connector and the Fleet Connector (packages/mcp-connector-kit/README.md).\n\nVerify: `sha256sum -c %s.sha256`\n' "$version" "$tgz" > release-notes.md
       - uses: actions/upload-artifact@v5

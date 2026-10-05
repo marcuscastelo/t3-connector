@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Internal: the OAuth session profile (authorization server, MCP resource server, sessions,
+  passkeys, control plane, audit, configuration loader) moved to `packages/mcp-connector-kit` 0.2.0,
+  shared with the Fleet Connector. `src/oauth/*` keeps the same exports; the T3 Connector passes
+  its names (cookies, pages, metadata, passkeys), `T3_CONNECTOR_OAUTH_*` variables, project options
+  and consent wording, so behavior, cookies and configuration are unchanged. The package check
+  now also runs an OAuth rehearsal from the installed artifact.
 - Internal: the strict tool registration, JSON result and error mapping of the read MCP now come
   from `packages/mcp-connector-kit` (0.1.0), a package with no T3 knowledge shared with the Fleet
   Connector. It is bundled in the `t3-connector` tarball; tools, schemas and messages are unchanged.
