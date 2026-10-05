@@ -8,7 +8,8 @@
 // Never talks to a real T3 server: the test config points to a loopback port with nothing
 // listening, and connections are only opened on demand.
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import net from 'node:net';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -44,9 +45,9 @@ try {
     /^examples\/config\.json$/, /^examples\/oauth-all-projects\.env$/, /^docs\/adr\/\d{4}-[\w-]+\.md$/,
     /^(README|SECURITY|CHANGELOG)\.md$/, /^LICENSE$/, /^package\.json$/,
     // Shared MCP plumbing (packages/mcp-connector-kit), bundled so the release stays one artifact.
-    /^node_modules\/mcp-connector-kit\/(index\.mjs|package\.json|README\.md|LICENSE)$/];
+    /^node_modules\/mcp-connector-kit\/(((oauth|testing)\/)?[\w-]+\.mjs|package\.json|README\.md|LICENSE)$/];
   for (const f of files) if (!allowed.some((r) => r.test(f))) fail(`file outside the allowlist: ${f}`);
-  for (const f of ['bin/t3-connector.mjs', 'bin/t3-connector-write.mjs', 'bin/t3-connector-oauth.mjs', 'LICENSE', 'README.md', 'SECURITY.md', 'web/aprovacao.html', 'node_modules/mcp-connector-kit/index.mjs'])
+  for (const f of ['bin/t3-connector.mjs', 'bin/t3-connector-write.mjs', 'bin/t3-connector-oauth.mjs', 'LICENSE', 'README.md', 'SECURITY.md', 'web/aprovacao.html', 'node_modules/mcp-connector-kit/index.mjs', 'node_modules/mcp-connector-kit/oauth/connector.mjs'])
     if (!files.includes(f)) fail(`required file missing: ${f}`);
   if (info.name !== 't3-connector') fail(`package name ${info.name}, expected t3-connector`);
   if (info.version !== pkg.version) fail(`artifact version ${info.version} ≠ package.json ${pkg.version}`);
@@ -119,13 +120,36 @@ try {
   }
   await client.close();
 
+  // 5. OAuth session profile from the installed artifact (bundled mcp-connector-kit): rehearsal mode
+  // on loopback, no backend. Discovery metadata keeps the T3 names and /mcp challenges without a token.
+  const freePort = () => new Promise((ok, ko) => { const s = net.createServer(); s.once('error', ko); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => ok(port)); }); });
+  const [publicPort, localPort] = [await freePort(), await freePort()];
+  const oauth = spawn(path.join(binDir, 't3-connector-oauth'), ['rehearsal'], { env: { ...env, T3_CONNECTOR_OAUTH_PUBLIC_PORT: String(publicPort), T3_CONNECTOR_OAUTH_LOCAL_PORT: String(localPort), T3_CONNECTOR_OAUTH_STATE_DIR: path.join(tmp, 'oauth-state') }, stdio: ['ignore', 'ignore', 'pipe'] });
+  try {
+    let banner = '';
+    await new Promise((ok, ko) => {
+      const timer = setTimeout(() => ko(new Error(`t3-connector-oauth rehearsal did not start: ${banner}`)), 15000);
+      oauth.stderr.on('data', (d) => { banner += d; if (banner.includes('local control')) { clearTimeout(timer); ok(); } });
+      oauth.once('exit', (code) => { clearTimeout(timer); ko(new Error(`t3-connector-oauth rehearsal exited ${code}: ${banner}`)); });
+    });
+    const base = `http://localhost:${publicPort}`, get = (p) => fetch(base + p, { headers: { host: `localhost:${publicPort}` } });
+    const as = await (await get('/.well-known/oauth-authorization-server')).json();
+    if (as.issuer !== base || !as.code_challenge_methods_supported?.includes('S256')) fail(`OAuth AS metadata: ${JSON.stringify(as).slice(0, 200)}`);
+    const prm = await (await get('/.well-known/oauth-protected-resource/mcp')).json();
+    if (prm.resource_name !== 'T3 Connector' || prm.resource !== `${base}/mcp`) fail(`protected resource metadata: ${JSON.stringify(prm).slice(0, 200)}`);
+    const challenge = await fetch(`${base}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) });
+    if (challenge.status !== 401 || !/^Bearer resource_metadata=/.test(challenge.headers.get('www-authenticate') ?? '')) fail(`/mcp without a token answered ${challenge.status}`);
+  } finally {
+    oauth.kill('SIGTERM');
+  }
+
   if (failures.length) {
     console.error(`artifact ${info.filename}: ${failures.length} failure(s)`);
     for (const f of failures) console.error(`- ${f}`);
     process.exitCode = 1;
   } else {
     console.log(`artifact ${info.filename} ok: ${files.length} files, ${(info.size / 1024).toFixed(1)} kB, ` +
-      `isolated install, CLI and MCP handshake (${names.length} tools)`);
+      `isolated install, CLI and MCP handshake (${names.length} tools), OAuth rehearsal discovery and challenge`);
   }
 } finally {
   rmSync(tmp, { recursive: true, force: true });

@@ -32,15 +32,12 @@
     "smoke": "node test/smoke-ao-vivo.mjs"
   },
   "dependencies": {
-    "mcp-connector-kit": "0.1.0",
     "@modelcontextprotocol/sdk": "1.32.0",
     "@simplewebauthn/browser": "13.3.0",
     "@simplewebauthn/server": "13.3.3",
+    "mcp-connector-kit": "0.2.0",
     "qrcode": "1.5.4",
     "zod": "4.6.5"
-  },
-  "devDependencies": {
-    "@levischuck/tiny-cbor": "0.2.11"
   },
   "keywords": [
     "mcp",
