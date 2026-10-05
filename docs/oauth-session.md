@@ -219,6 +219,53 @@ keeps the read `allowedProjects` ACL and the write inventory frozen at sign-in. 
 future-project access. Setting this variable with `all` is a boot error. The stdio ACL validator,
 Ponte gate, lease TTL and `grantFromInventory` snapshot remain unchanged.
 
+#### Project deletion (opt-in)
+
+`T3_CONNECTOR_OAUTH_PROJECT_ADMIN=1` (only with `T3_CONNECTOR_OAUTH_PROJECTS=all`; any other value
+is off) adds three OAuth tools. They are offered only to sessions consented after the flag is on.
+The action list frozen in an older session never gains them, and the lease bridge (Ponte), stdio
+and `ACTIONS` catalogs are unchanged.
+
+- `t3_contar_threads_projeto`: the full live thread count of one project: `total`, `active`,
+  `archived`, `withoutRun` (overlapping) and `busy` (active run or pending request). The HTTP
+  shell carries only active threads; archived ones come from WS
+  `orchestration.getArchivedShellSnapshot`. The count is `complete` only when both reads observed
+  the same `snapshotSequence`. Otherwise it reads again (3 attempts), then answers
+  `complete:false, total:null`, never zero.
+- `t3_escrever_project_delete`: refused before sending (`project_not_empty`) unless the full count
+  is 0, and always sent with `force:false`, so T3's own refusal still applies. A refusal is never
+  escalated to force.
+- `t3_escrever_project_delete_force`: requires `force: true` (literal), `confirmProjectId` equal to
+  `projectId`, and `expectedThreadCount` equal to the fresh full count. It is refused when a thread
+  of the project has an active run or a pending request. T3 deletes each thread (cancelling its
+  pending work), then the project.
+
+Both use WS `projects.mutate` (`project.delete`) with a `commandId` derived from the operation key,
+so T3 replays the receipt of a command it already committed. The operation journal dedupes as for
+any write. Same operationId and same input returns the recorded result; same operationId and other
+input is `operation_conflict`. The receipt is `{projectId, deletedAt}`; T3 returns no sequence or
+deleted-thread count, and the connector invents none. The project is soft-deleted, and its
+workspace directory on disk is kept. Moving threads between projects is not offered: T3 has no
+native command that changes a thread's `projectId`.
+
+**Concurrency (backend limit).** In T3 8ed276c2, `ProjectService.deleteChildThreads` reads the
+project's threads outside the project lock, and `thread.create` neither checks the project nor
+takes that lock. So another client creating a thread during a delete can leave a live thread linked
+to a deleted project. The connector:
+
+- serializes its own project-scoped writes (`thread.launch`, `thread.fork`, the deletes) per
+  environment and project;
+- re-reads the full count right before sending;
+- after the delete, reads it again and reports `postCheck: "live_threads_remain"` with
+  `liveThreadsAfterDelete`, plus an audit event, instead of a clean result.
+
+It cannot exclude other clients (T3 UI, MCP, scheduler). Treat the guarantee as connector-local
+until T3 makes the check and the delete one transaction.
+
+A native refusal after the send (the project gained a thread between the connector's count and
+T3's check) is uncertain for the connector. Like any uncertain send, it fails closed: no retry,
+sessions end, and reconciliation is by `t3_reconciliar_escrita`.
+
 ## 2. What ChatGPT does, and why the token lifetimes are what they are
 
 Measured in the spike (ChatGPT web, 04/10/2026):
@@ -318,6 +365,7 @@ Guarantees:
 | `T3_CONNECTOR_OAUTH_ALLOWED_ORIGINS` | `https://chatgpt.com` | Browser `Origin` values accepted on `/mcp` (requests without `Origin` are accepted). |
 | `T3_CONNECTOR_OAUTH_WRITE_CONFIG` | unset | Path to a write config (`write.json` format). Unset: no write tools. |
 | `T3_CONNECTOR_OAUTH_PROJECTS` | `restricted` | `all`: read/write consent for all current and future projects of configured environments, with live inventory per call. Ignores the shared read ACL only inside OAuth. Read/write environment sets must match. |
+| `T3_CONNECTOR_OAUTH_PROJECT_ADMIN` | off | `1` (with `PROJECTS=all`): adds the project count and project delete tools (see Writes, Project deletion). |
 | `T3_CONNECTOR_OAUTH_WRITE_PROJECTS` | unset | Restricted mode only: `alias:projectId,…` narrows the frozen write snapshot for sandboxes. Conflicts with `all`; boot fails. |
 | `T3_CONNECTOR_CONFIG` | `~/.config/t3-connector/config.json` | Read config (same as `t3-connector`). |
 | `T3_CONNECTOR_OAUTH_VERBOSE` | unset | `1` echoes the redacted event log to stderr. |
@@ -539,6 +587,7 @@ Continue → passkey without recreating the connection.
 ## 9. Known limits
 
 - No DPoP / mTLS sender constraint on the ChatGPT hop; bearer profile.
+- Project deletion cannot exclude another client creating a thread during the delete (T3 backend); the connector reports live threads left on a deleted project.
 - Single canonical subject (one owner per installation); independent local and public-RP credentials. Public mobile/sync/hosted E2E remains unverified.
 - Stateless MCP transport: no server-initiated notifications or standalone SSE stream.
 - Any local process can revoke or kill. Credential listing/enrollment issuance/removal and kill release each require local UV; the control page itself has no separate admin login.

@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { digest, grantDoAmbiente } from './gate.mjs';
 import { exigirIdentidade } from './identidade.mjs';
+import { PROJECT_ACTIONS, PROJECT_SCHEMAS, isProjectAction, guardProjectDelete, lockProject } from './project-admin.mjs';
 const str=z.string().trim().min(1).max(1024), id=str;
 const model=z.object({instanceId:str.describe('Exact ID of the provider instance configured in the chosen environment, as listed by the read tool t3_providers (instanceId); keep case, underscores and hyphens, for example claudeAgent_custom.'),model:str.describe('Exact model ID for that instance (models[].slug in t3_providers), including custom models, for example claude-opus-5-5. The connector has no model enum or allowlist; availability is decided by T3 in that environment.'),options:z.array(z.object({id:str,value:z.union([z.string(),z.boolean()])}).strict()).optional()}).strict();
 const base={threadId:id};
@@ -71,6 +72,10 @@ for(const [action,fields] of [
 }
 export const ACTIONS=Object.freeze([...specs.keys()]);
 export const INVENTORY=Object.freeze([...specs].map(([action,s])=>({action,rpc:s.method,status:'mock-only'})));
+// Project actions are opt-in (OAuth all + explicit flag): outside ACTIONS, so existing catalogs,
+// configs and consents never gain them by default.
+for(const action of PROJECT_ACTIONS) specs.set(action,{method:'projects.mutate',refs:[],schema:PROJECT_SCHEMAS[action],encode:p=>({type:'project.delete',commandId:randomUUID(),projectId:p.projectId,force:action==='project.delete-force'})});
+export const ALL_ACTIONS=Object.freeze([...ACTIONS,...PROJECT_ACTIONS]);
 export function schemaForAction(action) {const s=specs.get(action);if(!s)throw new Error('action_unavailable');return s.schema;}
 export function parseAction(action,input) {
  const s=specs.get(action);if(!s) throw new Error('action_unavailable');
@@ -85,7 +90,9 @@ export function parseAction(action,input) {
  }
  return {spec:s,input:result.data};
 }
-const RECUSAS=/^(thread_not_found|scope_denied|lease_closed|ambiente_[a-z_]+|workspace_[a-z_]+)$/;
+const RECUSAS=/^(thread_not_found|scope_denied|lease_closed|ambiente_[a-z_]+|workspace_[a-z_]+|project_[a-z_]+)$/;
+// Writes that create a thread in a project, serialized with project deletes of this connector.
+const PROJECT_SCOPED=new Set(['thread.launch','thread.fork',...PROJECT_ACTIONS]);
 // v2: environment e destino lógico (t3://<environmentId>) estáveis; caller sem boot.
 export const chaveOperacao=({environmentId,destination,caller,operationId})=>digest(['v2',environmentId,destination,caller,operationId]);
 // The journal is retained across restarts. An uncertain result is never resubmitted.
@@ -124,23 +131,28 @@ export class Dispatcher {
   const old=owned?null:this.#store('get',key);
   if(old) {if(old.hash!==hash) throw new Error('operation_conflict');if(old.target)(this.authorizeRecorded??((target)=>this.gate.check(identity,leaseId,target)))(old.target);return {state:old.state,operationId,reconciliationRequired:old.state!=='completed'};}
   if(!owned)throw new Error('journal_failed');
+  let release=null;
   try {
    if(this.resolveGrant) grant=await this.resolveGrant(grant);
    const projects=new Set(parsed.input.projectId?[parsed.input.projectId]:[]);
    for(const ref of parsed.spec.refs) {const p=await this.adapter.projectForThread(parsed.input[ref]);if(!p) throw new Error('thread_not_found');projects.add(p);}
+   if(PROJECT_SCOPED.has(action)) release=await lockProject(JSON.stringify([this.environmentId,[...projects].sort()]));
    await this.#workspace(grant,[...projects],action,parsed.input);
    const target={environmentId:this.environmentId,destination:this.destination,projectIds:[...projects],action};
    const payload=parsed.spec.encode(parsed.input);
-   if(action==='thread.send') { const h=key.slice(0,32); payload.commandId=`${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`; payload.messageId=payload.commandId; }
+   // Stable commandId: T3 replays the receipt of a command it already committed.
+   if(action==='thread.send'||isProjectAction(action)) { const h=key.slice(0,32); payload.commandId=`${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`; if(action==='thread.send')payload.messageId=payload.commandId; }
    const payloadIds={commandId:payload.commandId,threadId:payload.threadId,messageId:payload.messageId};
    // Conexão do environment aberta ainda em 'preparing' (falha aqui não enviou nada) e antes
    // da checagem final: entre a checagem e o envio não há await.
    if(this.adapter.prepare) await this.adapter.prepare();
+   // Fresh full count (active + archived). The native force:false refusal still applies.
+   if(isProjectAction(action)) guardProjectDelete(action,parsed.input,await this.#occupancy(parsed.input.projectId));
    if(this.validateTarget) await this.validateTarget({target,input:parsed.input,spec:parsed.spec,validateWorkspace:g=>this.#workspace(g,[...projects],action,parsed.input)});
    this.#store('put',key,{...initial,state:'uncertain',target,payloadIds});
    const result=await this.gate.dispatch(identity,leaseId,{environmentId:this.environmentId,destination:this.destination,projectIds:[...projects],action},()=>this.adapter.invoke(parsed.spec.method,payload),operationId);
    this.#store('put',key,{...initial,state:'completed',target,payloadIds,receipt:this.adapter.receipt(result)});
-   return {state:'completed',operationId,receipt:this.adapter.receipt(result)};
+   return {state:'completed',operationId,receipt:this.adapter.receipt(result),...(isProjectAction(action)?await this.#afterDelete(parsed.input.projectId,operationId):{})};
   } catch(error) {
    const record=this.#store('get',key);
    if(record.state!=='preparing') this.gate.close();
@@ -149,7 +161,23 @@ export class Dispatcher {
    // Recusa antes do envio devolve o motivo conhecido (nada foi enviado); o resto é genérico.
    if(record.state==='preparing') throw new Error(RECUSAS.test(error.message)?error.message:'dispatch_rejected');
    throw new Error('reconciliation_required');
+  } finally {release?.();}
+ }
+ async #occupancy(projectId) {
+  if(!this.adapter.occupancy) throw new Error('project_count_unavailable');
+  try {return await this.adapter.occupancy(projectId);} catch {throw new Error('project_count_incomplete');}
+ }
+ // Another client can still create a thread in the project while it is deleted (backend limit):
+ // report live threads left linked to it instead of claiming a clean delete. Never throws.
+ async #afterDelete(projectId,operationId) {
+  let count;
+  try {count=await this.adapter.occupancy(projectId);} catch {return {postCheck:'unavailable'};}
+  if(!count?.complete) return {postCheck:'incomplete'};
+  if(count.total>0) {
+   try {this.gate.audit({event:'project_delete_live_threads',operationId,projectId,liveThreads:count.total});} catch {}
+   return {postCheck:'live_threads_remain',liveThreadsAfterDelete:count.total};
   }
+  return {postCheck:'clean',liveThreadsAfterDelete:0};
  }
  async reconcile(identity,leaseId,operationId) {
   const caller=exigirIdentidade(identity),record=this.#store('get',this.#key(caller,operationId));

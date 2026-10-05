@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- OAuth (opt-in, `T3_CONNECTOR_OAUTH_PROJECT_ADMIN=1` with `PROJECTS=all`): full project thread count
+  (`t3_contar_threads_projeto`: active + archived, consistent sequence, never a partial zero), delete
+  of an empty project (`force:false`), and forced delete only with `force: true`, confirmation and
+  the current count, refused while a thread is busy. The connector reports live threads left on a
+  deleted project, a T3 backend race it cannot prevent. Moving threads between projects is out of
+  scope (no native T3 support). Existing catalogs and consents are unchanged.
+
 ## 0.10.0
 
 - New read tool `t3_providers`: lists the provider instances of one environment from

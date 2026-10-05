@@ -6,6 +6,7 @@ import { identidadeSessaoOAuth, exigirIdentidade } from '../escrita/identidade.m
 import { resolverAmbiente } from '../escrita/config.mjs';
 import { consentAll, consented } from './project-policy.mjs';
 import { redact } from './http.mjs';
+import { PROJECT_ACTIONS } from '../escrita/project-admin.mjs';
 
 // T3 writes authorized by an OAuth session instead of a passkey lease. The existing Dispatcher
 // (journal reservation, target/workspace preflight, uncertainty handling, final synchronous check
@@ -66,18 +67,29 @@ const MESSAGES = {
   reconciliation_required: 'the connector tried to send to T3 but could not confirm the result. Do not retry; call t3_reconciliar_escrita with the same environment and operationId',
   target_run_id_required: 'targetRunId required: read t3_thread in the same environment and pass the active run for steer_active or restart_active',
   queue_explicit_intent_required: 'queue_after_active requires an explicit request to defer and deferUntilActiveCompletes=true',
+  project_not_empty: 'the project still has threads (active or archived); nothing was sent. Use t3_contar_threads_projeto; deleting with its threads needs project.delete-force',
+  project_count_incomplete: 'could not obtain a complete thread count for the project (active and archived); nothing was sent',
+  project_count_unavailable: 'this environment cannot count project threads; nothing was sent',
+  project_count_changed: 'the live thread count differs from expectedThreadCount; nothing was sent. Count again and confirm',
+  project_confirmation_mismatch: 'confirmProjectId must repeat the exact projectId; nothing was sent',
+  project_has_active_work: 'a thread of the project has an active run or a pending request; nothing was sent. Interrupt or finish it first',
 };
-const describe = action => action === 'thread.send' ? SEND_DESCRIPTION
+const PROJECT_DESCRIPTIONS = {
+  'project.delete': 'Deletes an EMPTY project (no active or archived threads) from T3. Refused if any thread exists; never escalates to force. The workspace directory on disk is kept.',
+  'project.delete-force': 'Deletes a project AND all its threads (active and archived), cancelling their pending work. Only on an explicit request to delete the project with its threads: requires force=true, confirmProjectId equal to projectId and expectedThreadCount from t3_contar_threads_projeto; refused if the count changed or a thread has an active run. The workspace directory on disk is kept.',
+};
+const describe = action => PROJECT_DESCRIPTIONS[action] ?? (action === 'thread.send' ? SEND_DESCRIPTION
   : action === 'runtime-request.answer' ? 'Answers a pending user_input runtime request using requestId and answers keyed by question ID from t3_thread.pedidosPendentes; thread.send does NOT answer it.'
   : action === 'runtime-request.approve' ? 'Responds to a pending approval runtime request using requestId and decision from t3_thread.pedidosPendentes; user_input requires runtime-request.answer instead.'
-  : action;
+  : action);
 export const writeToolName = action => `t3_escrever_${action.replaceAll('.', '_').replaceAll('-', '_')}`;
 
 // In restricted mode, `allowedProjects` (Map alias → Set of project ids) narrows the sign-in grant
 // to those projects; an environment without an entry gets no grant. Without it the grant is the
 // full inventory, as with the lease.
-export function sessionWrites({ conexoes, journal, authority, issuer, allowedProjects = null, inventoryMs = 15000, projectPolicy = 'restricted', audit = e => journal.audit(e) }) {
+export function sessionWrites({ conexoes, journal, authority, issuer, allowedProjects = null, inventoryMs = 15000, projectPolicy = 'restricted', projectAdmin = false, audit = e => journal.audit(e) }) {
   const all = projectPolicy === 'all';
+  if (projectAdmin && !all) throw new Error('OAuth project administration requires projectPolicy all');
   if (all && allowedProjects) throw new Error('OAuth all conflicts with allowedProjects');
   const gate = new SessionWriteGate({ authority, issuer, audit });
   const registros = conexoes.map(c => c.registro);
@@ -224,6 +236,19 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     return { environment: env, ...await dispatchers.get(c.registro.alias).reconcile(identity(principal), principal.sid, operationId) };
   }
 
+  // Read-only full count of one project's threads, for the consented session.
+  async function countThreads(principal, { environment, projectId }) {
+    const c = resolve(environment);
+    consented(authority, principal, c.registro);
+    const shell = await liveShell(principal, c);
+    if (!(shell.projects ?? []).some(p => p.id === projectId && !p.deletedAt)) fail('scope_denied');
+    if (!c.adapter.occupancy) fail('project_count_unavailable');
+    let count;
+    try { count = await c.adapter.occupancy(projectId); } catch { fail('project_count_incomplete'); }
+    consented(authority, principal, c.registro);
+    return { environment: { alias: c.registro.alias, environmentId: c.registro.environmentId }, ...count };
+  }
+
   const error = e => {
     const c = /^[a-z_]+$/.test(e.message) ? code(e.message) : 'write_rejected';
     const extra = c === 'environment_unknown' ? ` (configured: ${registros.map(r => r.alias).join(', ')})` : '';
@@ -234,8 +259,8 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
   function registerTools(server, principal) {
     // Strict schemas: an unknown or legacy parameter (e.g. `ambiente`) is refused by the SDK.
     const environment = z.string().min(1).describe(`T3 environment where the thread/project lives (required; alias or environmentId): ${registros.map(r => r.alias).join(', ')}. IDs from one environment are not valid in another.`);
-    for (const action of ACTIONS) server.registerTool(writeToolName(action), {
-      description: `${describe(action)} in the chosen environment; authorized by the connector's OAuth session (passkey sign-in), ${all ? 'all current and future projects of the consented environments' : 'limited to the projects approved at sign-in (restricted mode)'}; the work runs in full-access mode.`,
+    for (const action of projectAdmin ? [...ACTIONS, ...PROJECT_ACTIONS] : ACTIONS) server.registerTool(writeToolName(action), {
+      description: PROJECT_DESCRIPTIONS[action] ? `${describe(action)} Chosen environment only.` : `${describe(action)} in the chosen environment; authorized by the connector's OAuth session (passkey sign-in), ${all ? 'all current and future projects of the consented environments' : 'limited to the projects approved at sign-in (restricted mode)'}; the work runs in full-access mode.`,
       inputSchema: z.strictObject({ environment, operationId: z.string(), input: schemaForAction(action) }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     }, ({ environment: env, operationId, input }) => result(() => dispatch(principal, { environment: env, action, operationId, input })));
@@ -244,6 +269,11 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
       inputSchema: z.strictObject({ environment, operationId: z.string() }),
       annotations: { readOnlyHint: true, destructiveHint: false },
     }, ({ environment: env, operationId }) => result(() => reconcile(principal, { environment: env, operationId })));
+    if (projectAdmin) server.registerTool('t3_contar_threads_projeto', {
+      description: 'Counts every live thread of one project: active, archived, without a run, and busy (active run or pending request). complete=false (total null) when the active and archived reads did not agree; never reported as zero.',
+      inputSchema: z.strictObject({ environment, projectId: z.string().min(1) }),
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    }, ({ environment: env, projectId }) => result(() => countThreads(principal, { environment: env, projectId })));
   }
 
   return { gate, inventory, dispatch, reconcile, registerTools, close() { for (const c of conexoes) c.fechar?.(); } };
