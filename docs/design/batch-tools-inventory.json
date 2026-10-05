@@ -1,0 +1,1700 @@
+{
+  "baseline": "34cc095bf9ed2b5452b87729da51e6d878404af3",
+  "version": "0.11.2",
+  "method": "SDK tools/list over in-memory MCP pairs; fixture authority, no tool calls, no backend access",
+  "profileCounts": {
+    "read": 9,
+    "lease_write": 49,
+    "oauth_write_all_options": 64
+  },
+  "unionCount": 74,
+  "tools": [
+    {
+      "name": "delete_scheduled_task",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "group": "native_write",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "T"
+    },
+    {
+      "name": "list_scheduled_tasks",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": true,
+      "required": {
+        "oauth_write_all_options": [
+          "projectId",
+          "environment"
+        ]
+      },
+      "group": "native_read",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "R"
+    },
+    {
+      "name": "run_scheduled_task_now",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "group": "native_write",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "T"
+    },
+    {
+      "name": "schedule_task",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "group": "native_write",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "L"
+    },
+    {
+      "name": "t3_aguardar_thread",
+      "profiles": [
+        "read"
+      ],
+      "readOnly": true,
+      "required": {
+        "read": [
+          "environment",
+          "threadId",
+          "timeoutMs"
+        ]
+      },
+      "group": "read_or_utility",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "W"
+    },
+    {
+      "name": "t3_ambientes",
+      "profiles": [
+        "read"
+      ],
+      "readOnly": true,
+      "required": {
+        "read": []
+      },
+      "group": "read_or_utility",
+      "classification": "C",
+      "phase": "—",
+      "policy": "—"
+    },
+    {
+      "name": "t3_atencao",
+      "profiles": [
+        "read",
+        "lease_write"
+      ],
+      "readOnly": true,
+      "required": {
+        "read": [],
+        "lease_write": [
+          "leaseId",
+          "environment"
+        ]
+      },
+      "group": "read_or_utility",
+      "classification": "A",
+      "phase": "v1",
+      "policy": "R"
+    },
+    {
+      "name": "t3_buscar_threads",
+      "profiles": [
+        "read"
+      ],
+      "readOnly": true,
+      "required": {
+        "read": []
+      },
+      "group": "read_or_utility",
+      "classification": "A",
+      "phase": "v1",
+      "policy": "F"
+    },
+    {
+      "name": "t3_contar_threads_projeto",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": true,
+      "required": {
+        "oauth_write_all_options": [
+          "environment",
+          "projectId"
+        ]
+      },
+      "group": "read_or_utility",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "O"
+    },
+    {
+      "name": "t3_environment_preferences_update",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "group": "native_write",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "K"
+    },
+    {
+      "name": "t3_environment_read",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": true,
+      "required": {
+        "oauth_write_all_options": [
+          "environment"
+        ]
+      },
+      "group": "native_read",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "R"
+    },
+    {
+      "name": "t3_escrever_checkpoint_rollback",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "checkpoint.rollback",
+      "group": "action",
+      "classification": "C",
+      "phase": "—",
+      "policy": "—"
+    },
+    {
+      "name": "t3_escrever_delegated_task_completion_delivery_acknowledge",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "delegated_task.completion-delivery.acknowledge",
+      "group": "action",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "D"
+    },
+    {
+      "name": "t3_escrever_delegated_task_completion_delivery_dispose",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "delegated_task.completion-delivery.dispose",
+      "group": "action",
+      "classification": "C",
+      "phase": "—",
+      "policy": "—"
+    },
+    {
+      "name": "t3_escrever_delegated_task_request",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "delegated_task.request",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "L"
+    },
+    {
+      "name": "t3_escrever_delegated_task_wake_policy",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "delegated_task.wake-policy",
+      "group": "action",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "D"
+    },
+    {
+      "name": "t3_escrever_prepared_run_release",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "prepared-run.release",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "X"
+    },
+    {
+      "name": "t3_escrever_project_delete",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "project.delete",
+      "group": "project_admin",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "P"
+    },
+    {
+      "name": "t3_escrever_project_delete_force",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "project.delete-force",
+      "group": "project_admin",
+      "classification": "C",
+      "phase": "—",
+      "policy": "—"
+    },
+    {
+      "name": "t3_escrever_provider_session_detach",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "provider-session.detach",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "X"
+    },
+    {
+      "name": "t3_escrever_provider_switch",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "provider.switch",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "K"
+    },
+    {
+      "name": "t3_escrever_queue_resume",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "queue.resume",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "Q"
+    },
+    {
+      "name": "t3_escrever_queued_message_promote_to_steer",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "queued-message.promote-to-steer",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "Q"
+    },
+    {
+      "name": "t3_escrever_queued_run_cancel",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "queued-run.cancel",
+      "group": "action",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "Q"
+    },
+    {
+      "name": "t3_escrever_queued_run_edit",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "queued-run.edit",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "Q"
+    },
+    {
+      "name": "t3_escrever_queued_run_reorder",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "queued-run.reorder",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "Q"
+    },
+    {
+      "name": "t3_escrever_run_interrupt",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "run.interrupt",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "X"
+    },
+    {
+      "name": "t3_escrever_runtime_request_answer",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "runtime-request.answer",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "U"
+    },
+    {
+      "name": "t3_escrever_runtime_request_approve",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "runtime-request.approve",
+      "group": "action",
+      "classification": "C",
+      "phase": "—",
+      "policy": "—"
+    },
+    {
+      "name": "t3_escrever_thread_active_reorder",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.active.reorder",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "D"
+    },
+    {
+      "name": "t3_escrever_thread_archive",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.archive",
+      "group": "action",
+      "classification": "A",
+      "phase": "v1",
+      "policy": "I"
+    },
+    {
+      "name": "t3_escrever_thread_auto_settle_set",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.auto-settle.set",
+      "group": "action",
+      "classification": "A",
+      "phase": "v1",
+      "policy": "I"
+    },
+    {
+      "name": "t3_escrever_thread_delete",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.delete",
+      "group": "action",
+      "classification": "C",
+      "phase": "—",
+      "policy": "—"
+    },
+    {
+      "name": "t3_escrever_thread_fork",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.fork",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "L"
+    },
+    {
+      "name": "t3_escrever_thread_interaction_mode_set",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.interaction-mode.set",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "K"
+    },
+    {
+      "name": "t3_escrever_thread_launch",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.launch",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "L"
+    },
+    {
+      "name": "t3_escrever_thread_mark_unread",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.mark-unread",
+      "group": "action",
+      "classification": "A",
+      "phase": "v1",
+      "policy": "I"
+    },
+    {
+      "name": "t3_escrever_thread_merge_back",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.merge_back",
+      "group": "action",
+      "classification": "C",
+      "phase": "—",
+      "policy": "—"
+    },
+    {
+      "name": "t3_escrever_thread_metadata_update",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.metadata.update",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "D"
+    },
+    {
+      "name": "t3_escrever_thread_model_selection_set",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.model-selection.set",
+      "group": "action",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "K"
+    },
+    {
+      "name": "t3_escrever_thread_pin",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.pin",
+      "group": "action",
+      "classification": "A",
+      "phase": "v1",
+      "policy": "I"
+    },
+    {
+      "name": "t3_escrever_thread_pin_reorder",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.pin.reorder",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "D"
+    },
+    {
+      "name": "t3_escrever_thread_pull_request_link",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.pull-request.link",
+      "group": "action",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "D"
+    },
+    {
+      "name": "t3_escrever_thread_pull_request_unlink",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.pull-request.unlink",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "D"
+    },
+    {
+      "name": "t3_escrever_thread_runtime_mode_set",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.runtime-mode.set",
+      "group": "action",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "K"
+    },
+    {
+      "name": "t3_escrever_thread_send",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.send",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "S"
+    },
+    {
+      "name": "t3_escrever_thread_settle",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.settle",
+      "group": "action",
+      "classification": "A",
+      "phase": "v1",
+      "policy": "I"
+    },
+    {
+      "name": "t3_escrever_thread_snooze",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.snooze",
+      "group": "action",
+      "classification": "A",
+      "phase": "v1",
+      "policy": "I"
+    },
+    {
+      "name": "t3_escrever_thread_title",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.title",
+      "group": "action",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "D"
+    },
+    {
+      "name": "t3_escrever_thread_unarchive",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.unarchive",
+      "group": "action",
+      "classification": "A",
+      "phase": "v1",
+      "policy": "I"
+    },
+    {
+      "name": "t3_escrever_thread_unpin",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.unpin",
+      "group": "action",
+      "classification": "A",
+      "phase": "v1",
+      "policy": "I"
+    },
+    {
+      "name": "t3_escrever_thread_unsettle",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.unsettle",
+      "group": "action",
+      "classification": "A",
+      "phase": "v1",
+      "policy": "I"
+    },
+    {
+      "name": "t3_escrever_thread_unsnooze",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.unsnooze",
+      "group": "action",
+      "classification": "A",
+      "phase": "v1",
+      "policy": "I"
+    },
+    {
+      "name": "t3_escrever_thread_user_input_dismiss",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.user-input.dismiss",
+      "group": "action",
+      "classification": "C",
+      "phase": "—",
+      "policy": "—"
+    },
+    {
+      "name": "t3_escrever_thread_visit",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId",
+          "input"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "action": "thread.visit",
+      "group": "action",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "D"
+    },
+    {
+      "name": "t3_mensagens",
+      "profiles": [
+        "read",
+        "lease_write"
+      ],
+      "readOnly": true,
+      "required": {
+        "read": [
+          "threadId"
+        ],
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "threadId"
+        ]
+      },
+      "group": "read_or_utility",
+      "classification": "A",
+      "phase": "v1",
+      "policy": "R"
+    },
+    {
+      "name": "t3_pedir_aprovacao",
+      "profiles": [
+        "lease_write"
+      ],
+      "readOnly": false,
+      "required": {
+        "lease_write": []
+      },
+      "group": "read_or_utility",
+      "classification": "C",
+      "phase": "—",
+      "policy": "—"
+    },
+    {
+      "name": "t3_project_clone",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "group": "native_write",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "L"
+    },
+    {
+      "name": "t3_project_create",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "group": "native_write",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "L"
+    },
+    {
+      "name": "t3_project_read",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": true,
+      "required": {
+        "oauth_write_all_options": [
+          "projectId",
+          "environment"
+        ]
+      },
+      "group": "native_read",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "R"
+    },
+    {
+      "name": "t3_project_update",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "group": "native_write",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "K"
+    },
+    {
+      "name": "t3_projetos",
+      "profiles": [
+        "read",
+        "lease_write"
+      ],
+      "readOnly": true,
+      "required": {
+        "read": [],
+        "lease_write": [
+          "leaseId",
+          "environment"
+        ]
+      },
+      "group": "read_or_utility",
+      "classification": "A",
+      "phase": "v1",
+      "policy": "R"
+    },
+    {
+      "name": "t3_providers",
+      "profiles": [
+        "read"
+      ],
+      "readOnly": true,
+      "required": {
+        "read": []
+      },
+      "group": "read_or_utility",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "R"
+    },
+    {
+      "name": "t3_queue_list",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": true,
+      "required": {
+        "oauth_write_all_options": [
+          "threadId",
+          "environment"
+        ]
+      },
+      "group": "native_read",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "R"
+    },
+    {
+      "name": "t3_queue_read",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": true,
+      "required": {
+        "oauth_write_all_options": [
+          "threadId",
+          "queuedRunId",
+          "environment"
+        ]
+      },
+      "group": "native_read",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "R"
+    },
+    {
+      "name": "t3_reconciliar_escrita",
+      "profiles": [
+        "lease_write",
+        "oauth_write_all_options"
+      ],
+      "readOnly": true,
+      "required": {
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "operationId"
+        ],
+        "oauth_write_all_options": [
+          "environment",
+          "operationId"
+        ]
+      },
+      "group": "read_or_utility",
+      "classification": "A",
+      "phase": "v1",
+      "policy": "J"
+    },
+    {
+      "name": "t3_thread",
+      "profiles": [
+        "read",
+        "lease_write"
+      ],
+      "readOnly": true,
+      "required": {
+        "read": [
+          "threadId"
+        ],
+        "lease_write": [
+          "leaseId",
+          "environment",
+          "threadId"
+        ]
+      },
+      "group": "read_or_utility",
+      "classification": "A",
+      "phase": "v1",
+      "policy": "R"
+    },
+    {
+      "name": "t3_thread_configuration",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": true,
+      "required": {
+        "oauth_write_all_options": [
+          "threadId",
+          "environment"
+        ]
+      },
+      "group": "native_read",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "R"
+    },
+    {
+      "name": "t3_thread_search",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": true,
+      "required": {
+        "oauth_write_all_options": [
+          "query",
+          "environment"
+        ]
+      },
+      "group": "native_read",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "F"
+    },
+    {
+      "name": "t3_thread_transfers",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": true,
+      "required": {
+        "oauth_write_all_options": [
+          "threadId",
+          "environment"
+        ]
+      },
+      "group": "native_read",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "R"
+    },
+    {
+      "name": "t3_threads",
+      "profiles": [
+        "read",
+        "lease_write"
+      ],
+      "readOnly": true,
+      "required": {
+        "read": [],
+        "lease_write": [
+          "leaseId",
+          "environment"
+        ]
+      },
+      "group": "read_or_utility",
+      "classification": "A",
+      "phase": "v1",
+      "policy": "R"
+    },
+    {
+      "name": "t3_worktree_list",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": true,
+      "required": {
+        "oauth_write_all_options": [
+          "threadId",
+          "environment"
+        ]
+      },
+      "group": "native_read",
+      "classification": "B",
+      "phase": "depois",
+      "policy": "R"
+    },
+    {
+      "name": "t3_worktree_status",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": true,
+      "required": {
+        "oauth_write_all_options": [
+          "threadId",
+          "environment"
+        ]
+      },
+      "group": "native_read",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "R"
+    },
+    {
+      "name": "update_scheduled_task",
+      "profiles": [
+        "oauth_write_all_options"
+      ],
+      "readOnly": false,
+      "required": {
+        "oauth_write_all_options": [
+          "environment",
+          "operationId",
+          "input"
+        ]
+      },
+      "group": "native_write",
+      "classification": "A",
+      "phase": "depois",
+      "policy": "T"
+    }
+  ],
+  "classificationCounts": {
+    "A": 35,
+    "B": 30,
+    "C": 9
+  },
+  "rehearsalOnly": [
+    {
+      "name": "rehearsal_now",
+      "classification": "C",
+      "reason": "Uma leitura de relógio não ganha sentido como lote."
+    },
+    {
+      "name": "rehearsal_echo",
+      "classification": "C",
+      "reason": "Eco sintético para testar OAuth; não é operação do control-plane."
+    },
+    {
+      "name": "rehearsal_notes",
+      "classification": "C",
+      "reason": "Já lista todas as notas efêmeras do processo."
+    },
+    {
+      "name": "rehearsal_note_write",
+      "classification": "C",
+      "reason": "Append sintético sem journal; batching testaria outro contrato, sem caso de produto."
+    }
+  ],
+  "rehearsalMethod": "SDK tools/list over in-memory MCP pair, no tool calls"
+}
