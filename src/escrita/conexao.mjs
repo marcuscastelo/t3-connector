@@ -9,7 +9,8 @@ import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { criarCliente, ErroT3, verificarIdentidade } from '../t3.mjs';
 import { criarTransporteSsh, criarTransporteUrl } from '../transporte.mjs';
-import { StagingRpcTransport } from './transport-staging.mjs';
+import { StagingRpcTransport, projectReceipt } from './transport-staging.mjs';
+import { lerOcupacao } from './project-admin.mjs';
 
 export const ESCOPOS_ESCRITA = ['orchestration:operate', 'orchestration:read'];
 
@@ -78,6 +79,9 @@ export function criarConexaoEscrita(registro, {
   const clienteLeitura = {
     shell: (o) => lerComRetry((c) => c.shell(o)),
     thread: (id, o) => lerComRetry((c) => c.thread(id, o)),
+    threadCompleto: (id, o) => lerComRetry((c) => c.threadCompleto(id, o)),
+    projetos: (o) => lerComRetry((c) => c.projetos(o)),
+    ambiente: (o) => lerComRetry((c) => c.ambiente(o)),
   };
 
   async function prepararSocket() {
@@ -125,11 +129,23 @@ export function criarConexaoEscrita(registro, {
     cliente: async () => clienteLeitura,
     adapter: {
       prepare: prepararSocket,
-      invoke: (metodo, payload) => {
+      invoke: (metodo, payload, opcoes) => {
         if (!rpc?.available) throw new Error('ambiente_indisponivel');
-        return rpc.invoke(metodo, payload);
+        return rpc.invoke(metodo, payload, opcoes);
       },
-      receipt: (r) => ('threadId' in r ? { threadId: r.threadId, resumed: r.resumed } : { sequence: r.sequence }),
+      // Native-tool reads and preflight (native.mjs): HTTP GETs and typed-error RPCs.
+      native: {
+        rpc: async (metodo, payload) => (await prepararSocket()).invoke(metodo, payload, { nativeErrors: true }),
+        thread: (id) => clienteLeitura.threadCompleto(id),
+        projects: () => clienteLeitura.projetos(),
+        environment: () => clienteLeitura.ambiente(),
+      },
+      receipt: (r) => projectReceipt(r) ?? ('threadId' in r ? { threadId: r.threadId, resumed: r.resumed } : { sequence: r.sequence }),
+      // Full thread count of one project: HTTP shell (active) + WS archived snapshot, same sequence.
+      occupancy: async (projectId) => {
+        const socket = await prepararSocket();
+        return lerOcupacao({ projectId, readActive: () => clienteLeitura.shell(), readArchived: () => socket.invoke('orchestration.getArchivedShellSnapshot', {}) });
+      },
       projectForThread: async (id) => (await clienteLeitura.shell()).threads?.find((t) => t.id === id && !t.deletedAt)?.projectId,
       // Canonicalização de caminho só vale no domínio de execução: local para loopback,
       // no host SSH para environment remoto. Mesma regra nos dois: caminho canônico igual a
@@ -141,6 +157,7 @@ export function criarConexaoEscrita(registro, {
       reconcile: async (record) => {
         if (record.state === 'completed' && record.receipt) {
           const r = record.receipt;
+          if (r.projectId) return { found: true, state: 'completed' };
           return { found: true, ...(r.sequence !== undefined ? { sequence: r.sequence } : {}), ...(r.threadId ? { threadId: r.threadId } : {}), state: 'unknown' };
         }
         return { found: false, state: 'unknown' };
