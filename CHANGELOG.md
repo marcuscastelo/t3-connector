@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Read tools: one source-of-truth contract for thread state and model. `state` now gives an
+  active run precedence over the newest run's outcome. Before, a queued message promoted to
+  steer (or a cancelled queued run) made T3 report the newest run as `cancelled`, and the
+  connector returned `state: cancelled` (with the active run's `runId`) while the original run
+  was still working. Summaries add `stateSource`. They also add `latestRunId`, `latestRunStatus`
+  and a `note` when the newest run is not the one `state` describes. `t3_aguardar_thread`
+  follows the active run by default. `t3_thread` adds `activeRun` (with its model) and takes
+  `latestRun` from the thread shell. It now picks `providerSession` the way T3 does: same
+  instance, most recent. `providerSession` is marked `informational: true`, with a `note` when
+  its model lags the thread's model after a model change. Tool descriptions state the precedence.
 - Internal: the OAuth session profile (authorization server, MCP resource server, sessions,
   passkeys, control plane, audit, configuration loader) moved to `packages/mcp-connector-kit` 0.2.0,
   shared with the Fleet Connector. `src/oauth/*` keeps the same exports; the T3 Connector passes

@@ -178,3 +178,51 @@ test('environment que não responde no prazo: erro sem estado observado', async 
     /did not respond within 100 ms; no state observed/,
   );
 });
+
+// Regressão do steer (polaris f7311b4b, 05/10/2026): o último run (ordinal 4) foi
+// cancelado ao promover a mensagem da fila, mas o run ordinal 1 seguia rodando. A espera
+// devolvia na hora terminal/cancelled do último run, e o cliente concluía que a thread parou.
+function dadosSteer() {
+  const d = dadosPadrao();
+  d.remoto.shell.threads.push(thread({
+    id: 't-steer', projectId: REMOTO.projeto, status: 'cancelled',
+    latestRunId: 'run-o4', activeRunId: 'run-o1', activityRunStatus: 'running',
+  }));
+  return d;
+}
+const RUNS_STEER = [{ id: 'run-o1', ordinal: 1, status: 'running' }, { id: 'run-o4', ordinal: 4, status: 'cancelled' }];
+
+test('steer: sem runId segue o run ativo, não o último run cancelado', async () => {
+  const r = await esperar(
+    { environment: 'remoto', threadId: 't-steer', timeoutMs: 150 },
+    { assinarImpl: assinaturaFalsa([[5, [snapshot({ runs: RUNS_STEER })]]]) },
+    { dados: dadosSteer() },
+  );
+  assert.equal(r.runId, 'run-o1');
+  assert.equal(r.state, 'running');
+  assert.equal(r.terminal, false);
+  assert.equal(r.returnReason, 'timeout');
+});
+
+test('steer: termina quando o run ativo termina', async () => {
+  const r = await esperar(
+    { environment: 'remoto', threadId: 't-steer', timeoutMs: 5000 },
+    { assinarImpl: assinaturaFalsa([[5, [snapshot({ runs: RUNS_STEER })]], [30, [evento('run.updated', { ...RUNS_STEER[0], status: 'completed' })]]]) },
+    { dados: dadosSteer() },
+  );
+  assert.equal(r.runId, 'run-o1');
+  assert.equal(r.state, 'completed');
+  assert.equal(r.returnReason, 'terminal');
+});
+
+test('steer: runId explícito do último run devolve o desfecho dele sem assinar', async () => {
+  const chamadas = [];
+  const r = await esperar(
+    { environment: 'remoto', threadId: 't-steer', timeoutMs: 1000, runId: 'run-o4' },
+    { assinarImpl: () => assert.fail('não deve assinar') },
+    { dados: dadosSteer(), chamadas },
+  );
+  assert.equal(r.runId, 'run-o4');
+  assert.equal(r.state, 'cancelled');
+  assert.equal(r.returnReason, 'terminal');
+});

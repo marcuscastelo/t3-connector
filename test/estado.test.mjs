@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { estadoDaThread, pedidosPendentes, ultimaResposta, detalheDoPedido, resumoModelo } from '../src/estado.mjs';
+import { estadoDaThread, runAtivoDaShell, pedidosPendentes, ultimaResposta, detalheDoPedido, resumoModelo } from '../src/estado.mjs';
 import { thread, pedido, projecao, mensagem } from './fixtures.mjs';
 
 test('run concluído é concluída, nunca intervenção', () => {
@@ -32,8 +32,11 @@ test('pedido pendente vence o status do run, mesmo running', () => {
 });
 
 test('waiting sem pedido no resumo não é término nem intervenção confirmada', () => {
-  const e = estadoDaThread(thread({ status: 'waiting', activeRunId: 'run-2' }));
+  // Forma real da shell: run em waiting não é interrompível, então só aparece em activityRunStatus.
+  const e = estadoDaThread(thread({ status: 'waiting', latestRunId: 'run-2', activityRunStatus: 'waiting' }));
   assert.equal(e.state, 'running');
+  assert.equal(e.stateSource, 'active_run');
+  assert.equal(e.runId, 'run-2');
   assert.match(e.note, /no visible pending request/);
 });
 
@@ -108,4 +111,63 @@ test('resumo de modelo lê effort de Claude e reasoningEffort de Codex', () => {
   assert.deepEqual(resumoModelo({ instanceId: 'codex', model: 'gpt-6.1-sol', options: [{ id: 'reasoningEffort', value: 'high' }] }),
     { model: 'gpt-6.1-sol', instanceId: 'codex', effort: 'high' });
   assert.equal(resumoModelo({ model: 'claude-opus-5-5', options: [{ id: 'effort', value: 'medium' }] }).effort, 'medium');
+});
+
+// Regressão (polaris, thread f7311b4b, 05/10/2026): a shell trazia status "cancelled" do
+// run ordinal 4 (mensagem da fila promovida a steer) enquanto o run ordinal 1 seguia
+// rodando; o connector respondia state "cancelled" com o runId do run ativo.
+const SHELL_STEER = {
+  status: 'cancelled',
+  latestRunId: 'run:t:ordinal:4',
+  activeRunId: 'run:t:ordinal:1',
+  activityRunStatus: 'running',
+};
+
+test('run ativo vence o último run cancelado: thread aparentemente parada segue rodando', () => {
+  const e = estadoDaThread(thread(SHELL_STEER));
+  assert.equal(e.state, 'running');
+  assert.equal(e.stateSource, 'active_run');
+  assert.equal(e.runId, 'run:t:ordinal:1');
+  assert.equal(e.statusRun, 'running', 'statusRun é do run que o state descreve, não do último');
+  assert.equal(e.latestRunId, 'run:t:ordinal:4');
+  assert.equal(e.latestRunStatus, 'cancelled');
+  assert.match(e.note, /still active; state follows the active run/);
+});
+
+test('run ativo vence também interrompido, falho e plano proposto do último run', () => {
+  for (const status of ['interrupted', 'rolled_back', 'failed', 'completed']) {
+    const e = estadoDaThread(thread({ ...SHELL_STEER, status, hasActionableProposedPlan: true, limitRecovery: { runId: 'x', resetAt: 'y', autoResume: false } }));
+    assert.equal(e.state, 'running', status);
+    assert.equal(e.statusRun, 'running', status);
+  }
+});
+
+test('pedido pendente vence o run ativo e mantém o último run como informação', () => {
+  const e = estadoDaThread(thread({ ...SHELL_STEER, pendingRuntimeRequest: { id: 'req-1', kind: 'user_input', createdAt: 'x' } }));
+  assert.equal(e.state, 'needs_intervention');
+  assert.equal(e.stateSource, 'pending_request');
+  assert.equal(e.runId, 'run:t:ordinal:1');
+  assert.equal(e.latestRunStatus, 'cancelled');
+});
+
+test('run em waiting atrás de um run novo cancelado continua ativo, sem runId inventado', () => {
+  const e = estadoDaThread(thread({ status: 'cancelled', latestRunId: 'run-3', activeRunId: null, activityRunStatus: 'waiting' }));
+  assert.equal(e.state, 'running');
+  assert.equal(e.runId, null);
+  assert.equal(e.statusRun, 'waiting');
+  assert.equal(e.latestRunStatus, 'cancelled');
+});
+
+test('sem run ativo, o desfecho do último run decide e não há campos de último run duplicados', () => {
+  const e = estadoDaThread(thread({ status: 'cancelled', latestRunId: 'run-4' }));
+  assert.equal(e.state, 'cancelled');
+  assert.equal(e.stateSource, 'latest_run');
+  assert.equal(e.runId, 'run-4');
+  assert.equal('latestRunStatus' in e, false);
+  assert.equal('note' in e, false);
+});
+
+test('run ativo igual ao último usa o status exato da shell', () => {
+  assert.deepEqual(runAtivoDaShell(thread({ status: 'starting', latestRunId: 'r', activeRunId: 'r', activityRunStatus: 'starting' })), { runId: 'r', status: 'starting' });
+  assert.equal(runAtivoDaShell(thread({ status: 'completed' })), null);
 });

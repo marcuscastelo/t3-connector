@@ -7,11 +7,12 @@
 
 import { Cancelada, ErroT3 } from './t3.mjs';
 import { assinar } from './ws.mjs';
-import { motivoDoPedido, ultimaResposta } from './estado.mjs';
+import { motivoDoPedido, runAtivoDaShell, ultimaResposta } from './estado.mjs';
 
 export const TETO_MS = 5000;
 const TERMINAIS = new Set(['completed', 'failed', 'cancelled', 'interrupted', 'rolled_back']);
 const CANCELADA = new Set(['cancelled', 'interrupted', 'rolled_back']);
+const ATIVIDADE = new Set(['preparing', 'starting', 'running', 'waiting']);
 
 export function estadoDoRun(status, pedido) {
   if (pedido) return 'needs_intervention';
@@ -28,10 +29,13 @@ function resumoPedido(p) {
 }
 
 const ultimoRun = (runs) => [...(runs ?? [])].sort((a, b) => b.ordinal - a.ordinal)[0];
+const ultimoRunAtivo = (runs) => ultimoRun((runs ?? []).filter((x) => ATIVIDADE.has(x.status)));
 
 /**
  * @param ambientes registro de criarAmbientes
  * @param entrada {environment, threadId, timeoutMs, runId?, includeLatestResponse?, maxCharacters?}
+ *   Sem runId, segue o run ativo da thread e, sem run ativo, o último run: o último run
+ *   pode ser uma mensagem da fila já cancelada enquanto o ativo continua.
  * @param signal cancelamento vindo do cliente MCP
  */
 export async function aguardarThread(ambientes, entrada, opcoes = {}) {
@@ -99,14 +103,19 @@ async function aguardar(ambientes, entrada, { signal, agora = Date.now, assinarI
   }
 
   const latest = obs.thread.latestRunId;
-  if (!latest && !runPedido) return resultado('no_run', false);
-  const runDaShell = !runPedido || runPedido === latest;
-  if (runDaShell && TERMINAIS.has(obs.thread.status) && !incluirUltimaResposta) {
-    obs.run = { id: latest, status: obs.thread.status };
+  const ativo = runAtivoDaShell(obs.thread);
+  // Run seguido; null quando o ativo existe mas a shell não diz qual é (waiting atrás de outro).
+  const alvo = runPedido ?? (ativo ? ativo.runId : latest);
+  if (!alvo && !ativo) return resultado('no_run', false);
+  // Status do run seguido segundo a shell; null quando ela não o descreve.
+  const statusDaShell = !alvo ? null : alvo === ativo?.runId ? ativo.status : alvo === latest ? obs.thread.status : null;
+  const runDaShell = statusDaShell !== null;
+  if (runDaShell && TERMINAIS.has(statusDaShell) && !incluirUltimaResposta) {
+    obs.run = { id: alvo, status: statusDaShell };
     return resultado('terminal', false);
   }
   if (runDaShell && obs.pedido && !incluirUltimaResposta) {
-    obs.run = { id: latest, status: obs.thread.status };
+    obs.run = { id: alvo, status: statusDaShell };
     return resultado('needs_intervention', false);
   }
 
@@ -126,8 +135,10 @@ async function aguardar(ambientes, entrada, { signal, agora = Date.now, assinarI
       if (item.kind === 'snapshot') {
         const p = item.projection ?? {};
         const runs = p.runs ?? [];
-        obs.run = runPedido ? runs.find((x) => x.id === runPedido) : (runs.find((x) => x.id === latest) ?? ultimoRun(runs));
-        if (!obs.run) throw new ErroT3(`run ${runPedido ?? latest} not found in thread ${threadId}`, { codigo: 'run_inexistente' });
+        obs.run = runPedido
+          ? runs.find((x) => x.id === runPedido)
+          : (runs.find((x) => x.id === alvo) ?? (ativo ? ultimoRunAtivo(runs) : null) ?? ultimoRun(runs));
+        if (!obs.run) throw new ErroT3(`run ${alvo ?? latest} not found in thread ${threadId}`, { codigo: 'run_inexistente' });
         pedidos.clear();
         for (const q of p.runtimeRequests ?? []) pedidos.set(q.id, q);
         obs.mensagens = [...(p.messages ?? [])];
@@ -165,7 +176,7 @@ async function aguardar(ambientes, entrada, { signal, agora = Date.now, assinarI
     if (motivo === 'prazo') {
       if (!obs.run) {
         // Shell observada mas snapshot não chegou: devolve o estado da shell.
-        obs.run = { id: runPedido ?? latest, status: runDaShell ? obs.thread.status : null };
+        obs.run = { id: alvo, status: statusDaShell };
       }
       return resultado('timeout', !TERMINAIS.has(obs.run.status));
     }
@@ -174,7 +185,7 @@ async function aguardar(ambientes, entrada, { signal, agora = Date.now, assinarI
     if (e instanceof Cancelada) throw e;
     ambientes.falhou(r, e);
     if (prazo.aborted && obs.thread && !(e instanceof ErroT3 && e.codigo === 'run_inexistente')) {
-      obs.run ??= { id: runPedido ?? latest, status: runDaShell ? obs.thread.status : null };
+      obs.run ??= { id: alvo, status: statusDaShell };
       return resultado('timeout', !TERMINAIS.has(obs.run.status));
     }
     throw e;
