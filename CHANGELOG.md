@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- New read tool `t3_providers`: lists the provider instances of one environment from
+  T3's `server.getConfig` (the source of Settings > Providers), with `orchestration:read`.
+  Instances come in T3 order with exact IDs, including disabled and unavailable ones, and
+  each item keeps T3's field names: identity, state, runtime modes, `auth.status` and
+  models with capabilities. Account, path, quota and settings fields are left out.
+  Optional `instanceId` (exact) and `includeModels` (default false: instances only). Clients use it to fill
+  `modelSelection` for `thread.launch`, `thread.model-selection.set`, `provider.switch`
+  and `delegated_task.request`.
+- Live smoke test (`npm run smoke`) takes the environment aliases from the configuration
+  in use instead of assuming `local` and `remoto`, so it runs against an installed config
+  as is; `SMOKE_AMBIENTE_REMOTO` picks the remote environment. The wait on an active
+  thread now passes `environment` (it still sent the pre-0.6.0 `ambiente`).
+
 ## 0.9.2
 
 - OAuth tunnel mode: `T3_CONNECTOR_OAUTH_ADVERTISED_RESOURCE` advertises an exact, reachable

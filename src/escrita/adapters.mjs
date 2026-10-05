@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { digest, grantDoAmbiente } from './gate.mjs';
 import { exigirIdentidade } from './identidade.mjs';
 const str=z.string().trim().min(1).max(1024), id=str;
-const model=z.object({instanceId:str.describe('Exact ID of the provider instance configured in the chosen environment; keep case, underscores and hyphens, for example claudeAgent_custom.'),model:str.describe('Exact model ID for that instance, including custom models, for example claude-opus-5-5. The connector has no model enum or allowlist; availability is decided by T3 in that environment.'),options:z.array(z.object({id:str,value:z.union([z.string(),z.boolean()])}).strict()).optional()}).strict();
+const model=z.object({instanceId:str.describe('Exact ID of the provider instance configured in the chosen environment, as listed by the read tool t3_providers (instanceId); keep case, underscores and hyphens, for example claudeAgent_custom.'),model:str.describe('Exact model ID for that instance (models[].slug in t3_providers), including custom models, for example claude-opus-5-5. The connector has no model enum or allowlist; availability is decided by T3 in that environment.'),options:z.array(z.object({id:str,value:z.union([z.string(),z.boolean()])}).strict()).optional()}).strict();
 const base={threadId:id};
 const specs=new Map();
 function command(action,type,fields={},fixed={},refs=['threadId']) {

@@ -2,10 +2,14 @@
 // chama as ferramentas nos environments configurados. Não cria, envia, aprova nem cancela
 // nada. Imprime só metadados (IDs, estados, contagens, tamanhos), nunca texto de mensagens.
 //
-//   SMOKE_THREAD_REMOTO=<thread autorizada no environment "remoto">
+//   SMOKE_THREAD_REMOTO=<thread autorizada no environment remoto>
+//   SMOKE_AMBIENTE_REMOTO=<alias do environment remoto>    (padrão: o primeiro que não é o default)
 //   SMOKE_THREAD_ATIVA=<thread autorizada com run ativo>   (opcional; testa timeout real)
-//   SMOKE_AMBIENTE_ATIVA=<alias da thread ativa>           (padrão local)
-//   SMOKE_THREAD_FORA=<thread de projeto não autorizado no Local> (opcional)
+//   SMOKE_AMBIENTE_ATIVA=<alias da thread ativa>           (padrão: o default da config)
+//   SMOKE_THREAD_FORA=<thread de projeto não autorizado no default> (opcional)
+//
+// Os aliases vêm de t3_ambientes, ou seja, da config em uso (T3_CONNECTOR_CONFIG ou a
+// instalada); nenhum nome de environment é fixo aqui.
 //   [T3_CONNECTOR_CMD=<executável>] npm run smoke
 //
 // Sai com código 1 se algum caso falhar.
@@ -40,14 +44,27 @@ function caso(nome, ok, detalhe) {
 const semTexto = (u) => (u ? { messageId: u.messageId, runId: u.runId, caracteres: u.text?.length ?? 0, truncated: u.truncated } : null);
 
 const { tools } = await cliente.listTools();
-caso('ferramentas', tools.length === 8, tools.map((t) => t.name));
+caso('ferramentas', tools.length === 9, tools.map((t) => t.name));
 
 const amb = await chamar('t3_ambientes', {});
 caso('t3_ambientes', amb.environments?.every((a) => a.available), amb.environments?.map((a) => ({ alias: a.alias, default: a.default, transport: a.transport, available: a.available, version: a.version, error: a.error })));
 
-for (const ambiente of [undefined, 'local', 'remoto']) {
+const padrao = amb.default;
+const aliases = (amb.environments ?? []).map((a) => a.alias);
+const nomeRemoto = process.env.SMOKE_AMBIENTE_REMOTO ?? aliases.find((a) => a !== padrao);
+caso('config com default e outro environment', Boolean(padrao && nomeRemoto && aliases.includes(nomeRemoto)), { default: padrao, remoto: nomeRemoto, aliases });
+
+for (const ambiente of [undefined, ...aliases]) {
   const p = await chamar('t3_projetos', ambiente ? { environment: ambiente } : {});
   caso(`t3_projetos ${ambiente ?? '(padrão)'}`, !p.error && p.projects.length > 0, p.error ?? { environment: p.environment, projects: p.projects.map((x) => [x.projectId, x.title, x.directory, x.runningThreads]) });
+}
+
+for (const alias of aliases) {
+  const p = await chamar('t3_providers', { environment: alias });
+  caso(`t3_providers ${alias}`, !p.error && p.total > 0 && p.providers.every((x) => x.instanceId), p.error ?? {
+    environment: p.environment,
+    providers: p.providers.map((x) => [x.instanceId, x.driver, x.displayName, x.status]),
+  });
 }
 
 const inexistente = await chamar('t3_projetos', { environment: 'inexistente' });
@@ -55,34 +72,34 @@ caso('ambiente inexistente recusado', Boolean(inexistente.error), inexistente.er
 
 const remoto = process.env.SMOKE_THREAD_REMOTO;
 if (remoto) {
-  const t = await chamar('t3_thread', { environment: 'remoto', threadId: remoto, maxCharacters: 200 });
-  caso('t3_thread no Remoto', !t.error && t.environment.alias === 'remoto', t.error ?? {
+  const t = await chamar('t3_thread', { environment: nomeRemoto, threadId: remoto, maxCharacters: 200 });
+  caso('t3_thread no Remoto', !t.error && t.environment.alias === nomeRemoto, t.error ?? {
     environment: t.environment, title: t.title, project: t.project, directory: t.directory, state: t.state,
     statusRun: t.statusRun, latestRun: t.latestRun, history: t.history, latestResponse: semTexto(t.latestResponse),
   });
-  const m = await chamar('t3_mensagens', { environment: 'remoto', threadId: remoto, limit: 3, maxCharacters: 100 });
+  const m = await chamar('t3_mensagens', { environment: nomeRemoto, threadId: remoto, limit: 3, maxCharacters: 100 });
   caso('t3_mensagens no Remoto', !m.error, m.error ?? { quantidade: m.messages.length, papeis: m.messages.map((x) => x.role), history: m.history });
   const noLocal = await chamar('t3_thread', { threadId: remoto });
   caso('mesma thread no Local é recusada', Boolean(noLocal.error), noLocal.error);
-  const w = await chamar('t3_aguardar_thread', { environment: 'remoto', threadId: remoto, timeoutMs: 2000, includeLatestResponse: true });
+  const w = await chamar('t3_aguardar_thread', { environment: nomeRemoto, threadId: remoto, timeoutMs: 2000, includeLatestResponse: true });
   caso('t3_aguardar_thread no Remoto', !w.error, w.error ?? { ...w, latestResponse: semTexto(w.latestResponse) });
 }
 
 const ativa = process.env.SMOKE_THREAD_ATIVA;
 if (ativa) {
-  const ambiente = process.env.SMOKE_AMBIENTE_ATIVA ?? 'local';
-  const w = await chamar('t3_aguardar_thread', { ambiente, threadId: ativa, timeoutMs: 1500 });
+  const ambiente = process.env.SMOKE_AMBIENTE_ATIVA ?? padrao;
+  const w = await chamar('t3_aguardar_thread', { environment: ambiente, threadId: ativa, timeoutMs: 1500 });
   caso('t3_aguardar_thread em run ativo', !w.error && (w.timedOut || w.terminal || w.state === 'needs_intervention'), w.error ?? w);
 }
 
 const fora = process.env.SMOKE_THREAD_FORA;
 if (fora) {
   const r = await chamar('t3_thread', { threadId: fora });
-  const w = await chamar('t3_aguardar_thread', { environment: 'local', threadId: fora, timeoutMs: 1000 });
+  const w = await chamar('t3_aguardar_thread', { environment: padrao, threadId: fora, timeoutMs: 1000 });
   caso('projeto não autorizado recusado (thread e espera)', Boolean(r.error && w.error), [r.error, w.error]);
 }
 
-const naoExiste = await chamar('t3_aguardar_thread', { environment: 'remoto', threadId: '00000000-0000-0000-0000-000000000000', timeoutMs: 1000 });
+const naoExiste = await chamar('t3_aguardar_thread', { environment: nomeRemoto, threadId: '00000000-0000-0000-0000-000000000000', timeoutMs: 1000 });
 caso('espera em thread inexistente recusada', Boolean(naoExiste.error), naoExiste.error);
 
 await cliente.close();
