@@ -12,6 +12,8 @@ export function clienteFiltrado(cliente,readIds) {
  return {
   shell:async o=>{const s=await cliente.shell(o);return {...s,projects:(s.projects??[]).filter(p=>readIds.has(p.id)),threads:(s.threads??[]).filter(t=>readIds.has(t.projectId))};},
   thread:async(id,o)=>{const s=await cliente.shell(o);const t=(s.threads??[]).find(t=>t.id===id&&!t.deletedAt);if(!t||!readIds.has(t.projectId))throw new Error('thread_not_found');return cliente.thread(id,o);},
+  // Full snapshot (settlement observation): same ACL as the bounded read.
+  threadCompleto:async(id,o)=>{const s=await cliente.shell(o);const t=(s.threads??[]).find(t=>t.id===id&&!t.deletedAt);if(!t||!readIds.has(t.projectId))throw new Error('thread_not_found');return cliente.threadCompleto(id,o);},
  };
 }
 

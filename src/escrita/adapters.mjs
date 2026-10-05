@@ -5,6 +5,7 @@ import { digest, grantDoAmbiente } from './gate.mjs';
 import { exigirIdentidade } from './identidade.mjs';
 import { PROJECT_ACTIONS, PROJECT_SCHEMAS, isProjectAction, guardProjectDelete, lockProject } from './project-admin.mjs';
 import { NATIVE_WRITES, NATIVE_WRITE_ACTIONS, NativeToolError, NativeRpcError } from './native.mjs';
+import { avaliarGuard, SETTLEMENT_CONTRACT_VERSION } from '../settlement.mjs';
 const str=z.string().trim().min(1).max(1024), id=str;
 const model=z.object({instanceId:str.describe('Exact ID of the provider instance configured in the chosen environment, as listed by the read tool t3_providers (instanceId); keep case, underscores and hyphens, for example claudeAgent_custom.'),model:str.describe('Exact model ID for that instance (models[].slug in t3_providers), including custom models, for example claude-opus-5-5. The connector has no model enum or allowlist; availability is decided by T3 in that environment.'),options:z.array(z.object({id:str,value:z.union([z.string(),z.boolean()])}).strict()).optional()}).strict();
 const runtimeMode=z.enum(['approval-required','auto-accept-edits','auto','full-access']).default('full-access').describe('T3 execution mode; omitted preserves the connector default full-access. Supported modes are decided by the selected provider in T3.');
@@ -15,6 +16,16 @@ function command(action,type,fields={},fixed={},refs=['threadId']) {
 }
 for(const suffix of ['archive','unarchive','delete','settle','pin','unpin','unsnooze','mark-unread']) command(`thread.${suffix}`,`thread.${suffix}`,{},suffix==='unsnooze'?{reason:'user'}:{});
 command('thread.unsettle','thread.unsettle',{}, {reason:'user'});
+// Optional settleGuard (v1): checked by the connector right before the send and never forwarded;
+// the wire command stays {type,commandId,threadId}. Omitted: legacy settle, unchanged.
+export const SETTLE_DESCRIPTION='Settles the thread (moves it out of the active list). A completed run is NOT acceptance of the delivered scope: settle only after you absorbed the result and it was accepted. Recommended: pass settleGuard {version:1, expectedRunId, expectedObservationId, acceptance:{accepted:true, evidenceRef}} with expectedRunId/observationId from t3_thread (settlementContractVersion: 1). With the guard the connector re-reads the full thread right before sending and refuses, sending nothing, on a pending request (settle_pending_request), an active run even with no request (settle_active_run), queued work, unresolved work, an incomplete observation, a different latest run (settle_run_changed) or any change since your observation (settle_observation_changed). After the send it reports settlement.postCheck verified, mismatch or unavailable. It is an observation by the connector, not an atomic check in T3: a linked PR merge, a pin or new activity can still change the thread later. Without settleGuard nothing is checked.';
+const settleGuard=z.object({
+ version:z.number().int().positive().describe('Guard contract version; supported: 1'),
+ expectedRunId:id.nullable().describe('settlement.expectedRunId from t3_thread (latest run you absorbed); null only when the thread has no run'),
+ expectedObservationId:str.max(128).describe('settlement.observationId from t3_thread'),
+ acceptance:z.object({accepted:z.boolean().describe('true only when the delivered scope was accepted; never inferred from a completed run'),evidenceRef:str.max(512).describe('Short reference to the acceptance (review result, PR, decision); not a transcript')}).strict(),
+}).strict();
+specs.set('thread.settle',{method:'orchestration.dispatchCommand',refs:['threadId'],schema:z.object({threadId:id,settleGuard:settleGuard.optional()}).strict().describe(SETTLE_DESCRIPTION),encode:p=>({type:'thread.settle',commandId:randomUUID(),threadId:p.threadId})});
 command('thread.snooze','thread.snooze',{snoozedUntil:z.iso.datetime()});
 command('thread.auto-settle.set','thread.auto-settle.set',{enabled:z.boolean()});
 for(const suffix of ['pin.reorder','active.reorder']) command(`thread.${suffix}`,`thread.${suffix}`,{orderKey:str});
@@ -94,7 +105,7 @@ export function parseAction(action,input) {
  }
  return {spec:s,input:result.data};
 }
-const RECUSAS=/^(thread_not_found|scope_denied|lease_closed|ambiente_[a-z_]+|workspace_[a-z_]+|project_[a-z_]+)$/;
+const RECUSAS=/^(thread_not_found|scope_denied|lease_closed|ambiente_[a-z_]+|workspace_[a-z_]+|project_[a-z_]+|settle_[a-z_]+)$/;
 // Writes that create a thread in a project, serialized with project deletes of this connector.
 const PROJECT_SCOPED=new Set(['thread.launch','thread.fork',...PROJECT_ACTIONS]);
 // v2: environment e destino lógico (t3://<environmentId>) estáveis; caller sem boot.
@@ -134,7 +145,7 @@ export class Dispatcher {
   const initial={hash,state:'preparing',action,operationId,environmentId:this.environmentId,destination:this.destination};
   const owned=this.#store('reserve',key,initial);
   const old=owned?null:this.#store('get',key);
-  if(old) {if(old.hash!==hash) throw new Error('operation_conflict');if(old.target)(this.authorizeRecorded??((target)=>this.gate.check(identity,leaseId,target)))(old.target);return {state:old.state,operationId,reconciliationRequired:!['completed','failed'].includes(old.state),...((isProjectAction(action)||parsed.spec.native)&&old.receipt?{receipt:old.receipt,...(old.postCheck??{})}:{}),...(old.error?{error:old.error}:{})};}
+  if(old) {if(old.hash!==hash) throw new Error('operation_conflict');if(old.target)(this.authorizeRecorded??((target)=>this.gate.check(identity,leaseId,target)))(old.target);return {state:old.state,operationId,reconciliationRequired:!['completed','failed'].includes(old.state),...((isProjectAction(action)||parsed.spec.native)&&old.receipt?{receipt:old.receipt,...(old.postCheck??{})}:{}),...(old.settlement?{receipt:old.receipt,settlement:old.settlement}:{}),...(old.error?{error:old.error}:{})};}
   if(!owned)throw new Error('journal_failed');
   let release=null;
   try {
@@ -147,7 +158,8 @@ export class Dispatcher {
    // Stable commandId: T3 replays the receipt of a command it already committed.
    const h=key.slice(0,32), stableId=`${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
    let method=parsed.spec.method, payload=parsed.spec.native?null:parsed.spec.encode(parsed.input);
-   if(action==='thread.send'||isProjectAction(action)) { payload.commandId=stableId; if(action==='thread.send')payload.messageId=payload.commandId; }
+   const guard=action==='thread.settle'?parsed.input.settleGuard:undefined;
+   if(action==='thread.send'||isProjectAction(action)||guard) { payload.commandId=stableId; if(action==='thread.send')payload.messageId=payload.commandId; }
    // Conexão do environment aberta ainda em 'preparing' (falha aqui não enviou nada) e antes
    // da checagem final: entre a checagem e o envio não há await.
    if(this.adapter.prepare) await this.adapter.prepare();
@@ -156,6 +168,8 @@ export class Dispatcher {
    // Last read before the send: a count taken before the target validation could be stale.
    // The native force:false refusal still applies; the cross-client window remains T3's.
    if(isProjectAction(action)) guardProjectDelete(action,parsed.input,await this.#occupancy(parsed.input.projectId));
+   // Guarded settle: last full observation before the send; a refusal sends nothing.
+   if(guard) await this.#guardSettle(parsed.input.threadId,guard);
    // Native wrappers read what the native handler reads (e.g. the existing task) last, then build.
    if(parsed.spec.native) {
     if(!this.adapter.native) throw new Error('native_unavailable');
@@ -166,6 +180,12 @@ export class Dispatcher {
    const result=await this.gate.dispatch(identity,leaseId,{environmentId:this.environmentId,destination:this.destination,projectIds:[...projects],action},()=>this.adapter.invoke(method,payload,parsed.spec.native?{nativeErrors:true}:undefined),operationId);
    const done={...initial,state:'completed',target,payloadIds,receipt:parsed.spec.native?await this.#nativeResult(parsed.spec,{raw:result,method,payload,input:parsed.input}):this.adapter.receipt(result)};
    this.#store('put',key,done);
+   if(guard) {
+    // Like the delete post-check: evidence kept with the record, so a replay returns it too.
+    const settlement=await this.#afterSettle(parsed.input.threadId,done.receipt);
+    this.#store('put',key,{...done,settlement});
+    return {state:'completed',operationId,receipt:done.receipt,settlement};
+   }
    if(!isProjectAction(action)) return {state:'completed',operationId,receipt:done.receipt};
    // The post-check is evidence: kept with the record so a replay returns it too.
    const postCheck=await this.#afterDelete(parsed.input.projectId,operationId);
@@ -181,7 +201,8 @@ export class Dispatcher {
    }
    if(record.state!=='preparing') this.gate.close();
    // No blind retry even if transport or audit failed. Reconciliation is read-only.
-   this.#store('put',key,{...record,state:record.state==='preparing'?'rejected':'uncertain'});
+   // A settle guard refusal keeps its code, so a replay of the operationId reports it too.
+   this.#store('put',key,{...record,state:record.state==='preparing'?'rejected':'uncertain',...(record.state==='preparing'&&/^settle_[a-z_]+$/.test(error.message)?{error:error.message}:{})});
    // Recusa antes do envio devolve o motivo conhecido (nada foi enviado); o resto é genérico.
    if(record.state==='preparing') throw new Error(RECUSAS.test(error.message)?error.message:'dispatch_rejected');
    throw new Error('reconciliation_required');
@@ -192,6 +213,25 @@ export class Dispatcher {
  async #nativeResult(spec,args) {
   if(!spec.result) return args.raw;
   try {return await spec.result({...args,native:this.adapter.native});} catch {return {raw:args.raw,resultUnavailable:true};}
+ }
+ async #guardSettle(threadId,guard) {
+  if(!this.adapter.settlementObservation) throw new Error('settle_observation_incomplete');
+  let observation;
+  try {observation=await this.adapter.settlementObservation(threadId);} catch {throw new Error('settle_observation_incomplete');}
+  const refusal=avaliarGuard(guard,observation);
+  if(refusal) throw new Error(refusal);
+ }
+ // What the thread looks like after the acknowledged settle. Never throws and never sends anything:
+ // a stale or failed read is `unavailable`, not an uncertain send; `mismatch` is an observed
+ // difference (the backend or another client may have changed the thread), not proof of no effect.
+ async #afterSettle(threadId,receipt) {
+  const base={contractVersion:SETTLEMENT_CONTRACT_VERSION,guarantee:'observed_at_sequence'};
+  let o;
+  try {o=await this.adapter.settlementObservation(threadId);} catch {return {...base,postCheck:'unavailable',code:'settle_verification_unavailable'};}
+  if(!o?.complete) return {...base,postCheck:'unavailable',code:'settle_verification_unavailable'};
+  if(Number.isInteger(receipt?.sequence)&&Number.isInteger(o.snapshotSequence)&&o.snapshotSequence<receipt.sequence) return {...base,postCheck:'unavailable',code:'settle_verification_unavailable',observationSequence:o.snapshotSequence};
+  const verified=o.settled&&o.blockers.length===0;
+  return {...base,postCheck:verified?'verified':'mismatch',...(verified?{}:{code:'settle_postcondition_mismatch'}),settled:o.settled,observationSequence:o.snapshotSequence,blockers:o.blockers};
  }
  async #occupancy(projectId) {
   if(!this.adapter.occupancy) throw new Error('project_count_unavailable');

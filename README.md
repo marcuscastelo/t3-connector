@@ -142,6 +142,9 @@ version), and refresh the tool list in the client.
    state. The connector only reports it; answering requires T3 itself.
 5. **Before choosing a provider or model**, call `t3_providers` in the target environment.
    See [Provider instances](#provider-instances-t3_providers).
+6. **When coordinating several threads** (or after losing context), start with `t3_workset`,
+   read each thread with `t3_thread` and `settlementContractVersion: 1` before deciding, and
+   settle with `settleGuard`. See [docs/orchestration-bfs.md](docs/orchestration-bfs.md).
 
 ### Read tools
 
@@ -156,7 +159,8 @@ thread.
 | `t3_threads` | `environment?`, `projectId?`, `state?`, `includeNoRun?` (include threads without a run, default false), `search?`, `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `nextCursor?`, `changedSinceStart?`, `hiddenNoRun?`, `threads` |
 | `t3_buscar_threads` (find threads) | exactly one of `search?` or `threadId?` (exact), `match?` (`partial` = substring, default; `exact` = whole title), `environment?` (restricts; omitted: every environment), `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `complete`, `nextCursor?`, `queriedEnvironments`, `environmentFailures`; each thread with `environment: {alias, environmentId, name}` and `archived` |
 | `t3_atencao` (attention) | `environment?` | threads that need intervention, or failed and were not settled |
-| `t3_thread` | `environment?`, `threadId`, `maxCharacters?` (200-6000, 1500) | thread summary, `pendingRequests`, `providerSession` (informational), `activeRun?`, `latestRun`, `latestResponse`, `history` |
+| `t3_workset` | `environments?` (omitted: every environment), `limitPerGroup?` (1-100, 25) | `observedAt`, `complete`, `queriedEnvironments`, `environmentFailures`, `counts`, `truncated?`, `groups` (needs_intervention, running, snoozed, failed_unsettled, completed_unsettled, cancelled_unsettled, unknown) |
+| `t3_thread` | `environment?`, `threadId`, `maxCharacters?` (200-6000, 1500), `settlementContractVersion?` (1) | thread summary, `pendingRequests`, `providerSession` (informational), `activeRun?`, `latestRun`, `latestResponse`, `history`; with `settlementContractVersion: 1` also `settlement` (blockers, observationId, lifecycle fields) |
 | `t3_mensagens` (messages) | `environment?`, `threadId`, `limit?` (1-20, 6), `maxCharacters?` (100-4000, 800) | `messages` and `history.complete` |
 | `t3_providers` (provider instances) | `environment?`, `instanceId?` (exact, case-sensitive), `includeModels?` (include models, default false) | `source`, `total`, `providers` in T3 order, each with the T3 field names (see below) |
 | `t3_aguardar_thread` (wait) | **`environment`**, `threadId`, **`timeoutMs`** (1-5000), `runId?`, `includeLatestResponse?`, `maxCharacters?` | `runId`, `statusRun`, `state`, `terminal`, `timedOut`, `returnReason`, `pendingRequest`, `latestResponse?` |

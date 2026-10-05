@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Read tool `t3_workset`: one call returns every thread that still needs a decision across
+  all configured environments (or `environments`), in disjoint groups (needs_intervention,
+  running, snoozed, failed_unsettled, completed_unsettled, cancelled_unsettled, unknown) with
+  compact references and no conversation text. A failing environment is listed in
+  `environmentFailures` with `complete: false`; the other environments' threads are kept.
+- `t3_thread` accepts `settlementContractVersion: 1` (read connector, lease bridge and OAuth).
+  It then reads the full thread snapshot and adds `settlement`: objective blockers (pending
+  request, active run, queued work, unresolved work, incomplete observation),
+  `eligibleMechanically`, `observationId`, `expectedRunId`, lifecycle fields with
+  availability, and warnings. Without the parameter the answer is unchanged.
+- `thread.settle` accepts an optional `settleGuard` (version 1: `expectedRunId`,
+  `expectedObservationId`, `acceptance`). The connector observes the thread again right before
+  sending and refuses with `settle_*` codes, sending nothing, when something blocks the settle
+  or the thread changed. After the acknowledgement it reports `settlement.postCheck`
+  (verified, mismatch, unavailable), kept for replays. The guard is never forwarded to T3.
+  Without it, settle is unchanged. See `docs/orchestration-bfs.md`.
+
 ## 0.11.2
 
 - Read tools: one source-of-truth contract for thread state and model. `state` now gives an
