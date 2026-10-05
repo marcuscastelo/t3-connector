@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Internal: the strict tool registration, JSON result and error mapping of the read MCP now come
+  from `packages/mcp-connector-kit` (0.1.0), a package with no T3 knowledge shared with the Fleet
+  Connector. It is bundled in the `t3-connector` tarball; tools, schemas and messages are unchanged.
 - `thread.launch`, `delegated_task.request` and `thread.runtime-mode.set` now accept the four
   native T3 `runtimeMode` values. Omitting the field preserves the existing `full-access` default.
   Tool descriptions and the consent text now present `full-access` as the authorization ceiling.

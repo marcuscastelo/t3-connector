@@ -3,6 +3,7 @@
 // outro projeto é recusada mesmo que o token do T3 alcance o environment inteiro.
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { jsonResult, strictRegistrar, toolErrorMapper } from 'mcp-connector-kit';
 import { z } from 'zod';
 import {
   estadoDaThread,
@@ -41,16 +42,12 @@ export function resumoDaThread(thread, projeto, pendentes = []) {
   };
 }
 
-function resposta(dados) {
-  return { content: [{ type: 'text', text: JSON.stringify(dados, null, 1) }], structuredContent: dados };
-}
+const resposta = jsonResult;
 
-function erro(e) {
-  const mensagem = e instanceof ForaDoEscopo || e instanceof ErroT3 || e instanceof Cancelada || e instanceof CursorInvalido || e instanceof EntradaInvalida
-    ? e.message
-    : `failed to query T3: ${e?.message ?? e}`;
-  return { content: [{ type: 'text', text: mensagem }], isError: true };
-}
+const erro = toolErrorMapper({
+  expected: [ForaDoEscopo, ErroT3, Cancelada, CursorInvalido, EntradaInvalida],
+  fallback: (e) => `failed to query T3: ${e?.message ?? e}`,
+});
 
 export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {} }) {
   const servidor = new McpServer({ name: 't3-connector', version: VERSAO });
@@ -63,8 +60,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
    * nome antigo, como `ambiente`) é recusado pelo SDK, em vez de ser descartado e a
    * chamada cair no environment padrão. Ver docs/adr/0004.
    */
-  const registrar = (nome, { forma, ...config }, fn) =>
-    servidor.registerTool(nome, { ...config, inputSchema: z.strictObject(forma) }, fn);
+  const registrar = strictRegistrar(servidor);
 
   /** Executa a ferramenta no environment escolhido, com o sinal de cancelamento do cliente. */
   const noAmbiente = (fn) => async (args, extra) => {
@@ -83,7 +79,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       title: 'Configured T3 environments',
       description:
         'Lists the T3 environments this connector can read (e.g. local = this machine, remoto = another one over SSH), with the default, the transport and whether each responds right now. Pass the alias in the `environment` parameter of the other tools. Read-only.',
-      forma: {
+      shape: {
         check: z.boolean().optional().describe('Try to connect to each environment (up to 4 s); default true'),
       },
       annotations: SO_LEITURA,
@@ -106,7 +102,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       title: 'Authorized T3 projects',
       description:
         'Lists the authorized projects of a T3 environment, with directory and counts of threads running or needing intervention, ordered by title. `total` comes before the list; use `search` (part of the title or projectId) and `limit` in environments with many projects. When `truncated: true`, repeat the call with `cursor` = `nextCursor` for the next page. Read-only.',
-      forma: {
+      shape: {
         environment: campoAmbiente,
         search: z.string().min(1).optional().describe('Filter by part of the title or projectId, ignoring case and accents'),
         limit: z.number().int().min(1).optional().describe('Maximum projects per page; `total` always counts every match'),
@@ -156,7 +152,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       title: 'T3 threads',
       description:
         'Lists threads of the authorized projects of an environment with project, directory, model and state (running, needs_intervention, completed, failed, cancelled, no_run, unknown), most recently updated first. To find a thread by name use `search` (part of the title or threadId): `total` counts every match, not just the page. When `truncated: true`, repeat the call with `cursor` = `nextCursor` for the next page. Threads without a V2 run (imported history) only appear with includeNoRun; `hiddenNoRun` says how many were left out. Read-only.',
-      forma: {
+      shape: {
         environment: campoAmbiente,
         projectId: z.string().optional().describe('Restrict to one authorized project of this environment'),
         state: z.enum(ESTADOS).optional().describe('Filter by state'),
@@ -212,7 +208,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         `Each environment has ${PRAZO_AMBIENTE_MS} ms and the whole search ${PRAZO_TOTAL_MS} ms; environments that fail or time out are listed in \`environmentFailures\` and \`complete\` is false, so zero results then do not prove the thread is missing. ` +
         'The same title or ID can exist in several environments: never pick one on your own; ask the user when `total` > 1, then call the other tools with the chosen environment (`environment` parameter) and `threadId`. ' +
         'Includes archived threads (`archived`) and threads without a run. Results are ordered by environmentId and threadId; when `truncated: true`, repeat with `cursor` = `nextCursor`. Read-only.',
-      forma: {
+      shape: {
         search: z.string().min(1).optional().describe('Part of the title or threadId, ignoring case and accents; exclusive with threadId'),
         threadId: z.string().min(1).optional().describe('Exact thread ID, compared literally; exclusive with search'),
         match: z.enum(['partial', 'exact']).optional().describe('With search: partial (substring, default) or exact (whole title, or exact ID)'),
@@ -241,7 +237,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         'IDs, display names and models belong to this environment only and are returned exactly as T3 sends them (keep case, underscores and hyphens); the same instanceId can have another display name or other models elsewhere. ' +
         'Each item keeps the T3 field names, limited to identity, state, runtime modes and models; `auth` carries only `status`. ' +
         'By default only the instances are listed; models with capabilities are large (tens of kB per environment), so pass `includeModels: true` with the chosen `instanceId`. Read-only.',
-      forma: {
+      shape: {
         environment: campoAmbiente,
         instanceId: z.string().min(1).optional().describe('Return only this instance; compared literally, case-sensitive'),
         includeModels: z.boolean().optional().describe('Include `models` with capabilities; default false. Use it with `instanceId`'),
@@ -263,7 +259,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       title: 'What needs my attention in T3',
       description:
         'Threads of the authorized projects of an environment that need intervention (approval, question, plan, usage limit) or that failed and were not settled, with reason and identifier. Read-only.',
-      forma: { environment: campoAmbiente },
+      shape: { environment: campoAmbiente },
       annotations: SO_LEITURA,
     },
     noAmbiente(async ({ r, cliente, signal }) => {
@@ -283,7 +279,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       title: 'Thread state and latest response',
       description:
         'Detailed state of an authorized thread, latest response and pending runtime requests. pendingRequests includes requestId, responseCapability, nextAction and content: user_input questions with IDs/options/field constraints, or approval prompt/options. Follow nextAction: answer questions with runtime-request.answer (answers keyed by question ID); approvals use runtime-request.approve (decision). thread.send does NOT answer a pending runtime request and can remain queued behind the blocked run. If contentAvailable is false, do not infer an answer: inspect the request in T3. Pass the thread environment. Read-only.',
-      forma: {
+      shape: {
         environment: campoAmbiente,
         threadId: z.string().min(1),
         maxCharacters: z.number().int().min(200).max(6000).optional().describe('Maximum length of the latest response; default 1500'),
@@ -316,7 +312,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       title: 'Recent thread messages',
       description:
         'Latest user and assistant messages of an authorized thread, oldest first, with truncated text. They come from the recent window of the thread; `history.complete` false means older messages exist outside it. Read-only.',
-      forma: {
+      shape: {
         environment: campoAmbiente,
         threadId: z.string().min(1),
         limit: z.number().int().min(1).max(20).optional().describe('Number of messages; default 6'),
@@ -352,7 +348,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         `Short wait (up to ${TETO_MS} ms) for the run of an authorized thread to finish or to request intervention, driven by T3 events, without polling. ` +
         'Returns immediately if the run already finished, if there is no run or if a request is pending. Reaching the deadline is not an error: it returns timedOut=true with the current state. ' +
         'To follow a long thread, call again later, between conversation turns; in voice use 1000-2000 ms. Never interrupts or changes the thread. Read-only.',
-      forma: {
+      shape: {
         environment: z.string().min(1).describe(`Environment where the thread lives (required): ${nomes}`),
         threadId: z.string().min(1),
         timeoutMs: z.number().int().min(1).max(TETO_MS).describe(`Total deadline for the call in ms, 1-${TETO_MS}; voice: 1000-2000`),

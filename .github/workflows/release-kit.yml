@@ -1,0 +1,101 @@
+name: release-kit
+
+# Pushing a tag mcp-connector-kit-vX.Y.Z publishes a GitHub Release with the npm pack artifact of
+# packages/mcp-connector-kit and its checksum, marked as not latest so `v*` stays the latest
+# t3-connector release. Same gates as release.yml; see docs/releasing.md.
+
+on:
+  push:
+    tags: ['mcp-connector-kit-v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Tag points at a commit on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - name: Tag and package version agree
+        run: |
+          version="$(node -p "require('./packages/mcp-connector-kit/package.json').version")"
+          [[ "$GITHUB_REF_NAME" == "mcp-connector-kit-v$version" ]] || { echo "::error::tag $GITHUB_REF_NAME ≠ mcp-connector-kit-v$version"; exit 1; }
+
+  ci:
+    needs: verify
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  package:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      - name: Pack once, with checksum and release notes
+        working-directory: packages/mcp-connector-kit
+        run: |
+          version="${GITHUB_REF_NAME#mcp-connector-kit-v}"
+          mkdir -p ../../dist
+          npm pack --pack-destination ../../dist
+          cd ../../dist
+          tgz="mcp-connector-kit-$version.tgz"
+          files="$(tar -tzf "$tgz" | sort | tr '\n' ' ')"
+          [[ "$files" == "package/LICENSE package/README.md package/index.mjs package/package.json " ]] || { echo "::error::unexpected files: $files"; exit 1; }
+          sha256sum "$tgz" > "$tgz.sha256"
+          printf 'mcp-connector-kit %s: generic MCP tool plumbing shared by the T3 Connector and the Fleet Connector (packages/mcp-connector-kit/README.md).\n\nVerify: `sha256sum -c %s.sha256`\n' "$version" "$tgz" > release-notes.md
+      - uses: actions/upload-artifact@v5
+        with:
+          name: release
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: release
+          path: dist
+      - name: Verify checksum
+        working-directory: dist
+        run: sha256sum -c "mcp-connector-kit-${GITHUB_REF_NAME#mcp-connector-kit-v}.tgz.sha256"
+      - name: Tag still points at the tested commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          current="$(gh api "repos/$GH_REPO/commits/refs/tags/$GITHUB_REF_NAME" --jq .sha)"
+          if [[ "$current" != "$GITHUB_SHA" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME now points at $current, this run tested $GITHUB_SHA"
+            exit 1
+          fi
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version="${GITHUB_REF_NAME#mcp-connector-kit-v}"
+          prerelease=()
+          [[ "$version" == *-* ]] && prerelease=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" --verify-tag --latest=false "${prerelease[@]}" \
+            --title "$GITHUB_REF_NAME" --notes-file dist/release-notes.md \
+            "dist/mcp-connector-kit-$version.tgz" "dist/mcp-connector-kit-$version.tgz.sha256"

@@ -55,6 +55,15 @@ that nothing was published. If nothing was, fix on `main`, delete the tag
 (`git push origin :refs/tags/vX.Y.Z`; `git tag -d vX.Y.Z`) and tag again. A published
 release is never overwritten; ship a new patch version instead.
 
+## Shared package `mcp-connector-kit`
+
+`packages/mcp-connector-kit` has its own semver and its own tag, `mcp-connector-kit-vX.Y.Z` on
+`main`. Bump `packages/mcp-connector-kit/package.json` and the lock in a pull request; after the
+merge, push the tag. `.github/workflows/release-kit.yml` runs the same verify → ci → package →
+publish gates and creates a Release with `mcp-connector-kit-X.Y.Z.tgz` and its `.sha256`, marked
+as not latest. The `t3-connector` tarball keeps bundling the kit from the workspace, so a kit
+release does not require a `t3-connector` release, and vice versa.
+
 ## 3. Update a running installation (manual, explicit approval)
 
 No workflow updates a running connector. Whoever operates the installation decides to
