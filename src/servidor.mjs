@@ -9,6 +9,7 @@ import {
   estadoDaThread,
   pedidosPendentes,
   resumoModelo,
+  runAtivoDaShell,
   ultimaResposta,
 } from './estado.mjs';
 import { ForaDoEscopo } from './ambientes.mjs';
@@ -22,6 +23,16 @@ import { resumirPedidosRuntime } from './pedidos-runtime.mjs';
 export const VERSAO = '0.11.1';
 const ESTADOS = ['running', 'needs_intervention', 'completed', 'failed', 'cancelled', 'no_run', 'unknown'];
 const SO_LEITURA = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+
+// Contrato de fontes de verdade da thread, repetido nas descrições das ferramentas que o
+// expõem: o cliente não deve escolher sozinho entre sinais que falam de coisas diferentes.
+const CONTRATO_ESTADO =
+  'State contract: `state` is canonical and already resolves conflicting signals with this precedence: ' +
+  '(1) pending runtime request → needs_intervention; (2) a run still active → running; ' +
+  '(3) usage limit or proposed plan → needs_intervention; (4) otherwise the outcome of the latest run. ' +
+  '`stateSource` (pending_request, active_run, usage_limit, proposed_plan, latest_run, no_run) says which signal decided; `runId` and `statusRun` describe that same run. ' +
+  '`latestRunId`/`latestRunStatus` appear only when the newest run is not the one `state` describes: they are informational, and a cancelled newest run (a queued message promoted to steer or a cancelled queued run) does not mean the thread stopped. ' +
+  '`model` is the thread\'s configured model and is canonical.';
 
 function projetosPorId(shell) {
   return new Map((shell.projects ?? []).map((p) => [p.id, p]));
@@ -39,6 +50,25 @@ export function resumoDaThread(thread, projeto, pendentes = []) {
     ...estadoDaThread(thread, pendentes),
     updatedAt: thread.updatedAt,
     settled: Boolean(thread.settledAt),
+  };
+}
+
+/**
+ * Sessão do provider da thread, escolhida como o T3 escolhe (mesma instância, a mais
+ * recente). É informativa: o modelo dela pode ficar para trás após uma troca de modelo.
+ */
+export function resumoSessao(projecao, thread, modeloCanonico) {
+  const sessao = (projecao.providerSessions ?? [])
+    .filter((x) => !thread.providerInstanceId || x.providerInstanceId === undefined || x.providerInstanceId === thread.providerInstanceId)
+    .sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))[0];
+  if (!sessao) return null;
+  const divergente = Boolean(modeloCanonico?.model && sessao.model && sessao.model !== modeloCanonico.model);
+  return {
+    status: sessao.status,
+    directory: sessao.cwd,
+    model: sessao.model,
+    informational: true,
+    ...(divergente ? { note: `provider session still reports ${sessao.model}; the thread uses ${modeloCanonico.model} (\`activeRun.model\` while a run is active, otherwise \`model\`)` } : {}),
   };
 }
 
@@ -151,7 +181,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
     {
       title: 'T3 threads',
       description:
-        'Lists threads of the authorized projects of an environment with project, directory, model and state (running, needs_intervention, completed, failed, cancelled, no_run, unknown), most recently updated first. To find a thread by name use `search` (part of the title or threadId): `total` counts every match, not just the page. When `truncated: true`, repeat the call with `cursor` = `nextCursor` for the next page. Threads without a V2 run (imported history) only appear with includeNoRun; `hiddenNoRun` says how many were left out. Read-only.',
+        'Lists threads of the authorized projects of an environment with project, directory, model and state (running, needs_intervention, completed, failed, cancelled, no_run, unknown), most recently updated first. ' + CONTRATO_ESTADO + ' To find a thread by name use `search` (part of the title or threadId): `total` counts every match, not just the page. When `truncated: true`, repeat the call with `cursor` = `nextCursor` for the next page. Threads without a V2 run (imported history) only appear with includeNoRun; `hiddenNoRun` says how many were left out. Read-only.',
       shape: {
         environment: campoAmbiente,
         projectId: z.string().optional().describe('Restrict to one authorized project of this environment'),
@@ -207,7 +237,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         'Pass exactly one of `search` (part of the title or ID, or the whole title with `match: "exact"`) or `threadId` (exact ID). ' +
         `Each environment has ${PRAZO_AMBIENTE_MS} ms and the whole search ${PRAZO_TOTAL_MS} ms; environments that fail or time out are listed in \`environmentFailures\` and \`complete\` is false, so zero results then do not prove the thread is missing. ` +
         'The same title or ID can exist in several environments: never pick one on your own; ask the user when `total` > 1, then call the other tools with the chosen environment (`environment` parameter) and `threadId`. ' +
-        'Includes archived threads (`archived`) and threads without a run. Results are ordered by environmentId and threadId; when `truncated: true`, repeat with `cursor` = `nextCursor`. Read-only.',
+        'Includes archived threads (`archived`) and threads without a run. Results are ordered by environmentId and threadId; when `truncated: true`, repeat with `cursor` = `nextCursor`. ' + CONTRATO_ESTADO + ' Read-only.',
       shape: {
         search: z.string().min(1).optional().describe('Part of the title or threadId, ignoring case and accents; exclusive with threadId'),
         threadId: z.string().min(1).optional().describe('Exact thread ID, compared literally; exclusive with search'),
@@ -258,7 +288,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
     {
       title: 'What needs my attention in T3',
       description:
-        'Threads of the authorized projects of an environment that need intervention (approval, question, plan, usage limit) or that failed and were not settled, with reason and identifier. Read-only.',
+        'Threads of the authorized projects of an environment that need intervention (approval, question, plan, usage limit) or that failed and were not settled, with reason and identifier. ' + CONTRATO_ESTADO + ' Read-only.',
       shape: { environment: campoAmbiente },
       annotations: SO_LEITURA,
     },
@@ -278,7 +308,11 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
     {
       title: 'Thread state and latest response',
       description:
-        'Detailed state of an authorized thread, latest response and pending runtime requests. pendingRequests includes requestId, responseCapability, nextAction and content: user_input questions with IDs/options/field constraints, or approval prompt/options. Follow nextAction: answer questions with runtime-request.answer (answers keyed by question ID); approvals use runtime-request.approve (decision). thread.send does NOT answer a pending runtime request and can remain queued behind the blocked run. If contentAvailable is false, do not infer an answer: inspect the request in T3. Pass the thread environment. Read-only.',
+        'Detailed state of an authorized thread, latest response and pending runtime requests. pendingRequests includes requestId, responseCapability, nextAction and content: user_input questions with IDs/options/field constraints, or approval prompt/options. Follow nextAction: answer questions with runtime-request.answer (answers keyed by question ID); approvals use runtime-request.approve (decision). thread.send does NOT answer a pending runtime request and can remain queued behind the blocked run. If contentAvailable is false, do not infer an answer: inspect the request in T3. Pass the thread environment. ' +
+        CONTRATO_ESTADO + ' ' +
+        '`activeRun` (present while a run is active) is that run with the model it executes; `latestRun` is the newest run and, when it differs from `activeRun`, is informational. ' +
+        'Model precedence: `model` is what the thread runs next; `activeRun.model` is what the active run executes (fixed when the run was requested); `providerSession` (status, model) is the provider process as last reported and is informational only: it can keep the previous model after a model change and read `ready` while a run is active, so never use it to decide the model or the state. ' +
+        'Message `streaming` flags do not decide the state either. Read-only.',
       shape: {
         environment: campoAmbiente,
         threadId: z.string().min(1),
@@ -293,13 +327,25 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       const bounded = await cliente.thread(threadId, { signal });
       const projecao = bounded.projection;
       const pendentes = pedidosPendentes(projecao);
-      const sessao = (projecao.providerSessions ?? []).at(-1) ?? null;
-      const runs = [...(projecao.runs ?? [])].sort((a, b) => a.ordinal - b.ordinal);
+      const resumo = resumoDaThread(thread, projeto, pendentes);
+      const ativo = runAtivoDaShell(thread);
+      const runDoAtivo = ativo && (projecao.runs ?? []).find((x) => x.id === ativo.runId);
+      const runDoUltimo = (projecao.runs ?? []).find((x) => x.id === thread.latestRunId);
+      const activeRun = ativo
+        ? {
+            runId: ativo.runId,
+            ordinal: runDoAtivo?.ordinal ?? null,
+            status: runDoAtivo?.status ?? ativo.status,
+            model: resumoModelo(runDoAtivo?.modelSelection),
+          }
+        : null;
       return {
-        ...resumoDaThread(thread, projeto, pendentes),
+        ...resumo,
         pendingRequests: resumirPedidosRuntime(projecao, thread),
-        providerSession: sessao ? { status: sessao.status, directory: sessao.cwd, model: sessao.model } : null,
-        latestRun: runs.length ? { runId: runs.at(-1).id, ordinal: runs.at(-1).ordinal, status: runs.at(-1).status } : null,
+        providerSession: resumoSessao(projecao, thread, activeRun?.model ?? resumo.model),
+        activeRun,
+        // Último run pela shell (a mesma regra do T3); o snapshot pode não trazer todos os runs.
+        latestRun: thread.latestRunId ? { runId: thread.latestRunId, ordinal: runDoUltimo?.ordinal ?? null, status: thread.status } : null,
         latestResponse: ultimaResposta(projecao, maxCaracteres),
         history: { complete: !bounded.hasMoreHistory, payloadBudgetExceeded: Boolean(bounded.payloadBudgetExceeded) },
       };
@@ -346,13 +392,14 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       title: 'Wait a few seconds for a thread',
       description:
         `Short wait (up to ${TETO_MS} ms) for the run of an authorized thread to finish or to request intervention, driven by T3 events, without polling. ` +
+        'Without `runId` it follows the run the thread is executing (the active run), not a newer queued run that was cancelled or promoted to steer; `runId`, `statusRun` and `state` describe the followed run only. ' +
         'Returns immediately if the run already finished, if there is no run or if a request is pending. Reaching the deadline is not an error: it returns timedOut=true with the current state. ' +
         'To follow a long thread, call again later, between conversation turns; in voice use 1000-2000 ms. Never interrupts or changes the thread. Read-only.',
       shape: {
         environment: z.string().min(1).describe(`Environment where the thread lives (required): ${nomes}`),
         threadId: z.string().min(1),
         timeoutMs: z.number().int().min(1).max(TETO_MS).describe(`Total deadline for the call in ms, 1-${TETO_MS}; voice: 1000-2000`),
-        runId: z.string().min(1).optional().describe('Run to follow; default: the latest run when the call starts'),
+        runId: z.string().min(1).optional().describe('Run to follow; default: the active run when the call starts, otherwise the latest run'),
         includeLatestResponse: z.boolean().optional().describe('Include the latest assistant response of that run; default false'),
         maxCharacters: z.number().int().min(100).max(4000).optional().describe('Maximum length of the latest response; default 800'),
       },

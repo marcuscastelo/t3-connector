@@ -156,18 +156,42 @@ thread.
 | `t3_threads` | `environment?`, `projectId?`, `state?`, `includeNoRun?` (include threads without a run, default false), `search?`, `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `nextCursor?`, `changedSinceStart?`, `hiddenNoRun?`, `threads` |
 | `t3_buscar_threads` (find threads) | exactly one of `search?` or `threadId?` (exact), `match?` (`partial` = substring, default; `exact` = whole title), `environment?` (restricts; omitted: every environment), `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `complete`, `nextCursor?`, `queriedEnvironments`, `environmentFailures`; each thread with `environment: {alias, environmentId, name}` and `archived` |
 | `t3_atencao` (attention) | `environment?` | threads that need intervention, or failed and were not settled |
-| `t3_thread` | `environment?`, `threadId`, `maxCharacters?` (200-6000, 1500) | thread summary, `pendingRequests`, `providerSession`, `latestRun`, `latestResponse`, `history` |
+| `t3_thread` | `environment?`, `threadId`, `maxCharacters?` (200-6000, 1500) | thread summary, `pendingRequests`, `providerSession` (informational), `activeRun?`, `latestRun`, `latestResponse`, `history` |
 | `t3_mensagens` (messages) | `environment?`, `threadId`, `limit?` (1-20, 6), `maxCharacters?` (100-4000, 800) | `messages` and `history.complete` |
 | `t3_providers` (provider instances) | `environment?`, `instanceId?` (exact, case-sensitive), `includeModels?` (include models, default false) | `source`, `total`, `providers` in T3 order, each with the T3 field names (see below) |
 | `t3_aguardar_thread` (wait) | **`environment`**, `threadId`, **`timeoutMs`** (1-5000), `runId?`, `includeLatestResponse?`, `maxCharacters?` | `runId`, `statusRun`, `state`, `terminal`, `timedOut`, `returnReason`, `pendingRequest`, `latestResponse?` |
 
 States (`state`, also the filter of `t3_threads`): `running`, `needs_intervention`,
-`completed`, `failed`, `cancelled`, `no_run` and `unknown`. A pending request wins over any
-run status. Each thread summary carries `threadId`, `title`, `project`, `directory`,
-`branch`, `model` (`model`, `instanceId`, `effort`), `runtimeMode`, `state`, `statusRun`,
-`runId`, `updatedAt` and `settled`; intervention adds `reason`, `kind`, `identifier` and
-`since`. `t3_aguardar_thread` returns with `returnReason` `terminal`, `needs_intervention`,
+`completed`, `failed`, `cancelled`, `no_run` and `unknown`. Each thread summary carries
+`threadId`, `title`, `project`, `directory`, `branch`, `model` (`model`, `instanceId`,
+`effort`), `runtimeMode`, `state`, `stateSource`, `statusRun`, `runId`, `updatedAt` and
+`settled`; intervention adds `reason`, `kind`, `identifier` and `since`.
+`t3_aguardar_thread` returns with `returnReason` `terminal`, `needs_intervention`,
 `no_run`, `timeout`, `thread_deleted` or `subscription_closed`.
+
+**Sources of truth.** `state` and `model` are canonical; clients should not weigh other
+fields against them. `state` applies this precedence, and `stateSource` names the signal
+that decided:
+
+1. a pending runtime request: `needs_intervention` (`pending_request`);
+2. a run still active: `running` (`active_run`);
+3. a usage limit without automatic resume, or a proposed plan: `needs_intervention`
+   (`usage_limit`, `proposed_plan`);
+4. otherwise the outcome of the latest run (`latest_run`), or `no_run`.
+
+`runId` and `statusRun` always describe the run that `state` refers to. T3's thread
+`status` is the status of the *newest* run, and promoting a queued message to steer, or
+cancelling a queued run, leaves that newest run `cancelled` while an older run keeps
+working. When the newest run is not the run `state` describes, the summary adds
+`latestRunId`, `latestRunStatus` and a `note`, for information only. `t3_aguardar_thread`
+follows the active run by default.
+
+`model` is the thread's configured model, which the next run uses. In `t3_thread`,
+`activeRun.model` is the model the active run executes, fixed when that run was
+requested. `providerSession` (`status`, `model`) is the provider process as last reported,
+and carries `informational: true`. It can keep the previous model after a model change
+(a `note` says so) and read `ready` while a run is active, so it never decides the model
+or the state. Message `streaming` flags do not decide the state either.
 
 ### Pending runtime requests (`t3_thread`)
 
