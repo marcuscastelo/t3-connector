@@ -3,9 +3,11 @@ import { join } from 'node:path';
 import { CHATGPT_CLIENT_ID } from './clients.mjs';
 import { parseResourceCapture } from './resource-capture.mjs';
 import { LOGIN_MODES } from './authorization-server.mjs';
+import { issuerParts } from './issuer.mjs';
 
 // Configuration of the OAuth session profile, from environment variables (names below). The issuer
-// is the public HTTPS origin of the ingress that forwards to the public listener; it is fixed
+// is the public HTTPS origin of the ingress that forwards to the public listener, optionally
+// followed by a mount path when several connectors share one host (https://host/fleet); it is fixed
 // configuration because clients bind tokens and callbacks to it.
 export const DEFAULTS = {
   publicPort: 7434,
@@ -40,10 +42,12 @@ export function loadOAuthConfig(env = process.env, { rehearsal = false, prefix =
   const u = new URL(issuer);
   const localhostHttp = u.protocol === 'http:' && u.hostname === 'localhost';
   if (u.protocol !== 'https:' && !localhostHttp) throw new Error(`${P}_ISSUER must be https (http://localhost only for local rehearsal)`);
-  if (u.origin !== issuer) throw new Error(`${P}_ISSUER must be an origin without path, query or fragment`);
+  const parts = issuerParts(issuer);
+  if (!parts) throw new Error(`${P}_ISSUER must be an origin, optionally followed by a mount path of lowercase segments (https://host/connector), without query or fragment`);
   const cfg = {
     ...extend(env, { int, list, prefix: P }),
     issuer,
+    mount: parts.mount,
     publicPort,
     localPort: int(`${P}_LOCAL_PORT`, env[`${P}_LOCAL_PORT`], 1, 65535) ?? D.localPort,
     stateDir: env[`${P}_STATE_DIR`] || join(env.XDG_STATE_HOME || join(homedir(), '.local', 'state'), app, rehearsal ? 'oauth-rehearsal' : 'oauth'),

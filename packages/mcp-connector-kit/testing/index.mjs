@@ -111,8 +111,9 @@ export function http(method, url, { headers = {}, body, host, timeoutMs = defaul
 /**
  * Runs createOAuthConnector (or `create`, a connector's branded wrapper) on loopback with a fake
  * client and an enrolled software passkey. Returns helpers for sign-in, token, refresh and MCP.
+ * `mount` ('/fleet') serves it under a path of the issuer: http://localhost:<port>/fleet.
  */
-export async function startConnector({ create = createOAuthConnector, tools, config = {}, loginMode = 'button', enroll = true, serverInfo = { name: 'connector-test', version: '0.0.0' }, ...options } = {}) {
+export async function startConnector({ create = createOAuthConnector, tools, config = {}, loginMode = 'button', enroll = true, mount = '', serverInfo = { name: 'connector-test', version: '0.0.0' }, ...options } = {}) {
   let mono = 0, wallMs = Date.now();
   const clock = () => mono, wall = () => wallMs;
   const keys = clientKeys('ES256');
@@ -122,7 +123,7 @@ export async function startConnector({ create = createOAuthConnector, tools, con
   let cfg, connector;
   for (let attempt = 1; ; attempt++) {
     const [publicPort, localPort] = [await freePort(), await freePort()];
-    cfg = { ...DEFAULTS, issuer: `http://localhost:${publicPort}`, publicPort, localPort, stateDir: mkdtempSync(join(tmpdir(), 'connector-oauth-')), clients: [CLIENT], loginMode, ...config };
+    cfg = { ...DEFAULTS, issuer: `http://localhost:${publicPort}${mount}`, publicPort, localPort, stateDir: mkdtempSync(join(tmpdir(), 'connector-oauth-')), clients: [CLIENT], loginMode, ...config };
     connector = create({ config: cfg, tools, fetch: cimdFetch({ [CLIENT]: doc }), clock, wall, serverInfo, ...options });
     try { await connector.listen(); break; } catch (e) {
       await connector.close();

@@ -1,6 +1,6 @@
 {
   "name": "mcp-connector-kit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Shared layer for building MCP connectors: tool plumbing (strict schemas, results, errors) and the OAuth session profile (authorization server, MCP resource server over Streamable HTTP, sessions with idle/max age, refresh, passkeys, control plane, audit). No T3 or Fleet knowledge.",

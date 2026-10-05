@@ -1,4 +1,5 @@
-import { brandOf } from './brand.mjs';
+import { brandOf, DEFAULT_BRAND } from './brand.mjs';
+import { issuerParts } from './issuer.mjs';
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -32,6 +33,13 @@ export function createOAuthConnector({ config, tools, serverInfo, fetch, clock, 
   const B = brandOf(brand);
   const { issuer, publicPort, localPort, stateDir } = config;
   if (config.loginMode === 'public' && new URL(issuer).protocol !== 'https:') throw new Error('public_login_https_required');
+  // A mounted issuer (https://host/fleet) shares its host with other connectors: WebAuthn uses the
+  // bare origin, routes live under the mount, and the transaction cookie (Path=/, as __Host-
+  // requires) must have a name of its own.
+  const parts = issuerParts(issuer);
+  if (!parts) throw new Error('issuer_invalid');
+  const { origin: publicOrigin, mount } = parts;
+  if (mount && B.cookie === DEFAULT_BRAND.cookie) throw new Error('mounted_issuer_requires_brand_cookie');
   // Default: the public listener serves the AS and the MCP resource at <issuer>/mcp. Tunnel mode
   // (config.resource + config.tunnelPort): the public listener serves only the AS, and the resource,
   // named by the tunnel's hosted discovery, is served at /mcp on a loopback listener for the tunnel
@@ -44,7 +52,7 @@ export function createOAuthConnector({ config, tools, serverInfo, fetch, clock, 
   const storage = credentialStorage(stateDir, issuer), credentials = storage.local.credentials;
   const localOrigin = `http://localhost:${localPort}`;
   const passkeys = new OAuthPasskeys({ origin: localOrigin, rpID: 'localhost', allowLocalhost: true, ...storage.local, clock, wall, rpName: `${B.name} (OAuth)`, userName: B.passkeyUser });
-  const publicPasskeys = storage.public ? new OAuthPasskeys({ origin: issuer, rpID: new URL(issuer).hostname, ...storage.public, clock, wall, rpName: `${B.name} (public OAuth)`, userName: B.passkeyUser }) : null;
+  const publicPasskeys = storage.public ? new OAuthPasskeys({ origin: publicOrigin, rpID: new URL(issuer).hostname, ...storage.public, clock, wall, rpName: `${B.name} (public OAuth)`, userName: B.passkeyUser }) : null;
 
   const authority = new SessionAuthority({ idleMs: config.idleSeconds * 1000, maxAgeMs: config.maxAgeSeconds * 1000, clock, wall, audit });
   const killFile = join(stateDir, 'kill-switch');
@@ -62,16 +70,16 @@ export function createOAuthConnector({ config, tools, serverInfo, fetch, clock, 
   const catalog = tools({ authority, issuer, stateDir, audit });
   const { sources } = catalog, grantProvider = catalog.grantProvider ?? null;
   const consent = consentService({ grantProvider, capabilities: catalog.capabilities, idleSeconds: config.idleSeconds, maxAgeSeconds: config.maxAgeSeconds, ...(describeAccess ? { describeAccess } : {}) });
-  const publicEnrollment = publicPasskeys ? new PublicEnrollment({ authority, origin: issuer, rpID: publicPasskeys.rpID, subject: storage.subject, clock, wall }) : null;
+  const publicEnrollment = publicPasskeys ? new PublicEnrollment({ authority, origin: publicOrigin, base: issuer, rpID: publicPasskeys.rpID, subject: storage.subject, clock, wall }) : null;
   authority.onReset(() => { transactions.cancelPublic(); publicEnrollment?.invalidate(); });
   const admin = credentialAdmin({ localKeys: passkeys, publicKeys: publicPasskeys, enrollment: publicEnrollment, authority, transactions, clock, wall });
   const publicFlow = publicPasskeys ? publicLogin({ brand: B, issuer, mode: config.loginMode, passkeys: publicPasskeys, subject: storage.subject, authority, transactions, consent, enrollment: publicEnrollment, clock, wall, audit, limits: publicLimits }) : null;
   const credentialCurrent = approval => {
-    const keys = approval.credentialOrigin ? (approval.credentialOrigin === localOrigin ? passkeys : approval.credentialOrigin === issuer ? publicPasskeys : null) : (approval.credentialRp ?? 'localhost') === 'localhost' ? passkeys : publicPasskeys;
+    const keys = approval.credentialOrigin ? (approval.credentialOrigin === localOrigin ? passkeys : approval.credentialOrigin === publicOrigin ? publicPasskeys : null) : (approval.credentialRp ?? 'localhost') === 'localhost' ? passkeys : publicPasskeys;
     return !!keys?.current(approval.credentialId, approval.credentialGeneration);
   };
   const as = authorizationServer({ brand: B, issuer, resource, localOrigin, loginMode: config.loginMode, authority, tokens, clients, transactions, publicLogin: publicFlow, credentialCurrent, captureRejectedResource: resourceCapture(config.resourceCapture ?? null), audit });
-  const rs = resourceServer({ brand: B, issuer, resource, advertisedResource: tunnel ? (config.advertisedResource ?? null) : null, route: tunnel ? '/mcp' : undefined, scopes: SCOPES, tokens, authority, sources, serverInfo, allowedOrigins: config.allowedOrigins, audit });
+  const rs = resourceServer({ brand: B, issuer, resource, advertisedResource: tunnel ? (config.advertisedResource ?? null) : null, route: tunnel ? '/mcp' : undefined, rootAlias: tunnel || !mount, scopes: SCOPES, tokens, authority, sources, serverInfo, allowedOrigins: config.allowedOrigins, audit });
   const local = controlPlane({ brand: B, port: localPort, issuer, passkeys, subject: storage.subject, authority, tokens, transactions, killSwitch, enrollment, consent, admin, clock, wall, audit });
   const publicHost = new URL(issuer).host;
 

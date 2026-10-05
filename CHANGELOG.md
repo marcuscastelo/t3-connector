@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `mcp-connector-kit` 0.3.0: the OAuth issuer may carry a mount path (`https://host/fleet`), so
+  several connectors share one host behind a path-routing ingress. Discovery uses RFC 8414 path
+  insertion, endpoints and pages live under the mount, WebAuthn uses the bare origin, and the root
+  protected-resource alias is served only without a mount. Without a path the public surface is
+  identical to 0.2.0 (snapshot test), so the T3 Connector's behavior does not change.
+
 ## 0.11.2
 
 - Read tools: one source-of-truth contract for thread state and model. `state` now gives an

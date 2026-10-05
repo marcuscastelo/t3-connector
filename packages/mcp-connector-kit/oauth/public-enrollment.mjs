@@ -10,7 +10,8 @@ const bad = () => { throw limited('enrollment_invalid', 400); };
 export class PublicEnrollment {
   #record = null;
   #generation = 0;
-  constructor({ authority, origin, rpID, subject, clock, wall }) { Object.assign(this, { authority, origin, rpID, subject, time: stopwatch({ clock, wall }) }); }
+  // `origin` is the WebAuthn origin; `base` (the issuer, default: origin) prefixes the enrollment link.
+  constructor({ authority, origin, base = origin, rpID, subject, clock, wall }) { Object.assign(this, { authority, origin, base, rpID, subject, time: stopwatch({ clock, wall }) }); }
   invalidate() { this.#record = null; this.#generation++; }
   get active() {
     const r = this.#record;
@@ -21,7 +22,7 @@ export class PublicEnrollment {
     if (this.authority.killed) throw limited('kill_switch', 400);
     const ticket = randomBytes(16).toString('base64url');
     this.#record = { digest: hash(ticket), generation: ++this.#generation, epoch: this.authority.epoch, at: this.time.mark(), state: 'issued', cookieHash: null, options: 0, failures: 0, lastOption: null, challenge: null };
-    return `${this.origin}/enroll#ticket=${ticket}`;
+    return `${this.base}/enroll#ticket=${ticket}`;
   }
   #match(ticket, cookie) {
     if (!this.active || typeof ticket !== 'string' || !/^[A-Za-z0-9_-]{22}$/.test(ticket) || typeof cookie !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(cookie)) bad();

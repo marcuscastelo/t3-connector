@@ -30,6 +30,30 @@ A tool with `annotations.readOnlyHint: true` needs `connector:read`; any other n
 consent wording through `describeAccess`, and write policy approved at sign-in through the
 `grantProvider` that `tools` may return.
 
+## Several connectors on one host: mounted issuer
+
+The issuer may carry a mount path, so two authorization servers share one HTTPS host behind an
+ingress that routes by path: `<prefix>_ISSUER=https://host.example/fleet` (lowercase segments
+`[a-z0-9][a-z0-9-]*`, no trailing slash, query or fragment; `config.mount` is `/fleet`). Without a
+path the behavior is that of 0.2.0, pinned by a snapshot test (`test/fixtures/surface-0.2.0.json`).
+
+| | without mount | with mount `/fleet` |
+| --- | --- | --- |
+| AS discovery | `/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration`, `/.well-known/oauth-authorization-server/mcp` | `/.well-known/oauth-authorization-server/fleet`, `/.well-known/openid-configuration/fleet`, `/fleet/.well-known/openid-configuration`, `/.well-known/oauth-authorization-server/fleet/mcp` |
+| Endpoints, login pages, enrollment link | `/authorize`, `/token`, `/revoke`, `/resume`, `/enroll`, ... | the same under `/fleet/` |
+| Resource and its metadata (RFC 9728) | `<issuer>/mcp`, `/.well-known/oauth-protected-resource/mcp` and the root alias | `<issuer>/mcp` = `/fleet/mcp`, `/.well-known/oauth-protected-resource/fleet/mcp`; no root alias on the public listener (it belongs to the host) |
+| WebAuthn origin, `Origin` check | the issuer | the bare origin (`https://host.example`); the rpID is the hostname in both cases |
+
+Every other path gets 404, so a wrong ingress rule fails closed instead of answering for the other
+connector. Tokens are per process and bound to the resource; client assertions name this issuer
+(`<issuer>/token`, `<issuer>/revoke` or `<issuer>`). The transaction cookie stays
+`__Host-<brand.cookie>_tx` with `Path=/` (the `__Host-` prefix requires it), so a mounted connector
+needs a `brand.cookie` of its own: `createOAuthConnector` refuses the default one. Each connector keeps
+its own state directory; the public passkey file is tagged with the full issuer, so a state directory
+cannot be reused under another mount. Ingress rule for `/fleet` (e.g. a Cloudflare tunnel path):
+`^/(fleet|\.well-known/(oauth-authorization-server|openid-configuration|oauth-protected-resource)/fleet)(/.*)?$`.
+In tests, `startConnector({ mount: '/fleet' })` serves the connector at `http://localhost:<port>/fleet`.
+
 ## Dependencies and versioning
 
 Runtime dependencies are peer dependencies (`@modelcontextprotocol/sdk`, `zod`,
@@ -38,4 +62,5 @@ copy of each. Independent semver, released as `mcp-connector-kit-<version>.tgz` 
 (tag `mcp-connector-kit-vX.Y.Z`, `.github/workflows/release-kit.yml`). Consumers pin the exact
 version. The T3 Connector bundles it in its own tarball.
 
-0.1.0 had only the tool plumbing; 0.2.0 adds the OAuth session profile and the test support.
+0.1.0 had only the tool plumbing; 0.2.0 adds the OAuth session profile and the test support;
+0.3.0 accepts an issuer mounted on a path.
