@@ -36,12 +36,20 @@ export const PROJECT_SCHEMAS = Object.freeze({
 // Statuses of a run that is still doing or waiting for work (OrchestrationV2RunStatus).
 const BUSY = new Set(['preparing', 'queued', 'starting', 'running', 'waiting']);
 
+// Every row must carry what the count reads; one malformed row makes the whole count incomplete
+// (a row that cannot be attributed could belong to the project).
+const nullableString = v => v === null || v === undefined || typeof v === 'string';
+const validRow = t => t && typeof t === 'object' && typeof t.id === 'string' && t.id !== '' && typeof t.projectId === 'string' && t.projectId !== ''
+  && typeof t.status === 'string' && nullableString(t.latestRunId) && nullableString(t.archivedAt) && nullableString(t.deletedAt)
+  && (t.pendingRuntimeRequest === null || t.pendingRuntimeRequest === undefined || typeof t.pendingRuntimeRequest === 'object');
+
 /** Pure count over an active shell snapshot and an archived shell snapshot. */
 export function contarOcupacao(active, archived, projectId) {
   const sequence = active?.snapshotSequence;
-  if (!Number.isInteger(sequence) || sequence !== archived?.snapshotSequence || !Array.isArray(active?.threads) || !Array.isArray(archived?.threads)) {
-    return { projectId, complete: false, total: null };
-  }
+  const incomplete = { projectId, complete: false, total: null };
+  if (!Number.isInteger(sequence) || sequence !== archived?.snapshotSequence || !Array.isArray(active?.threads) || !Array.isArray(archived?.threads)) return incomplete;
+  if (active.archivedThreads !== undefined && !Array.isArray(active.archivedThreads)) return incomplete;
+  if (![...active.threads, ...(active.archivedThreads ?? []), ...archived.threads].every(validRow)) return incomplete;
   const seen = new Map();
   for (const [where, list] of [['active', active.threads], ['active', active.archivedThreads ?? []], ['archived', archived.threads]]) {
     for (const t of list) {

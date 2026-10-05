@@ -222,12 +222,14 @@ Ponte gate, lease TTL and `grantFromInventory` snapshot remain unchanged.
 #### Project deletion (opt-in)
 
 `T3_CONNECTOR_OAUTH_PROJECT_ADMIN=1` (only with `T3_CONNECTOR_OAUTH_PROJECTS=all`; any other value
-is off) adds three OAuth tools. They are offered only to sessions consented after the flag is on.
-The action list frozen in an older session never gains them, and the lease bridge (Ponte), stdio
-and `ACTIONS` catalogs are unchanged.
+is off) adds three OAuth tools. They are listed and callable only for a session whose consent
+includes the project actions, that is, one consented after the flag is on; an older session's
+frozen action list never gains them. The lease bridge (Ponte), stdio and `ACTIONS` catalogs are
+unchanged.
 
 - `t3_contar_threads_projeto`: the full live thread count of one project: `total`, `active`,
-  `archived`, `withoutRun` (overlapping) and `busy` (active run or pending request). The HTTP
+  `archived`, `withoutRun` (overlapping) and `busy` (active run or pending request). A malformed
+  thread row (missing id, project, status, or with an invalid field) makes it incomplete. The HTTP
   shell carries only active threads; archived ones come from WS
   `orchestration.getArchivedShellSnapshot`. The count is `complete` only when both reads observed
   the same `snapshotSequence`. Otherwise it reads again (3 attempts), then answers
@@ -236,13 +238,15 @@ and `ACTIONS` catalogs are unchanged.
   is 0, and always sent with `force:false`, so T3's own refusal still applies. A refusal is never
   escalated to force.
 - `t3_escrever_project_delete_force`: requires `force: true` (literal), `confirmProjectId` equal to
-  `projectId`, and `expectedThreadCount` equal to the fresh full count. It is refused when a thread
+  `projectId`, and `expectedThreadCount` equal to the full count taken as the last read before
+  the send, after the target validation. It is refused when a thread
   of the project has an active run or a pending request. T3 deletes each thread (cancelling its
   pending work), then the project.
 
 Both use WS `projects.mutate` (`project.delete`) with a `commandId` derived from the operation key,
 so T3 replays the receipt of a command it already committed. The operation journal dedupes as for
-any write. Same operationId and same input returns the recorded result; same operationId and other
+any write. Same operationId and same input returns the recorded result, including the receipt
+and the post-check; same operationId and other
 input is `operation_conflict`. The receipt is `{projectId, deletedAt}`; T3 returns no sequence or
 deleted-thread count, and the connector invents none. The project is soft-deleted, and its
 workspace directory on disk is kept. Moving threads between projects is not offered: T3 has no

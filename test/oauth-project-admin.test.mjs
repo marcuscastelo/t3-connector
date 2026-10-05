@@ -8,6 +8,7 @@ import { loadOAuthConfig } from '../src/oauth/config.mjs';
 import { ACTIONS, ALL_ACTIONS } from '../src/escrita/adapters.mjs';
 import { contarOcupacao, lerOcupacao, guardProjectDelete, PROJECT_ACTIONS } from '../src/escrita/project-admin.mjs';
 import { StagingRpcTransport } from '../src/escrita/transport-staging.mjs';
+import { sessionWrites } from '../src/oauth/session-writes.mjs';
 
 const body = r => JSON.parse(r.data.result.content[0].text);
 const errorText = r => (assert.equal(r.data.result.isError, true), r.data.result.content[0].text);
@@ -55,7 +56,7 @@ async function fixture(t, { projects, threads, projectAdmin = true }) {
     data[r.alias].shell = () => sim.shell();
     const c = { registro: { ...r, destination: `t3://${r.environmentId}`, acoes: ACTIONS }, calls: [],
       inventario: async () => { throw new Error('all login must not snapshot inventory'); },
-      cliente: async () => ({ shell: async () => structuredClone(sim.shell()) }),
+      cliente: async () => ({ shell: async () => { await c.onShell?.(); return structuredClone(sim.shell()); } }),
       adapter: {
         prepare: async () => {},
         invoke: async (method, payload) => {
@@ -83,12 +84,19 @@ async function fixture(t, { projects, threads, projectAdmin = true }) {
 }
 
 test('project admin: count is pure, dedupes IDs, excludes deleted and is incomplete on a sequence mismatch', () => {
-  const active = { snapshotSequence: 5, threads: [{ id: 'a', projectId: 'p', latestRunId: 'r', status: 'running' }, { id: 'n', projectId: 'p', latestRunId: null, status: 'idle' }, { id: 'x', projectId: 'q' }, { id: 'd', projectId: 'p', deletedAt: ISO }], archivedThreads: [] };
-  const archived = { snapshotSequence: 5, threads: [{ id: 'z', projectId: 'p', archivedAt: ISO, latestRunId: null, status: 'idle' }, { id: 'a', projectId: 'p', archivedAt: ISO }] };
+  const active = { snapshotSequence: 5, threads: [{ id: 'a', projectId: 'p', latestRunId: 'r', status: 'running' }, { id: 'n', projectId: 'p', latestRunId: null, status: 'idle' }, { id: 'x', projectId: 'q', status: 'idle' }, { id: 'd', projectId: 'p', deletedAt: ISO, status: 'idle' }], archivedThreads: [] };
+  const archived = { snapshotSequence: 5, threads: [{ id: 'z', projectId: 'p', archivedAt: ISO, latestRunId: null, status: 'idle' }, { id: 'a', projectId: 'p', archivedAt: ISO, status: 'completed' }] };
   assert.deepEqual(contarOcupacao(active, archived, 'p'), { projectId: 'p', complete: true, sequence: 5, total: 3, active: 1, archived: 2, withoutRun: 2, busy: 1 });
   assert.deepEqual(contarOcupacao(active, { ...archived, snapshotSequence: 6 }, 'p'), { projectId: 'p', complete: false, total: null });
   assert.deepEqual(contarOcupacao(active, null, 'p'), { projectId: 'p', complete: false, total: null });
   assert.deepEqual(contarOcupacao({ snapshotSequence: 1, threads: [] }, { snapshotSequence: 1, threads: [] }, 'p').total, 0);
+  // Fail closed on any malformed row, even one that might not belong to the project.
+  const empty = { snapshotSequence: 1, threads: [] };
+  for (const row of [{}, { id: 'r' }, { id: 'r', projectId: 'p' }, { id: 1, projectId: 'p', status: 'idle' }, { id: 'r', projectId: 'p', status: 'idle', archivedAt: 5 }, null, 'x']) {
+    assert.deepEqual(contarOcupacao(empty, { snapshotSequence: 1, threads: [row] }, 'p'), { projectId: 'p', complete: false, total: null }, JSON.stringify(row));
+    assert.deepEqual(contarOcupacao({ snapshotSequence: 1, threads: [row] }, empty, 'p'), { projectId: 'p', complete: false, total: null });
+  }
+  assert.equal(contarOcupacao({ ...empty, archivedThreads: 'x' }, empty, 'p').complete, false);
   for (const bad of [{ complete: false, total: null }, undefined]) assert.throws(() => guardProjectDelete('project.delete', { projectId: 'p' }, bad), /project_count_incomplete/);
 });
 
@@ -125,6 +133,7 @@ test('project admin: delete of an empty project sends force:false once, with a s
   // Same operation again: journal receipt, no second mutation.
   const again = body(await f.del('empty'));
   assert.equal(again.state, 'completed'); assert.equal(again.reconciliationRequired, false); assert.equal(f.invokes().length, 1);
+  assert.deepEqual(again.receipt, r.receipt); assert.equal(again.postCheck, 'clean');
   // Same operationId, different target: conflict, nothing sent.
   assert.match(errorText(await f.del('p', 'del-empty')), /operation_conflict/); assert.equal(f.invokes().length, 1);
   // The deleted project left the live inventory: a new operation on it is outside the scope.
@@ -157,6 +166,12 @@ test('project admin: force requires literal true, confirmation and the current c
   assert.equal(f.invokes().length, 0);
   // Plain delete never turns into force.
   assert.match(errorText(await f.del('p')), /project_not_empty/); assert.equal(f.invokes().length, 0);
+  // A thread created while the connector validates the target (after any earlier count) is
+  // still caught: the count is the last read before the send.
+  let reads = 0;
+  f.cx.onShell = () => { if (++reads === 2) f.sim.addThread({ id: 'late', projectId: 'p', latestRunId: null }); };
+  assert.match(errorText(await f.force(good, 'f-late')), /project_count_changed/); assert.equal(f.invokes().length, 0);
+  f.cx.onShell = null; f.sim.threads.find(t => t.id === 'late').deletedAt = ISO;
   const r = body(await f.force(good, 'f-ok'));
   assert.equal(r.state, 'completed'); assert.equal(r.postCheck, 'clean'); assert.equal(f.invokes()[0].payload.force, true);
   assert.ok(f.sim.threads.filter(t => t.projectId === 'p').every(t => t.deletedAt === ISO));
@@ -226,6 +241,10 @@ test('project admin concurrency: a thread created inside the backend delete wind
   assert.equal(r.state, 'completed'); assert.equal(r.postCheck, 'live_threads_remain'); assert.equal(r.liveThreadsAfterDelete, 1);
   assert.equal(f.sim.liveOrphans().length, 1);
   assert.ok(f.audits.some(e => e.event === 'project_delete_live_threads' && e.liveThreads === 1));
+  // Replaying the operation returns the recorded receipt and the alert, without a new send.
+  const again = body(await f.del('p'));
+  assert.deepEqual({ state: again.state, receipt: again.receipt, postCheck: again.postCheck, live: again.liveThreadsAfterDelete }, { state: 'completed', receipt: r.receipt, postCheck: 'live_threads_remain', live: 1 });
+  assert.equal(f.invokes().length, 1);
 });
 
 test('project admin transport: only the listed RPCs, each with its own result shape', () => {
@@ -246,4 +265,20 @@ test('project admin transport: only the listed RPCs, each with its own result sh
     const bad = tr.invoke('orchestration.dispatchCommand', {}); reply(sent[2].id, { id: 'p', deletedAt: null });
     return bad.then(() => assert.fail('accepted'), e => { assert.match(e.message, /control_transport_uncertain/); assert.equal(failed, 1); });
   });
+});
+
+test('project admin: tools follow the session grant; an older consent without project actions gets none', () => {
+  const names = grants => {
+    const registered = [];
+    const authority = { check: () => ({ sub: 's', grants }) };
+    const w = sessionWrites({ conexoes: [], journal: memoryJournal(), authority, issuer: 'https://i', projectPolicy: 'all', projectAdmin: true });
+    w.registerTools({ registerTool: n => registered.push(n) }, { sid: 'x', sub: 's' });
+    return registered;
+  };
+  const env = actions => ({ projectPolicy: 'all', scopeVersion: 3, environments: [{ alias: 'local', environmentId: 'e', destination: 't3://e', actions }] });
+  const old = names(env([...ACTIONS]));
+  assert.ok(!old.some(n => /project_delete|contar_threads_projeto/.test(n)));
+  const fresh = names(env([...ACTIONS, ...PROJECT_ACTIONS]));
+  for (const n of ['t3_escrever_project_delete', 't3_escrever_project_delete_force', 't3_contar_threads_projeto']) assert.ok(fresh.includes(n), n);
+  assert.deepEqual(names(env([...ACTIONS, 'project.delete'])).filter(n => /project|contar/.test(n)), ['t3_escrever_project_delete', 't3_contar_threads_projeto']);
 });

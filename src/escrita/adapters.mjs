@@ -129,7 +129,7 @@ export class Dispatcher {
   const initial={hash,state:'preparing',action,operationId,environmentId:this.environmentId,destination:this.destination};
   const owned=this.#store('reserve',key,initial);
   const old=owned?null:this.#store('get',key);
-  if(old) {if(old.hash!==hash) throw new Error('operation_conflict');if(old.target)(this.authorizeRecorded??((target)=>this.gate.check(identity,leaseId,target)))(old.target);return {state:old.state,operationId,reconciliationRequired:old.state!=='completed'};}
+  if(old) {if(old.hash!==hash) throw new Error('operation_conflict');if(old.target)(this.authorizeRecorded??((target)=>this.gate.check(identity,leaseId,target)))(old.target);return {state:old.state,operationId,reconciliationRequired:old.state!=='completed',...(isProjectAction(action)&&old.receipt?{receipt:old.receipt,...(old.postCheck??{})}:{})};}
   if(!owned)throw new Error('journal_failed');
   let release=null;
   try {
@@ -147,12 +147,19 @@ export class Dispatcher {
    // da checagem final: entre a checagem e o envio não há await.
    if(this.adapter.prepare) await this.adapter.prepare();
    // Fresh full count (active + archived). The native force:false refusal still applies.
-   if(isProjectAction(action)) guardProjectDelete(action,parsed.input,await this.#occupancy(parsed.input.projectId));
    if(this.validateTarget) await this.validateTarget({target,input:parsed.input,spec:parsed.spec,validateWorkspace:g=>this.#workspace(g,[...projects],action,parsed.input)});
+   // Last read before the send: a count taken before the target validation could be stale.
+   // The native force:false refusal still applies; the cross-client window remains T3's.
+   if(isProjectAction(action)) guardProjectDelete(action,parsed.input,await this.#occupancy(parsed.input.projectId));
    this.#store('put',key,{...initial,state:'uncertain',target,payloadIds});
    const result=await this.gate.dispatch(identity,leaseId,{environmentId:this.environmentId,destination:this.destination,projectIds:[...projects],action},()=>this.adapter.invoke(parsed.spec.method,payload),operationId);
-   this.#store('put',key,{...initial,state:'completed',target,payloadIds,receipt:this.adapter.receipt(result)});
-   return {state:'completed',operationId,receipt:this.adapter.receipt(result),...(isProjectAction(action)?await this.#afterDelete(parsed.input.projectId,operationId):{})};
+   const done={...initial,state:'completed',target,payloadIds,receipt:this.adapter.receipt(result)};
+   this.#store('put',key,done);
+   if(!isProjectAction(action)) return {state:'completed',operationId,receipt:done.receipt};
+   // The post-check is evidence: kept with the record so a replay returns it too.
+   const postCheck=await this.#afterDelete(parsed.input.projectId,operationId);
+   this.#store('put',key,{...done,postCheck});
+   return {state:'completed',operationId,receipt:done.receipt,...postCheck};
   } catch(error) {
    const record=this.#store('get',key);
    if(record.state!=='preparing') this.gate.close();

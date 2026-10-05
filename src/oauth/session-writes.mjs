@@ -239,7 +239,9 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
   // Read-only full count of one project's threads, for the consented session.
   async function countThreads(principal, { environment, projectId }) {
     const c = resolve(environment);
-    consented(authority, principal, c.registro);
+    const s = consented(authority, principal, c.registro);
+    // The count belongs to project administration: only sessions consented with it.
+    if (!s.grants.environments.find(e => e.alias === c.registro.alias)?.actions.some(a => PROJECT_ACTIONS.includes(a))) fail('scope_denied');
     const shell = await liveShell(principal, c);
     if (!(shell.projects ?? []).some(p => p.id === projectId && !p.deletedAt)) fail('scope_denied');
     if (!c.adapter.occupancy) fail('project_count_unavailable');
@@ -259,7 +261,10 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
   function registerTools(server, principal) {
     // Strict schemas: an unknown or legacy parameter (e.g. `ambiente`) is refused by the SDK.
     const environment = z.string().min(1).describe(`T3 environment where the thread/project lives (required; alias or environmentId): ${registros.map(r => r.alias).join(', ')}. IDs from one environment are not valid in another.`);
-    for (const action of projectAdmin ? [...ACTIONS, ...PROJECT_ACTIONS] : ACTIONS) server.registerTool(writeToolName(action), {
+    // Project tools only for a session whose consent includes them (older grants never do).
+    let granted = [];
+    if (projectAdmin) { try { granted = PROJECT_ACTIONS.filter(a => authority.check(principal.sid).grants?.environments?.some(e => e.actions.includes(a))); } catch {} }
+    for (const action of [...ACTIONS, ...granted]) server.registerTool(writeToolName(action), {
       description: PROJECT_DESCRIPTIONS[action] ? `${describe(action)} Chosen environment only.` : `${describe(action)} in the chosen environment; authorized by the connector's OAuth session (passkey sign-in), ${all ? 'all current and future projects of the consented environments' : 'limited to the projects approved at sign-in (restricted mode)'}; the work runs in full-access mode.`,
       inputSchema: z.strictObject({ environment, operationId: z.string(), input: schemaForAction(action) }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
@@ -269,7 +274,7 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
       inputSchema: z.strictObject({ environment, operationId: z.string() }),
       annotations: { readOnlyHint: true, destructiveHint: false },
     }, ({ environment: env, operationId }) => result(() => reconcile(principal, { environment: env, operationId })));
-    if (projectAdmin) server.registerTool('t3_contar_threads_projeto', {
+    if (granted.length) server.registerTool('t3_contar_threads_projeto', {
       description: 'Counts every live thread of one project: active, archived, without a run, and busy (active run or pending request). complete=false (total null) when the active and archived reads did not agree; never reported as zero.',
       inputSchema: z.strictObject({ environment, projectId: z.string().min(1) }),
       annotations: { readOnlyHint: true, destructiveHint: false },
