@@ -44,8 +44,9 @@ environment.
 7. **Workspace checked where the work runs.** Same rule as the prototype in every
    environment: an existing worktree must have a canonical path equal to an approved root.
    `realpath` runs where the thread executes: locally for the local environment, through
-   `ssh <host> realpath -e` for remote ones. Creating a new worktree is still refused
-   (`workspace_plan_required`).
+   `ssh <host> realpath -e` for remote ones. A new worktree (`workspaceStrategy` `worktree`
+   with `baseRef`, optional `branch` and `startFromOrigin`) is forwarded to T3, which creates it
+   from the project root; it was refused until 0.11.0.
 8. **Guarded reads and reconcile in the gate.** The separate read sidecar is gone: the
    relay has `read` and `reconcile` per environment, checking the lease before and after.
 

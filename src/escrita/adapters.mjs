@@ -110,7 +110,8 @@ export class Dispatcher {
   const roots=grant.projects.filter(p=>projectIds.includes(p.id)).flatMap(p=>p.workspaceRoots??[p.directory]).map(p=>resolve(p));
   let path;
   if(action==='thread.launch' && input.workspaceStrategy.type==='existing_worktree')path=input.workspaceStrategy.worktreePath;
-  if(action==='thread.launch' && input.workspaceStrategy.type==='worktree')throw new Error('workspace_plan_required');
+  // workspaceStrategy worktree ({baseRef, branch?, startFromOrigin?}) is forwarded as is: T3 creates the
+  // worktree from the project root (OrchestrationV2ThreadLaunchWorkspaceStrategy, 8ed276c2).
   if(action==='thread.metadata.update' && input.worktreePath!==undefined && input.worktreePath!==null)path=input.worktreePath;
   if(path!==undefined) {
    if(!path.startsWith('/') || resolve(path)!==path || !roots.includes(path))throw new Error('workspace_scope_denied');

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `thread.launch` accepts `workspaceStrategy` `{type: 'worktree', baseRef, branch?, startFromOrigin?}`
+  and forwards it to T3 as is (it was refused with `workspace_plan_required`); `root` and
+  `existing_worktree` (path still verified against an approved root) are unchanged.
 - OAuth (opt-in, `T3_CONNECTOR_OAUTH_NATIVE_TOOLS=1` with `PROJECTS=all`): thin wrappers over
   native T3 MCP tools the connector did not cover, under the native names: 10 reads and 8 writes
   (project create/update/clone, environment preferences, scheduled tasks). Native arguments and

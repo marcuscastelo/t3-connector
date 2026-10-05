@@ -40,6 +40,7 @@ function environment() {
       case 'scheduledTasks.delete': return { id: payload.id };
       case 'scheduledTasks.runNow': return { task: task(payload.id, 'p', { lastRunStatus: 'running', runCount: 1, threadId: 'launched' }) };
       case 'orchestration.searchThreads': return { matches: [{ threadId: 'tp', projectId: 'p', source: 'user', snippet: 's', messageCreatedAt: null }, { threadId: 'tq', projectId: 'q', source: 'assistant', snippet: 's', messageCreatedAt: ISO }] };
+      case 'orchestration.launchThread': return { threadId: payload.threadId, projection: {}, resumed: false };
       case 'vcs.listRefs': return { refs: [{ name: 'main', worktreePath: null }], isRepo: true, hasPrimaryRemote: true, nextCursor: null, totalCount: 1 };
       default: throw new Error(`unexpected ${method}`);
     }
@@ -230,4 +231,30 @@ test('native: a read-only sign-in can call the native reads but not the native w
   const denied = await f.write('t3_project_clone', { destinationPath: '/w/r', remoteUrl: 'u' }, 'r1');
   assert.equal(errorText(denied), "insufficient_scope: connector:write");
   assert.equal(f.e.sends.length, 0);
+});
+
+test('thread.launch forwards every workspaceStrategy as is: worktree (baseRef, branch?, startFromOrigin?), root and existing_worktree', async t => {
+  const f = await fixture(t);
+  const launch = (workspaceStrategy, op) => f.call('t3_escrever_thread_launch', { environment: 'local', operationId: op, input: { projectId: 'p', title: 'w', modelSelection: MODEL, workspaceStrategy } });
+  const cases = [
+    [{ type: 'worktree', baseRef: 'main' }, 'l1'],
+    [{ type: 'worktree', baseRef: 'origin/release', branch: 'feat/x', startFromOrigin: true }, 'l2'],
+    [{ type: 'worktree', baseRef: 'main', startFromOrigin: false }, 'l3'],
+    [{ type: 'root' }, 'l4'],
+    [{ type: 'root', branch: 'dev' }, 'l5'],
+    [{ type: 'existing_worktree', worktreePath: '/w/p' }, 'l6'],
+  ];
+  for (const [strategy, op] of cases) {
+    const r = await launch(strategy, op);
+    assert.notEqual(r.data.result.isError, true, `${op}: ${r.data.result.content[0].text}`);
+    const sent = f.e.sends.at(-1);
+    assert.equal(sent.method, 'orchestration.launchThread', op);
+    assert.deepEqual(sent.payload.workspaceStrategy, strategy, op);
+    assert.equal(sent.payload.projectId, 'p'); assert.equal(sent.payload.runtimeMode, 'full-access');
+  }
+  // Still refused: worktree without baseRef, unknown fields, and an existing worktree outside the approved roots.
+  assert.match(errorText(await launch({ type: 'worktree' }, 'b1')), /./);
+  assert.match(errorText(await launch({ type: 'worktree', baseRef: 'main', path: '/x' }, 'b2')), /./);
+  assert.match(errorText(await launch({ type: 'existing_worktree', worktreePath: '/elsewhere' }, 'b3')), /workspace_scope_denied/);
+  assert.equal(f.e.sends.length, cases.length);
 });

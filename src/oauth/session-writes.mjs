@@ -189,7 +189,7 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     });
     return { environment: { alias: c.registro.alias, environmentId: c.registro.environmentId }, ...await d.dispatch(identity(principal), principal.sid, { operationId, action, input }) };
   }
-  // A write refused before sending (e.g. thread_not_found, workspace_plan_required) is journaled
+  // A write refused before sending (e.g. thread_not_found, workspace_scope_denied) is journaled
   // `rejected` without a target, and Dispatcher.reconcile cannot answer for it
   // (reconciliation_target_unknown). For that case only, answer locally that nothing was sent,
   // after the same authority checks dispatch makes (active session of the same caller, grant for
