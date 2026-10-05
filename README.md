@@ -6,7 +6,7 @@ MCP Tunnel) read and, with explicit passkey approval, operate threads in
 several T3 environments.
 
 - **Read** (`t3-connector serve`): lists authorized projects and threads, reads state,
-  messages and the latest response, and waits a few seconds for a run to finish. It never
+  messages and the latest response, lists the provider instances of each environment, and waits a few seconds for a run to finish. It never
   creates, sends, approves, interrupts or changes threads, and only accepts tokens scoped
   to exactly `orchestration:read`.
 - **Write** (`t3-connector-write gate|bridge`): 42 thread actions, each with a mandatory
@@ -107,10 +107,13 @@ The original Portuguese subcommands and flags (`ambientes`, `diagnostico`, `--am
 Live smoke test, read-only, printing metadata only (never message text):
 
 ```sh
-SMOKE_THREAD_REMOTO=<id> [SMOKE_THREAD_ATIVA=<id>] [SMOKE_THREAD_FORA=<id>] npm run smoke
+SMOKE_THREAD_REMOTO=<id> [SMOKE_AMBIENTE_REMOTO=<alias>] [SMOKE_THREAD_ATIVA=<id>] [SMOKE_THREAD_FORA=<id>] npm run smoke
 ```
 
-It assumes environments named `local` and `remoto`, as in the example.
+It runs against the configuration in use (`T3_CONNECTOR_CONFIG` or the installed file) and
+takes the aliases from it: the `default` environment, and as the remote one
+`SMOKE_AMBIENTE_REMOTO` or else the first alias that is not the default. It needs at
+least two environments.
 
 ## Exposing the connector through an MCP tunnel
 
@@ -137,6 +140,8 @@ version), and refresh the tool list in the client.
    user and call again on a later turn. Do not chain waits in the same turn.
 4. **`needs_intervention`** (approval, question, plan) is not an end
    state. The connector only reports it; answering requires T3 itself.
+5. **Before choosing a provider or model**, call `t3_providers` in the target environment.
+   See [Provider instances](#provider-instances-t3_providers).
 
 ### Read tools
 
@@ -153,6 +158,7 @@ thread.
 | `t3_atencao` (attention) | `environment?` | threads that need intervention, or failed and were not settled |
 | `t3_thread` | `environment?`, `threadId`, `maxCharacters?` (200-6000, 1500) | thread summary, `pendingRequests`, `providerSession`, `latestRun`, `latestResponse`, `history` |
 | `t3_mensagens` (messages) | `environment?`, `threadId`, `limit?` (1-20, 6), `maxCharacters?` (100-4000, 800) | `messages` and `history.complete` |
+| `t3_providers` (provider instances) | `environment?`, `instanceId?` (exact, case-sensitive), `includeModels?` (include models, default false) | `source`, `total`, `providers` in T3 order, each with the T3 field names (see below) |
 | `t3_aguardar_thread` (wait) | **`environment`**, `threadId`, **`timeoutMs`** (1-5000), `runId?`, `includeLatestResponse?`, `maxCharacters?` | `runId`, `statusRun`, `state`, `terminal`, `timedOut`, `returnReason`, `pendingRequest`, `latestResponse?` |
 
 States (`state`, also the filter of `t3_threads`): `running`, `needs_intervention`,
@@ -297,6 +303,52 @@ terminal or intervention event, without polling. Reaching the deadline with an o
 state is a normal result (`timedOut: true`). It never acquires, renews or releases a lease
 or lock, and never interrupts the run.
 
+### Provider instances (`t3_providers`)
+
+Lists the provider instances of one environment from the source that feeds T3's
+Settings > Providers: the unary WebSocket RPC `server.getConfig`, field
+`ServerConfig.providers`, which T3 builds from its provider registry (configured
+`providerInstances`, default slots and unavailable instances). It is readable with the
+`orchestration:read` token; nothing is derived from threads, and the Orchestrator V2 shell
+carries no providers.
+
+- **Nothing is filtered or added.** Disabled, not installed, failing and unavailable
+  instances are returned in T3 order with `enabled`, `installed`, `status`
+  (`ready`, `warning`, `error`, `disabled`) and `availability` as T3 reports them. Fields
+  T3 omits stay absent.
+- **IDs are exact and per environment.** `instanceId`, `driver`, `displayName` and model
+  `slug`s are returned as received. The same `instanceId` can have another display name or
+  other models in another environment, so call it in the environment you will write to.
+  `instanceId` filters literally (case, underscores and hyphens count).
+- **Fields per item**, with T3's names: `instanceId`, `driver`, `displayName`, `enabled`,
+  `installed`, `status`, `availability`, `unavailableReason`, `message`, `version`,
+  `checkedAt`, `continuation`, `supportedRuntimeModes`,
+  `requiresNewThreadForModelChange`, `auth: {status}` and `models` (each T3
+  `ServerProviderModel` unchanged: `slug`, `name`, `isCustom`, `capabilities`, …). This is
+  a projection, not the whole `ServerProvider`: account e-mail and login URL, home and
+  skill paths, quota, slash commands, update details and the environment's settings are
+  left out because choosing an instance does not need them.
+- **Size.** By default only instances are listed (a few kB). With `includeModels: true`
+  the response grows to tens of kB per environment, so ask for models of the chosen
+  `instanceId` only.
+- **Freshness.** T3 serves its last provider check (`checkedAt`); the connector does not
+  ask it to probe again, which would require `orchestration:operate`.
+
+**Using it before a write.** `thread.launch`, `thread.model-selection.set`,
+`provider.switch` and `delegated_task.request` take
+`modelSelection: {instanceId, model, options?}`:
+
+1. `t3_providers {environment}` and pick the instance by `instanceId`
+   or `displayName` (ask the user if more than one fits).
+2. `t3_providers {environment, instanceId, includeModels: true}` and pick `model` from `models[].slug`.
+3. Optional `options` are `{id, value}` with `id` from
+   `models[].capabilities.optionDescriptors[].id` and `value` one of that descriptor's
+   `options[].id` (select) or a boolean.
+
+Copy the IDs exactly. The connector keeps no allowlist: whether an instance or model can
+run is decided by T3 when the write arrives, and `status`/`enabled` here are information,
+not a gate.
+
 ## Writes
 
 The write connector is a separate MCP server with its own process, tokens and tunnel.
@@ -343,6 +395,9 @@ are refused at start-up with the new name in the message.
    `operationId`.
 4. `reconciliation_required` means the result is uncertain: do not retry; call
    `t3_reconciliar_escrita` with the same `environment` and `operationId`.
+5. For `modelSelection`, take `instanceId` and `model` from the read tool `t3_providers`
+   in the same environment; see
+   [Using it before a write](#provider-instances-t3_providers).
 
 Write results carry `environment: {alias, environmentId}`. Routing errors:
 `environment_required`, `environment_unknown`, `environment_not_in_lease`,

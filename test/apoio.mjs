@@ -92,8 +92,8 @@ export function ambientesFalsos(dados = dadosPadrao(), { chamadas = [] } = {}) {
   });
 }
 
-export async function conectarMcp(ambientes, opcoesBusca) {
-  const servidor = criarServidor({ ambientes, opcoesBusca });
+export async function conectarMcp(ambientes, opcoesBusca, opcoesProviders) {
+  const servidor = criarServidor({ ambientes, opcoesBusca, opcoesProviders });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await servidor.connect(a);
   const cliente = new Client({ name: 'teste', version: '0' });

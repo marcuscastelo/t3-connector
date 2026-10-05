@@ -5,7 +5,11 @@ import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { criarPonteEscrita } from '../src/escrita/ponte-mcp.mjs';
-import { validarConfig } from '../src/config.mjs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { carregarConfig, validarConfig } from '../src/config.mjs';
 import { validarConfigEscrita } from '../src/escrita/config.mjs';
 import { ambientesFalsos, conectarMcp, dados, dadosPadrao, REMOTO } from './apoio.mjs';
 import { thread } from './fixtures.mjs';
@@ -153,6 +157,29 @@ test('config de leitura: só chaves em inglês; chave antiga é recusada com o n
     [{ environments: { local: { ...ambiente, ssh: { host: 'remoto', portaRemota: 4000 } } } }, /local: ssh\."portaRemota" foi renomeado para "remotePort"/],
   ];
   for (const [bruta, erro] of casos) assert.throws(() => validarConfig(bruta), erro);
+});
+
+test('config de leitura: o exemplo publicado e um arquivo no formato instalado carregam sem tradução', async () => {
+  const exemplo = await carregarConfig(fileURLToPath(new URL('../examples/config.json', import.meta.url)));
+  assert.deepEqual(exemplo.ambientes.map((a) => a.alias), ['local', 'remoto']);
+  assert.equal(exemplo.ambientes[1].ssh.portaRemota, 3773);
+  // Aliases quaisquer, como numa máquina real; nenhum nome de environment é especial.
+  const dir = await mkdtemp(path.join(tmpdir(), 't3-connector-config-'));
+  try {
+    const arquivo = path.join(dir, 'config.json');
+    await writeFile(arquivo, JSON.stringify({
+      default: 'mesa',
+      environments: {
+        mesa: { environmentId: 'env-mesa', url: 'http://127.0.0.1:3773', tokenFile: '~/.config/t3-connector/tokens/mesa.token', allowedProjects: ['p1'] },
+        servidor: { environmentId: 'env-servidor', ssh: { host: 'servidor', remotePort: 3774 }, tokenFile: '~/.config/t3-connector/tokens/servidor.token', allowedProjects: ['p2'] },
+      },
+    }));
+    const c = await carregarConfig(arquivo);
+    assert.equal(c.padrao, 'mesa');
+    assert.deepEqual(c.ambientes.map((a) => [a.alias, a.ssh?.portaRemota ?? null, a.projetosPermitidos]), [['mesa', null, ['p1']], ['servidor', 3774, ['p2']]]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('config de escrita: só chaves em inglês; allowlists continuam recusadas em qualquer idioma', () => {

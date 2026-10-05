@@ -13,6 +13,7 @@ import {
 import { ForaDoEscopo } from './ambientes.mjs';
 import { aguardarThread, TETO_MS } from './espera.mjs';
 import { buscarThreads, EntradaInvalida, PRAZO_AMBIENTE_MS, PRAZO_TOTAL_MS } from './busca-threads.mjs';
+import { lerProviders, resumoProvider } from './providers.mjs';
 import { assinatura, casaBusca, comparador, CursorInvalido, normalizar, paginar } from './paginacao.mjs';
 import { Cancelada, ErroT3 } from './t3.mjs';
 import { resumirPedidosRuntime } from './pedidos-runtime.mjs';
@@ -51,7 +52,7 @@ function erro(e) {
   return { content: [{ type: 'text', text: mensagem }], isError: true };
 }
 
-export function criarServidor({ ambientes, opcoesBusca = {} }) {
+export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {} }) {
   const servidor = new McpServer({ name: 't3-connector', version: VERSAO });
   const nomes = ambientes.registros.map((r) => r.alias).join(', ');
   const campoAmbiente = z.string().min(1).optional()
@@ -228,6 +229,32 @@ export function criarServidor({ ambientes, opcoesBusca = {} }) {
         return erro(e);
       }
     },
+  );
+
+  registrar(
+    't3_providers',
+    {
+      title: 'Provider instances of a T3 environment',
+      description:
+        'Lists the provider instances of one T3 environment from the same source as T3 Settings > Providers (`server.getConfig`), in T3 order and with nothing filtered: configured, default, disabled and unavailable instances all appear, with `enabled`, `installed`, `status` and `availability` as T3 reports them. ' +
+        'Call it before the write actions thread.launch, thread.model-selection.set, provider.switch and delegated_task.request: `modelSelection.instanceId` is the exact `instanceId` here and `modelSelection.model` is a `models[].slug` of that instance; option ids and values come from `models[].capabilities.optionDescriptors`. ' +
+        'IDs, display names and models belong to this environment only and are returned exactly as T3 sends them (keep case, underscores and hyphens); the same instanceId can have another display name or other models elsewhere. ' +
+        'Each item keeps the T3 field names, limited to identity, state, runtime modes and models; `auth` carries only `status`. ' +
+        'By default only the instances are listed; models with capabilities are large (tens of kB per environment), so pass `includeModels: true` with the chosen `instanceId`. Read-only.',
+      forma: {
+        environment: campoAmbiente,
+        instanceId: z.string().min(1).optional().describe('Return only this instance; compared literally, case-sensitive'),
+        includeModels: z.boolean().optional().describe('Include `models` with capabilities; default false. Use it with `instanceId`'),
+      },
+      annotations: SO_LEITURA,
+    },
+    noAmbiente(async ({ r, cliente, signal, instanceId, includeModels = false }) => {
+      const todos = await lerProviders(cliente, { environmentIdEsperado: r.environmentId, signal, ...opcoesProviders });
+      const providers = todos
+        .filter((p) => instanceId === undefined || p.instanceId === instanceId)
+        .map((p) => resumoProvider(p, { incluirModelos: includeModels }));
+      return { source: 'server.getConfig', total: providers.length, providers };
+    }),
   );
 
   registrar(
