@@ -42,9 +42,11 @@ try {
   const files = info.files.map((f) => f.path).sort();
   const allowed = [/^bin\/[\w-]+\.mjs$/, /^src\/((escrita|oauth)\/)?[\w-]+\.mjs$/, /^web\/[\w-]+\.(js|html)$/,
     /^examples\/config\.json$/, /^examples\/oauth-all-projects\.env$/, /^docs\/adr\/\d{4}-[\w-]+\.md$/,
-    /^(README|SECURITY|CHANGELOG)\.md$/, /^LICENSE$/, /^package\.json$/];
+    /^(README|SECURITY|CHANGELOG)\.md$/, /^LICENSE$/, /^package\.json$/,
+    // Shared MCP plumbing (packages/mcp-connector-kit), bundled so the release stays one artifact.
+    /^node_modules\/mcp-connector-kit\/(index\.mjs|package\.json|README\.md|LICENSE)$/];
   for (const f of files) if (!allowed.some((r) => r.test(f))) fail(`file outside the allowlist: ${f}`);
-  for (const f of ['bin/t3-connector.mjs', 'bin/t3-connector-write.mjs', 'bin/t3-connector-oauth.mjs', 'LICENSE', 'README.md', 'SECURITY.md', 'web/aprovacao.html'])
+  for (const f of ['bin/t3-connector.mjs', 'bin/t3-connector-write.mjs', 'bin/t3-connector-oauth.mjs', 'LICENSE', 'README.md', 'SECURITY.md', 'web/aprovacao.html', 'node_modules/mcp-connector-kit/index.mjs'])
     if (!files.includes(f)) fail(`required file missing: ${f}`);
   if (info.name !== 't3-connector') fail(`package name ${info.name}, expected t3-connector`);
   if (info.version !== pkg.version) fail(`artifact version ${info.version} ≠ package.json ${pkg.version}`);
