@@ -258,3 +258,19 @@ test('thread.launch forwards every workspaceStrategy as is: worktree (baseRef, b
   assert.match(errorText(await launch({ type: 'existing_worktree', worktreePath: '/elsewhere' }, 'b3')), /workspace_scope_denied/);
   assert.equal(f.e.sends.length, cases.length);
 });
+
+
+test('OAuth public schema and dispatch expose native runtime modes with backward-compatible omission', async t => {
+  const f = await fixture(t);
+  const list = await f.list();
+  for (const action of ['thread_launch', 'thread_runtime_mode_set', 'delegated_task_request']) {
+    const tool = list.find(x => x.name === `t3_escrever_${action}`);
+    const input = tool.inputSchema.properties.input;
+    assert.deepEqual(input.properties.runtimeMode.enum, ['approval-required', 'auto-accept-edits', 'auto', 'full-access']);
+    assert.ok(!input.required.includes('runtimeMode'));
+    assert.equal(input.properties.runtimeMode.default, 'full-access');
+  }
+  const r = body(await f.write('t3_escrever_thread_launch', {projectId:'p',title:'restricted run',modelSelection:MODEL,workspaceStrategy:{type:'worktree',baseRef:'main'},runtimeMode:'approval-required'}, 'restricted-launch'));
+  assert.equal(r.state, 'completed');
+  assert.equal(f.e.sends[0].payload.runtimeMode, 'approval-required');
+});

@@ -54,7 +54,7 @@ export function criarPonteEscrita({relay,aliases=[],approvalOrigin}) {
   :action==='runtime-request.answer'?'Answers a pending user_input runtime request using requestId and answers keyed by question ID from t3_thread.pendingRequests; thread.send does NOT answer it.'
   :action==='runtime-request.approve'?'Responds to a pending approval runtime request using requestId and decision from t3_thread.pendingRequests; user_input requires runtime-request.answer instead.'
   :action;
- for(const action of ACTIONS)registrar(`t3_escrever_${action.replaceAll('.','_').replaceAll('-','_')}`,{description:`${descricaoAcao(action)} in the chosen environment; requires a 60-min passkey-approved lease that includes this environment; the work runs in full-access mode.`,forma:{leaseId:z.string(),environment,operationId:z.string(),input:schemaForAction(action)},annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:false}},
+ for(const action of ACTIONS)registrar(`t3_escrever_${action.replaceAll('.','_').replaceAll('-','_')}`,{description:`${descricaoAcao(action)} in the chosen environment; requires a 60-min passkey-approved lease that includes this environment; authorization permits full-access; actions exposing runtimeMode accept an explicit T3 execution mode (default full-access).`,forma:{leaseId:z.string(),environment,operationId:z.string(),input:schemaForAction(action)},annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:false}},
   ({leaseId,environment:amb,operationId,input})=>resultado(async()=>comAmbiente(await relay({op:'dispatch',action,leaseId,ambiente:amb,operationId,input}))));
 
  const cursor=z.string().min(1).optional();

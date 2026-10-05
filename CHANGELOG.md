@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `thread.launch`, `delegated_task.request` and `thread.runtime-mode.set` now accept the four
+  native T3 `runtimeMode` values. Omitting the field preserves the existing `full-access` default.
+  Tool descriptions and the consent text now present `full-access` as the authorization ceiling.
+
 ## 0.11.0
 
 - `thread.launch` accepts `workspaceStrategy` `{type: 'worktree', baseRef, branch?, startFromOrigin?}`

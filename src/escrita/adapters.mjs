@@ -7,6 +7,7 @@ import { PROJECT_ACTIONS, PROJECT_SCHEMAS, isProjectAction, guardProjectDelete, 
 import { NATIVE_WRITES, NATIVE_WRITE_ACTIONS, NativeToolError, NativeRpcError } from './native.mjs';
 const str=z.string().trim().min(1).max(1024), id=str;
 const model=z.object({instanceId:str.describe('Exact ID of the provider instance configured in the chosen environment, as listed by the read tool t3_providers (instanceId); keep case, underscores and hyphens, for example claudeAgent_custom.'),model:str.describe('Exact model ID for that instance (models[].slug in t3_providers), including custom models, for example claude-opus-5-5. The connector has no model enum or allowlist; availability is decided by T3 in that environment.'),options:z.array(z.object({id:str,value:z.union([z.string(),z.boolean()])}).strict()).optional()}).strict();
+const runtimeMode=z.enum(['approval-required','auto-accept-edits','auto','full-access']).default('full-access').describe('T3 execution mode; omitted preserves the connector default full-access. Supported modes are decided by the selected provider in T3.');
 const base={threadId:id};
 const specs=new Map();
 function command(action,type,fields={},fixed={},refs=['threadId']) {
@@ -19,7 +20,7 @@ command('thread.auto-settle.set','thread.auto-settle.set',{enabled:z.boolean()})
 for(const suffix of ['pin.reorder','active.reorder']) command(`thread.${suffix}`,`thread.${suffix}`,{orderKey:str});
 command('thread.visit','thread.visit',{visitedAt:z.iso.datetime()});
 command('thread.title','thread.metadata.update',{title:str});
-command('thread.runtime-mode.set','thread.runtime-mode.set',{}, {runtimeMode:'full-access'});
+command('thread.runtime-mode.set','thread.runtime-mode.set',{runtimeMode});
 command('thread.interaction-mode.set','thread.interaction-mode.set',{interactionMode:z.enum(['default','plan'])});
 command('thread.model-selection.set','thread.model-selection.set',{modelSelection:model});
 command('provider.switch','provider.switch',{modelSelection:model});
@@ -39,7 +40,7 @@ const workspace=z.discriminatedUnion('type',[
  z.object({type:z.literal('root'),branch:str.optional()}).strict(),
  z.object({type:z.literal('existing_worktree'),worktreePath:str,branch:str.optional()}).strict(),
  z.object({type:z.literal('worktree'),baseRef:str,branch:str.optional(),startFromOrigin:z.boolean().optional()}).strict()]);
-specs.set('thread.launch',{method:'orchestration.launchThread',refs:[],schema:z.object({projectId:id,title:str,modelSelection:model,workspaceStrategy:workspace,text:z.string().max(100000).optional()}).strict(),encode:p=>{const {text,...rest}=p;return {...rest,commandId:randomUUID(),threadId:randomUUID(),runtimeMode:'full-access',interactionMode:'default',...(text!==undefined?{initialMessage:{messageId:randomUUID(),text,attachments:[]}}:{})};}});
+specs.set('thread.launch',{method:'orchestration.launchThread',refs:[],schema:z.object({projectId:id,title:str,modelSelection:model,workspaceStrategy:workspace,runtimeMode,text:z.string().max(100000).optional()}).strict(),encode:p=>{const {text,...rest}=p;return {...rest,commandId:randomUUID(),threadId:randomUUID(),interactionMode:'default',...(text!==undefined?{initialMessage:{messageId:randomUUID(),text,attachments:[]}}:{})};}});
 // One branch per mode: tools/list carries conditional requirements, not just runtime refinements.
 export const SEND_DESCRIPTIONS=Object.freeze({
  start_immediately:'Starts a new run when there is no active run to preserve. Does not correct or interrupt a current run. If a run is active, T3 may turn this into a queued message: read t3_thread first; to correct the current run use steer_active with targetRunId.',
@@ -64,7 +65,7 @@ command('thread.pull-request.unlink','thread.pull-request.unlink',{host:str,repo
 const sourcePoint=z.discriminatedUnion('type',[z.object({type:z.literal('latest_stable')}).strict(),z.object({type:z.literal('run'),runId:id}).strict(),z.object({type:z.literal('checkpoint'),checkpointId:id}).strict()]);
 specs.set('thread.fork',{method:'orchestration.dispatchCommand',refs:['sourceThreadId'],schema:z.object({sourceThreadId:id,sourcePoint,title:str.optional()}).strict(),encode:p=>({type:'thread.fork',commandId:randomUUID(),targetThreadId:randomUUID(),createdBy:'user',creationSource:'mcp',...p})});
 specs.set('thread.merge_back',{method:'orchestration.dispatchCommand',refs:['sourceThreadId','targetThreadId'],schema:z.object({sourceThreadId:id,targetThreadId:id,sourcePoint}).strict(),encode:p=>({type:'thread.merge_back',commandId:randomUUID(),createdBy:'user',creationSource:'mcp',...p})});
-specs.set('delegated_task.request',{method:'orchestration.dispatchCommand',refs:['parentThreadId'],schema:z.object({parentThreadId:id,parentRunId:id,parentNodeId:id,task:str,title:str.optional(),modelSelection:model,completionWake:z.enum(['always','settled_only']).optional()}).strict(),encode:p=>({type:'delegated_task.request',commandId:randomUUID(),createdBy:'user',creationSource:'mcp',runtimeMode:'full-access',interactionMode:'default',...p})});
+specs.set('delegated_task.request',{method:'orchestration.dispatchCommand',refs:['parentThreadId'],schema:z.object({parentThreadId:id,parentRunId:id,parentNodeId:id,task:str,title:str.optional(),modelSelection:model,runtimeMode,completionWake:z.enum(['always','settled_only']).optional()}).strict(),encode:p=>({type:'delegated_task.request',commandId:randomUUID(),createdBy:'user',creationSource:'mcp',interactionMode:'default',...p})});
 for(const [action,fields] of [
  ['delegated_task.wake-policy',{completionWake:z.enum(['always','settled_only'])}],
  ['delegated_task.completion-delivery.acknowledge',{observedByRunId:id.nullable()}],
