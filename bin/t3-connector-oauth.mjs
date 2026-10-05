@@ -66,7 +66,7 @@ async function serve() {
   const writeProjects = parseWriteProjects(process.env.T3_CONNECTOR_OAUTH_WRITE_PROJECTS);
   if (writeProjects) for (const alias of writeProjects.keys()) if (!writeConfig?.ambientes.some(a => a.alias === alias)) throw new Error(`T3_CONNECTOR_OAUTH_WRITE_PROJECTS: unknown write environment ${alias}`);
   const envs = `read ${readConfig.ambientes.map(a => a.alias).join(', ')}; ${writeConfig ? `write ${writeConfig.ambientes.map(a => a.alias).join(', ')}${writeProjects ? ` (projects limited: ${[...writeProjects].map(([a, ids]) => `${a}=${ids.size}`).join(', ')})` : ''}` : 'no writes (T3_CONNECTOR_OAUTH_WRITE_CONFIG unset)'}`;
-  await start({ config, tools: t3Tools({ readConfig, writeConfig, writeProjects, projectPolicy: config.projectPolicy, projectAdmin: config.projectAdmin }), serverName: 't3-connector', banner: envs });
+  await start({ config, tools: t3Tools({ readConfig, writeConfig, writeProjects, projectPolicy: config.projectPolicy, projectAdmin: config.projectAdmin, nativeTools: config.nativeTools }), serverName: 't3-connector', banner: envs });
 }
 
 const commands = { serve, rehearsal };

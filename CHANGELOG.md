@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- OAuth (opt-in, `T3_CONNECTOR_OAUTH_NATIVE_TOOLS=1` with `PROJECTS=all`): thin wrappers over
+  native T3 MCP tools the connector did not cover, under the native names: 10 reads and 8 writes
+  (project create/update/clone, environment preferences, scheduled tasks). Native arguments and
+  results are kept and typed T3 errors are returned as answered. The calling context is an
+  explicit `threadId` or `projectId`. Attachments, thread_read, thread PR listing and
+  thread_update are not wrapped (reasons in docs/oauth-session.md).
+
 - OAuth (opt-in, `T3_CONNECTOR_OAUTH_PROJECT_ADMIN=1` with `PROJECTS=all`): full project thread count
   (`t3_contar_threads_projeto`: active + archived, consistent sequence, never a partial zero), delete
   of an empty project (`force:false`), and forced delete only with `force: true`, confirmation and

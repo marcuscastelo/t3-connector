@@ -79,6 +79,9 @@ export function criarConexaoEscrita(registro, {
   const clienteLeitura = {
     shell: (o) => lerComRetry((c) => c.shell(o)),
     thread: (id, o) => lerComRetry((c) => c.thread(id, o)),
+    threadCompleto: (id, o) => lerComRetry((c) => c.threadCompleto(id, o)),
+    projetos: (o) => lerComRetry((c) => c.projetos(o)),
+    ambiente: (o) => lerComRetry((c) => c.ambiente(o)),
   };
 
   async function prepararSocket() {
@@ -126,9 +129,16 @@ export function criarConexaoEscrita(registro, {
     cliente: async () => clienteLeitura,
     adapter: {
       prepare: prepararSocket,
-      invoke: (metodo, payload) => {
+      invoke: (metodo, payload, opcoes) => {
         if (!rpc?.available) throw new Error('ambiente_indisponivel');
-        return rpc.invoke(metodo, payload);
+        return rpc.invoke(metodo, payload, opcoes);
+      },
+      // Native-tool reads and preflight (native.mjs): HTTP GETs and typed-error RPCs.
+      native: {
+        rpc: async (metodo, payload) => (await prepararSocket()).invoke(metodo, payload, { nativeErrors: true }),
+        thread: (id) => clienteLeitura.threadCompleto(id),
+        projects: () => clienteLeitura.projetos(),
+        environment: () => clienteLeitura.ambiente(),
       },
       receipt: (r) => projectReceipt(r) ?? ('threadId' in r ? { threadId: r.threadId, resumed: r.resumed } : { sequence: r.sequence }),
       // Full thread count of one project: HTTP shell (active) + WS archived snapshot, same sequence.

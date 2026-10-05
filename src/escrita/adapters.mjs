@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { digest, grantDoAmbiente } from './gate.mjs';
 import { exigirIdentidade } from './identidade.mjs';
 import { PROJECT_ACTIONS, PROJECT_SCHEMAS, isProjectAction, guardProjectDelete, lockProject } from './project-admin.mjs';
+import { NATIVE_WRITES, NATIVE_WRITE_ACTIONS, NativeToolError, NativeRpcError } from './native.mjs';
 const str=z.string().trim().min(1).max(1024), id=str;
 const model=z.object({instanceId:str.describe('Exact ID of the provider instance configured in the chosen environment, as listed by the read tool t3_providers (instanceId); keep case, underscores and hyphens, for example claudeAgent_custom.'),model:str.describe('Exact model ID for that instance (models[].slug in t3_providers), including custom models, for example claude-opus-5-5. The connector has no model enum or allowlist; availability is decided by T3 in that environment.'),options:z.array(z.object({id:str,value:z.union([z.string(),z.boolean()])}).strict()).optional()}).strict();
 const base={threadId:id};
@@ -75,7 +76,9 @@ export const INVENTORY=Object.freeze([...specs].map(([action,s])=>({action,rpc:s
 // Project actions are opt-in (OAuth all + explicit flag): outside ACTIONS, so existing catalogs,
 // configs and consents never gain them by default.
 for(const action of PROJECT_ACTIONS) specs.set(action,{method:'projects.mutate',refs:[],schema:PROJECT_SCHEMAS[action],encode:p=>({type:'project.delete',commandId:randomUUID(),projectId:p.projectId,force:action==='project.delete-force'})});
-export const ALL_ACTIONS=Object.freeze([...ACTIONS,...PROJECT_ACTIONS]);
+// Native-tool wrappers (native.mjs): opt-in too; payload built right before the send.
+for(const action of NATIVE_WRITE_ACTIONS) specs.set(action,{native:true,refs:NATIVE_WRITES[action].refs??[],schema:NATIVE_WRITES[action].schema,build:NATIVE_WRITES[action].build,result:NATIVE_WRITES[action].result});
+export const ALL_ACTIONS=Object.freeze([...ACTIONS,...PROJECT_ACTIONS,...NATIVE_WRITE_ACTIONS]);
 export function schemaForAction(action) {const s=specs.get(action);if(!s)throw new Error('action_unavailable');return s.schema;}
 export function parseAction(action,input) {
  const s=specs.get(action);if(!s) throw new Error('action_unavailable');
@@ -129,7 +132,7 @@ export class Dispatcher {
   const initial={hash,state:'preparing',action,operationId,environmentId:this.environmentId,destination:this.destination};
   const owned=this.#store('reserve',key,initial);
   const old=owned?null:this.#store('get',key);
-  if(old) {if(old.hash!==hash) throw new Error('operation_conflict');if(old.target)(this.authorizeRecorded??((target)=>this.gate.check(identity,leaseId,target)))(old.target);return {state:old.state,operationId,reconciliationRequired:old.state!=='completed',...(isProjectAction(action)&&old.receipt?{receipt:old.receipt,...(old.postCheck??{})}:{})};}
+  if(old) {if(old.hash!==hash) throw new Error('operation_conflict');if(old.target)(this.authorizeRecorded??((target)=>this.gate.check(identity,leaseId,target)))(old.target);return {state:old.state,operationId,reconciliationRequired:!['completed','failed'].includes(old.state),...((isProjectAction(action)||parsed.spec.native)&&old.receipt?{receipt:old.receipt,...(old.postCheck??{})}:{}),...(old.error?{error:old.error}:{})};}
   if(!owned)throw new Error('journal_failed');
   let release=null;
   try {
@@ -139,10 +142,10 @@ export class Dispatcher {
    if(PROJECT_SCOPED.has(action)) release=await lockProject(JSON.stringify([this.environmentId,[...projects].sort()]));
    await this.#workspace(grant,[...projects],action,parsed.input);
    const target={environmentId:this.environmentId,destination:this.destination,projectIds:[...projects],action};
-   const payload=parsed.spec.encode(parsed.input);
    // Stable commandId: T3 replays the receipt of a command it already committed.
-   if(action==='thread.send'||isProjectAction(action)) { const h=key.slice(0,32); payload.commandId=`${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`; if(action==='thread.send')payload.messageId=payload.commandId; }
-   const payloadIds={commandId:payload.commandId,threadId:payload.threadId,messageId:payload.messageId};
+   const h=key.slice(0,32), stableId=`${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+   let method=parsed.spec.method, payload=parsed.spec.native?null:parsed.spec.encode(parsed.input);
+   if(action==='thread.send'||isProjectAction(action)) { payload.commandId=stableId; if(action==='thread.send')payload.messageId=payload.commandId; }
    // Conexão do environment aberta ainda em 'preparing' (falha aqui não enviou nada) e antes
    // da checagem final: entre a checagem e o envio não há await.
    if(this.adapter.prepare) await this.adapter.prepare();
@@ -151,9 +154,15 @@ export class Dispatcher {
    // Last read before the send: a count taken before the target validation could be stale.
    // The native force:false refusal still applies; the cross-client window remains T3's.
    if(isProjectAction(action)) guardProjectDelete(action,parsed.input,await this.#occupancy(parsed.input.projectId));
+   // Native wrappers read what the native handler reads (e.g. the existing task) last, then build.
+   if(parsed.spec.native) {
+    if(!this.adapter.native) throw new Error('native_unavailable');
+    ({method,payload}=await parsed.spec.build({input:parsed.input,native:this.adapter.native,commandId:stableId}));
+   }
+   const payloadIds={commandId:payload.commandId,threadId:payload.threadId,messageId:payload.messageId};
    this.#store('put',key,{...initial,state:'uncertain',target,payloadIds});
-   const result=await this.gate.dispatch(identity,leaseId,{environmentId:this.environmentId,destination:this.destination,projectIds:[...projects],action},()=>this.adapter.invoke(parsed.spec.method,payload),operationId);
-   const done={...initial,state:'completed',target,payloadIds,receipt:this.adapter.receipt(result)};
+   const result=await this.gate.dispatch(identity,leaseId,{environmentId:this.environmentId,destination:this.destination,projectIds:[...projects],action},()=>this.adapter.invoke(method,payload,parsed.spec.native?{nativeErrors:true}:undefined),operationId);
+   const done={...initial,state:'completed',target,payloadIds,receipt:parsed.spec.native?await this.#nativeResult(parsed.spec,{raw:result,method,payload,input:parsed.input}):this.adapter.receipt(result)};
    this.#store('put',key,done);
    if(!isProjectAction(action)) return {state:'completed',operationId,receipt:done.receipt};
    // The post-check is evidence: kept with the record so a replay returns it too.
@@ -162,6 +171,12 @@ export class Dispatcher {
    return {state:'completed',operationId,receipt:done.receipt,...postCheck};
   } catch(error) {
    const record=this.#store('get',key);
+   // A native refusal: nothing sent (built before the send) or a typed answer from T3 (it refused).
+   // Neither is uncertain: no reconciliation, no fail-closed of the sessions.
+   if(error instanceof NativeToolError || error instanceof NativeRpcError) {
+    this.#store('put',key,{...record,state:record.state==='preparing'?'rejected':'failed',error:error.native});
+    throw error;
+   }
    if(record.state!=='preparing') this.gate.close();
    // No blind retry even if transport or audit failed. Reconciliation is read-only.
    this.#store('put',key,{...record,state:record.state==='preparing'?'rejected':'uncertain'});
@@ -169,6 +184,12 @@ export class Dispatcher {
    if(record.state==='preparing') throw new Error(RECUSAS.test(error.message)?error.message:'dispatch_rejected');
    throw new Error('reconciliation_required');
   } finally {release?.();}
+ }
+ // The native result is a projection of what T3 answered (plus a read for createNew). It cannot
+ // fail the completed operation: on a projection failure the raw answer is kept.
+ async #nativeResult(spec,args) {
+  if(!spec.result) return args.raw;
+  try {return await spec.result({...args,native:this.adapter.native});} catch {return {raw:args.raw,resultUnavailable:true};}
  }
  async #occupancy(projectId) {
   if(!this.adapter.occupancy) throw new Error('project_count_unavailable');

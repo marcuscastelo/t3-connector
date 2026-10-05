@@ -84,6 +84,8 @@ export function criarCliente({ url, token, timeoutMs = 15000, fetchImpl = fetch 
     sessao: (o) => pedir('/api/auth/session', o),
     projetos: (o) => pedir('/api/projects', o),
     shell: (o) => pedir('/api/orchestration/shell', { ...o, orquestracao: true }),
+    // Full snapshot {snapshotSequence, projection} (orchestration-v2/http.ts getThreadSnapshot).
+    threadCompleto: (threadId, o) => pedir(`/api/orchestration/threads/${encodeURIComponent(threadId)}`, { ...o, orquestracao: true }),
     thread: (threadId, o) =>
       pedir(`/api/orchestration/threads/${encodeURIComponent(threadId)}/bounded`, { ...o, orquestracao: true }),
     ticketWs: async (o) => (await pedir('/api/auth/websocket-ticket', { ...o, metodo: 'POST' })).ticket,

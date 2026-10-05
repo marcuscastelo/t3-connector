@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { NativeRpcError } from './native.mjs';
 // Effect RPC framing from installed T3 8ed276c2 client-runtime/rpc/session.test.ts.
 // This module DOES NOT connect, pair, read a token, authenticate, or publish a route.
 // A future isolated bootstrap must supply the authenticated, already-open socket.
@@ -13,6 +14,10 @@ const RESULTS={
  'projects.mutate':r=>project.parse(r),
  'orchestration.getArchivedShellSnapshot':r=>archived.parse(r),
 };
+// Native-tool RPCs (see native.mjs). T3 validates their payloads; the result must be an object
+// (scheduledTasks.delete answers {id}).
+const object=z.object({}).passthrough();
+for(const m of ['projects.createNew','sourceControl.cloneRepository','server.getSettings','server.updateSettings','orchestration.searchThreads','vcs.listRefs','scheduledTasks.list','scheduledTasks.upsert','scheduledTasks.delete','scheduledTasks.runNow']) RESULTS[m]=r=>object.parse(r);
 export class StagingRpcTransport {
  #pending=new Map(); #next=1; #closed=false;
  constructor({socket,onFailure,timeoutMs=10000,maxPending=64,allowLoopback=false}) {
@@ -23,7 +28,9 @@ export class StagingRpcTransport {
   socket.addEventListener('message',event=>this.#receive(event.data));
   socket.addEventListener('close',()=>this.fail());socket.addEventListener('error',()=>this.fail());
  }
- invoke(method,payload) {
+ // nativeErrors: a typed T3 failure (Exit Failure, cause Fail with a tagged error) rejects that call
+ // with NativeRpcError and keeps the socket; without it any failure is uncertain (fail closed).
+ invoke(method,payload,{nativeErrors=false}={}) {
   if(!RESULTS[method]) throw new Error('rpc_unavailable');
   if(this.#closed || this.socket.readyState!==1) throw new Error('control_socket_closed');
   if(this.#pending.size>=this.maxPending) throw new Error('too_many_dispatches');
@@ -31,7 +38,7 @@ export class StagingRpcTransport {
   // send is synchronous. No readiness wait or reconnect can outlive the gate check.
   return new Promise((resolve,reject)=>{
    const timer=setTimeout(()=>this.fail(),this.timeoutMs);
-   this.#pending.set(id,{resolve,reject,timer,method});
+   this.#pending.set(id,{resolve,reject,timer,method,nativeErrors});
    try {this.socket.send(JSON.stringify({_tag:'Request',id,tag:method,payload,headers:[]}));}
    catch {this.fail();}
   });
@@ -44,7 +51,16 @@ export class StagingRpcTransport {
    if(frame._tag!=='Exit' || typeof frame.requestId!=='string') throw new Error();
    const pending=this.#pending.get(frame.requestId);
    if(!pending) return; // A late/duplicate response never causes a new invocation.
-   if(frame.exit?._tag!=='Success') {this.fail();return;}
+   if(frame.exit?._tag!=='Success') {
+    const error=pending.nativeErrors&&frame.exit?._tag==='Failure'&&Array.isArray(frame.exit.cause)&&frame.exit.cause.length===1&&frame.exit.cause[0]?._tag==='Fail'?frame.exit.cause[0].error:null;
+    if(error&&typeof error._tag==='string') {
+     const {_tag,message,...fields}=error;
+     this.#pending.delete(frame.requestId);clearTimeout(pending.timer);
+     pending.reject(new NativeRpcError(_tag,typeof message==='string'?message.slice(0,2000):'',Object.fromEntries(Object.entries(fields).filter(([,v])=>['string','number','boolean'].includes(typeof v)))));
+     return;
+    }
+    this.fail();return;
+   }
    const result=RESULTS[pending.method](frame.exit.value);
    this.#pending.delete(frame.requestId);clearTimeout(pending.timer);pending.resolve(result);
   } catch {this.fail();}

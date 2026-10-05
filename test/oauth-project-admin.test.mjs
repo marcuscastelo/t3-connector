@@ -191,7 +191,7 @@ test('project admin: off by default; opt-in tools, consent text and config valid
   assert.match(on.s.view.data.writes.consent, /deleting projects/);
   assert.equal(listOn.length - listOff.length, 3);
   // Existing catalogs are untouched: ACTIONS has no project action.
-  assert.ok(!ACTIONS.some(a => PROJECT_ACTIONS.includes(a))); assert.deepEqual(ALL_ACTIONS.slice(-2), PROJECT_ACTIONS);
+  assert.ok(!ACTIONS.some(a => PROJECT_ACTIONS.includes(a))); assert.ok(PROJECT_ACTIONS.every(a => ALL_ACTIONS.includes(a)));
   const base = { T3_CONNECTOR_OAUTH_ISSUER: 'https://c.example' };
   assert.equal(loadOAuthConfig(base).projectAdmin, false);
   assert.equal(loadOAuthConfig({ ...base, T3_CONNECTOR_OAUTH_PROJECTS: 'all', T3_CONNECTOR_OAUTH_PROJECT_ADMIN: '1' }).projectAdmin, true);

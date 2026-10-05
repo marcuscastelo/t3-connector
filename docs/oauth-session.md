@@ -219,6 +219,55 @@ keeps the read `allowedProjects` ACL and the write inventory frozen at sign-in. 
 future-project access. Setting this variable with `all` is a boot error. The stdio ACL validator,
 Ponte gate, lease TTL and `grantFromInventory` snapshot remain unchanged.
 
+#### Native T3 tools (opt-in)
+
+`T3_CONNECTOR_OAUTH_NATIVE_TOOLS=1` (only with `T3_CONNECTOR_OAUTH_PROJECTS=all`) adds thin
+wrappers over native T3 MCP tools that the connector did not cover (inventory:
+`INVENTARIO-MCP-NATIVO.md`, T3 8ed276c2). They keep the native names, arguments and result shapes;
+T3 validates the semantics and its typed errors come back as `<ErrorTag>: <message>`. As with
+project deletion, they are listed and callable only for a session consented with them.
+
+- Reads (`connector:read`): `t3_environment_read`, `t3_project_read`, `t3_thread_configuration`,
+  `t3_thread_transfers`, `t3_queue_list`, `t3_queue_read`, `t3_thread_search`,
+  `t3_worktree_status`, `t3_worktree_list`, `list_scheduled_tasks`. Arguments are the native ones
+  plus `environment`.
+- Writes (`connector:write`): `t3_project_create`, `t3_project_update`, `t3_project_clone`,
+  `t3_environment_preferences_update`, `schedule_task`, `update_scheduled_task`,
+  `delete_scheduled_task`, `run_scheduled_task_now`. Arguments are
+  `{environment, operationId, input}`, where `input` holds the native arguments, journaled like any
+  write.
+
+Remote differences from the native tools:
+
+- **Calling context.** The native "calling thread/project" is an explicit `threadId` (queue,
+  configuration, transfers, worktree, `schedule_task`) or `projectId` (scheduler list, update,
+  delete, run now). `t3_thread_search` filters by `projectId` only when given.
+- **Authorization.** Native caller guards (a live full-access/default thread) are replaced by the
+  OAuth consent and the live project inventory of the environment. Project create/clone and
+  preferences are environment-scoped.
+- **Idempotency.** Where T3 accepts a `commandId` (project create/update, schedule create), it is
+  derived from the operation, so a repeated operation is replayed by T3 and the journal. Native
+  calls without a key (createNew, clone, runNow, settings, scheduler update/delete) are deduped
+  only by the journal.
+- **Errors.** A typed T3 refusal after the send is final (`failed`): no reconciliation and no
+  session teardown. An untyped failure stays uncertain and fails closed, as for every other write.
+- **Results.** Results are the native projections of what T3 answered. A title-only
+  `t3_project_create` reads the project list afterwards to return the full Project.
+- **Run state.** `run_scheduled_task_now` starts a new manual run on every call. Completion means
+  the scheduler bookkeeping ran, not that the provider finished.
+
+Not wrapped, with the reason:
+
+- `t3_attachment_*` and `t3_thread_send_attachments`: the bytes go to the T3 origin, which a
+  remote client cannot reach.
+- `t3_thread_read` and `list_thread_pull_requests`: their results are server-side projections, so
+  a remote copy would be a reimplementation, not a thin wrapper.
+- `t3_thread_update`: rename and regenerate are covered by `thread.metadata.update`; the legacy PR
+  link branch's result is not available atomically over WS.
+- `t3_thread_launch` and `t3_project_delete`: covered by existing actions.
+- Local-session, preview and device tools: out of scope.
+- Moving or reassigning a thread: there is no native primitive.
+
 #### Project deletion (opt-in)
 
 `T3_CONNECTOR_OAUTH_PROJECT_ADMIN=1` (only with `T3_CONNECTOR_OAUTH_PROJECTS=all`; any other value
@@ -370,6 +419,7 @@ Guarantees:
 | `T3_CONNECTOR_OAUTH_WRITE_CONFIG` | unset | Path to a write config (`write.json` format). Unset: no write tools. |
 | `T3_CONNECTOR_OAUTH_PROJECTS` | `restricted` | `all`: read/write consent for all current and future projects of configured environments, with live inventory per call. Ignores the shared read ACL only inside OAuth. Read/write environment sets must match. |
 | `T3_CONNECTOR_OAUTH_PROJECT_ADMIN` | off | `1` (with `PROJECTS=all`): adds the project count and project delete tools (see Writes, Project deletion). |
+| `T3_CONNECTOR_OAUTH_NATIVE_TOOLS` | off | `1` (with `PROJECTS=all`): adds thin wrappers over native T3 MCP tools (see Writes, Native T3 tools). |
 | `T3_CONNECTOR_OAUTH_WRITE_PROJECTS` | unset | Restricted mode only: `alias:projectId,…` narrows the frozen write snapshot for sandboxes. Conflicts with `all`; boot fails. |
 | `T3_CONNECTOR_CONFIG` | `~/.config/t3-connector/config.json` | Read config (same as `t3-connector`). |
 | `T3_CONNECTOR_OAUTH_VERBOSE` | unset | `1` echoes the redacted event log to stderr. |

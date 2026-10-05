@@ -7,6 +7,7 @@ import { resolverAmbiente } from '../escrita/config.mjs';
 import { consentAll, consented } from './project-policy.mjs';
 import { redact } from './http.mjs';
 import { PROJECT_ACTIONS } from '../escrita/project-admin.mjs';
+import { NATIVE_WRITES, NATIVE_WRITE_ACTIONS, NATIVE_READS, ENV_SCOPED } from '../escrita/native.mjs';
 
 // T3 writes authorized by an OAuth session instead of a passkey lease. The existing Dispatcher
 // (journal reservation, target/workspace preflight, uncertainty handling, final synchronous check
@@ -35,7 +36,8 @@ export class SessionWriteGate {
     if (!grant) fail('ambiente_fora_da_lease');
     const operational = s.grants?.projectPolicy === 'all' ? this.operationGrant : grant;
     if (!operational || operational.alias !== grant.alias || operational.environmentId !== environmentId || operational.destination !== destination) fail('scope_denied');
-    if (!grant.actions.includes(action) || !projectIds.length || projectIds.some(p => !operational.projects?.some(g => g.id === p))) fail('scope_denied');
+    // Environment-scoped native writes (project create/clone, preferences) target no project.
+    if (!grant.actions.includes(action) || (!projectIds.length && !ENV_SCOPED.has(action)) || projectIds.some(p => !operational.projects?.some(g => g.id === p))) fail('scope_denied');
     return s;
   }
   dispatch(identity, sid, target, invoke, operationId) {
@@ -87,9 +89,10 @@ export const writeToolName = action => `t3_escrever_${action.replaceAll('.', '_'
 // In restricted mode, `allowedProjects` (Map alias → Set of project ids) narrows the sign-in grant
 // to those projects; an environment without an entry gets no grant. Without it the grant is the
 // full inventory, as with the lease.
-export function sessionWrites({ conexoes, journal, authority, issuer, allowedProjects = null, inventoryMs = 15000, projectPolicy = 'restricted', projectAdmin = false, audit = e => journal.audit(e) }) {
+export function sessionWrites({ conexoes, journal, authority, issuer, allowedProjects = null, inventoryMs = 15000, projectPolicy = 'restricted', projectAdmin = false, nativeTools = false, audit = e => journal.audit(e) }) {
   const all = projectPolicy === 'all';
   if (projectAdmin && !all) throw new Error('OAuth project administration requires projectPolicy all');
+  if (nativeTools && !all) throw new Error('OAuth native tools require projectPolicy all');
   if (all && allowedProjects) throw new Error('OAuth all conflicts with allowedProjects');
   const gate = new SessionWriteGate({ authority, issuer, audit });
   const registros = conexoes.map(c => c.registro);
@@ -251,7 +254,25 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     return { environment: { alias: c.registro.alias, environmentId: c.registro.environmentId }, ...count };
   }
 
+  // Native read wrappers (native.mjs): consented session, live projects of the environment only.
+  async function nativeRead(principal, name, { environment, ...input }) {
+    const c = resolve(environment);
+    const s = consented(authority, principal, c.registro);
+    if (!s.grants.environments.find(e => e.alias === c.registro.alias)?.actions.some(a => NATIVE_WRITE_ACTIONS.includes(a))) fail('scope_denied');
+    if (!c.adapter.native) fail('environment_unavailable');
+    const authorize = async ids => {
+      if (!ids.length) return;
+      const live = new Set(((await liveShell(principal, c)).projects ?? []).filter(p => !p.deletedAt).map(p => p.id));
+      if (ids.some(id => !live.has(id))) fail('scope_denied');
+    };
+    const value = await NATIVE_READS[name].run({ input: NATIVE_READS[name].schema.parse(input), native: c.adapter.native, authorize });
+    consented(authority, principal, c.registro);
+    return value;
+  }
+
   const error = e => {
+    // A native refusal keeps its native code and message (OrchestratorMcpFailure code or T3 error tag).
+    if (e?.native) return { isError: true, content: [{ type: 'text', text: `${e.native.code}: ${e.native.message}` }] };
     const c = /^[a-z_]+$/.test(e.message) ? code(e.message) : 'write_rejected';
     const extra = c === 'environment_unknown' ? ` (configured: ${registros.map(r => r.alias).join(', ')})` : '';
     return { isError: true, content: [{ type: 'text', text: MESSAGES[c] ? `${c}: ${MESSAGES[c]}${extra}` : c }] };
@@ -264,6 +285,19 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     // Project tools only for a session whose consent includes them (older grants never do).
     let granted = [];
     if (projectAdmin) { try { granted = PROJECT_ACTIONS.filter(a => authority.check(principal.sid).grants?.environments?.some(e => e.actions.includes(a))); } catch {} }
+    let nativeGranted = [];
+    if (nativeTools) { try { nativeGranted = NATIVE_WRITE_ACTIONS.filter(a => authority.check(principal.sid).grants?.environments?.some(e => e.actions.includes(a))); } catch {} }
+    // Native names, native arguments under `input`; the operationId journals the write.
+    for (const action of nativeGranted) server.registerTool(action, {
+      description: `${NATIVE_WRITES[action].description} Chosen environment only.`,
+      inputSchema: z.strictObject({ environment, operationId: z.string(), input: NATIVE_WRITES[action].schema }),
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+    }, ({ environment: env, operationId, input }) => result(() => dispatch(principal, { environment: env, action, operationId, input })));
+    if (nativeGranted.length) for (const [name, spec] of Object.entries(NATIVE_READS)) server.registerTool(name, {
+      description: `${spec.description} Chosen environment only.`,
+      inputSchema: spec.schema.extend({ environment }),
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    }, args => result(() => nativeRead(principal, name, args)));
     for (const action of [...ACTIONS, ...granted]) server.registerTool(writeToolName(action), {
       description: PROJECT_DESCRIPTIONS[action] ? `${describe(action)} Chosen environment only.` : `${describe(action)} in the chosen environment; authorized by the connector's OAuth session (passkey sign-in), ${all ? 'all current and future projects of the consented environments' : 'limited to the projects approved at sign-in (restricted mode)'}; the work runs in full-access mode.`,
       inputSchema: z.strictObject({ environment, operationId: z.string(), input: schemaForAction(action) }),
