@@ -8,6 +8,8 @@ import { consentAll, consented } from './project-policy.mjs';
 import { redact } from './http.mjs';
 import { PROJECT_ACTIONS } from '../escrita/project-admin.mjs';
 import { NATIVE_WRITES, NATIVE_WRITE_ACTIONS, NATIVE_READS, ENV_SCOPED } from '../escrita/native.mjs';
+import { admitirLote, executarLote, itemDoJournal, INBOX_ACTIONS, LoteInvalido, MAX_ITENS, PRAZO_LOTE_MS } from '../escrita/lote-inbox.mjs';
+import { ForaDoEscopo } from '../ambientes.mjs';
 
 // T3 writes authorized by an OAuth session instead of a passkey lease. The existing Dispatcher
 // (journal reservation, target/workspace preflight, uncertainty handling, final synchronous check
@@ -80,6 +82,23 @@ const PROJECT_DESCRIPTIONS = {
   'project.delete': 'Deletes an EMPTY project (no active or archived threads) from T3. Refused if any thread exists; never escalates to force. The workspace directory on disk is kept.',
   'project.delete-force': 'Deletes a project AND all its threads (active and archived), cancelling their pending work. Only on an explicit request to delete the project with its threads: requires force=true, confirmProjectId equal to projectId and expectedThreadCount from t3_contar_threads_projeto; refused if the count changed or a thread has an active run. The workspace directory on disk is kept.',
 };
+// Batch-only texts: the singular tools keep their messages unchanged.
+const BATCH_MESSAGES = {
+  precondition_failed: 'the thread is not in expectedProjectId in this environment; nothing was sent. Resolve it again (t3_thread_find_batch) and confirm with the user',
+  batch_stopped: 'not attempted because the batch stopped earlier (see `stopped`); nothing was sent for this item. To apply it, re-read the thread and use a new batchId and a new operationId',
+  batch_conflict: 'this batchId was already used with different items or values; nothing was sent. Repeat the exact original call to see its results, or use a new batchId for a new intent',
+  journal_failed: 'the connector could not record the operation and ended every OAuth session. Reconnect and repeat the same call (same batchId) to see what was recorded; never resend with a new batchId',
+  reconciliation_required: 'the connector tried to send to T3 but could not confirm the result. Do not resend; call t3_reconciliar_escrita with this environment and operationId',
+  environment_unavailable: 'the T3 server of this environment did not respond; nothing was sent for this item',
+  duplicate_key: 'every item key must be unique in the call; nothing was sent',
+  duplicate_target: 'the same thread appears twice in the call (one action per thread per batch); nothing was sent',
+  duplicate_operation_id: 'every item needs its own operationId; nothing was sent',
+  snoozed_until_required: 'snooze requires snoozedUntil on every item; nothing was sent',
+  snoozed_until_not_allowed: 'snoozedUntil only applies to snooze; nothing was sent',
+  snoozed_until_invalid: 'snoozedUntil must be an absolute ISO 8601 instant with Z or an explicit offset (for example 2026-10-06T09:00:00-03:00); nothing was sent',
+  batch_size_invalid: `pass 1-${MAX_ITENS} items; split larger selections into several batches`,
+};
+const threadProject = (s, id) => s.threads?.find(t => t.id === id && !t.deletedAt)?.projectId;
 const describe = action => PROJECT_DESCRIPTIONS[action] ?? (action === 'thread.send' ? SEND_DESCRIPTION
   : action === 'runtime-request.answer' ? 'Answers a pending user_input runtime request using requestId and answers keyed by question ID from t3_thread.pedidosPendentes; thread.send does NOT answer it.'
   : action === 'runtime-request.approve' ? 'Responds to a pending approval runtime request using requestId and decision from t3_thread.pedidosPendentes; user_input requires runtime-request.answer instead.'
@@ -89,7 +108,7 @@ export const writeToolName = action => `t3_escrever_${action.replaceAll('.', '_'
 // In restricted mode, `allowedProjects` (Map alias → Set of project ids) narrows the sign-in grant
 // to those projects; an environment without an entry gets no grant. Without it the grant is the
 // full inventory, as with the lease.
-export function sessionWrites({ conexoes, journal, authority, issuer, allowedProjects = null, inventoryMs = 15000, projectPolicy = 'restricted', projectAdmin = false, nativeTools = false, audit = e => journal.audit(e) }) {
+export function sessionWrites({ conexoes, journal, authority, issuer, allowedProjects = null, inventoryMs = 15000, batchDeadlineMs = PRAZO_LOTE_MS, projectPolicy = 'restricted', projectAdmin = false, nativeTools = false, audit = e => journal.audit(e) }) {
   const all = projectPolicy === 'all';
   if (projectAdmin && !all) throw new Error('OAuth project administration requires projectPolicy all');
   if (nativeTools && !all) throw new Error('OAuth native tools require projectPolicy all');
@@ -157,7 +176,6 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     const opGate = new SessionWriteGate({ authority, issuer, audit });
     const projectsFrom = s => (s.projects ?? []).filter(p => !p.deletedAt).map(p => ({ id: p.id, name: p.title, directory: p.workspaceRoot ?? p.cwd ?? p.directory, workspaceRoots: p.workspaceRoots }));
     const grantFrom = s => ({ ...authority.check(principal.sid).grants.environments.find(e => e.alias === c.registro.alias), projects: projectsFrom(s) });
-    const threadProject = (s, id) => s.threads?.find(t => t.id === id && !t.deletedAt)?.projectId;
     const adapter = { ...c.adapter, projectForThread: async id => threadProject(shell, id) };
     const d = new Dispatcher({ gate: opGate, adapter, journal, environmentId: c.registro.environmentId, destination: c.registro.destination,
       authorizeRecorded: target => authorizeRecord(principal, c, target.action),
@@ -270,6 +288,64 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     return value;
   }
 
+  // t3_thread_inbox_update_batch (lote-inbox.mjs): one inbox action over several threads; every item
+  // goes through `dispatch` above, so scope, journal and uncertainty rules are the singular ones.
+  async function inboxBatch(principal, args, { signal, deadlineMs = batchDeadlineMs } = {}) {
+    const lote = admitirLote(args, chave => resolve(chave).registro);
+    const caller = exigirIdentidade(identity(principal));
+    const store = (method, ...a) => { try { return journal[method](...a); } catch { gate.close(); return fail('journal_failed'); } };
+    const status = () => { const s = gate.status(principal.sid); return s.active && s.scope.caller === caller ? s : null; };
+    const itemError = c => ({ code: c, ...(BATCH_MESSAGES[c] ?? MESSAGES[c] ? { message: BATCH_MESSAGES[c] ?? MESSAGES[c] } : {}) });
+    const itemCode = e => (e instanceof ForaDoEscopo ? 'environment_not_in_lease' : /^[a-z_]+$/.test(e?.message ?? '') ? code(e.message) : 'write_rejected');
+    const grantFor = (s, env) => grantDoAmbiente(s.scope, { environmentId: env.environmentId, destination: env.destination });
+    // Project of the target, read only after the environment and the action are authorized.
+    async function projectOf(c, threadId) {
+      if (all) { authorizeRecord(principal, c, lote.interna); return threadProject(await liveShell(principal, c), threadId); }
+      const s = status() ?? fail('lease_closed');
+      const grant = grantFor(s, c.registro) ?? fail('ambiente_fora_da_lease');
+      if (!grant.actions.includes(lote.interna)) fail('scope_denied');
+      return c.adapter.projectForThread(threadId);
+    }
+    async function executar(item) {
+      const rejected = (c, stop) => ({ result: { status: 'rejected', error: itemError(c) }, ...(stop ? { stop } : {}) });
+      if (!item.env) return rejected('environment_unknown');
+      const c = porAlias.get(item.env.alias);
+      try {
+        const project = await projectOf(c, item.threadId);
+        if (!project) return rejected('thread_not_found');
+        if (project !== item.expectedProjectId) return rejected('precondition_failed');
+      } catch (e) {
+        if (!status()) return rejected('lease_closed', 'session_closed');
+        return rejected(e instanceof ForaDoEscopo || /^[a-z_]+$/.test(e?.message ?? '') ? itemCode(e) : 'environment_unavailable');
+      }
+      const input = { threadId: item.threadId, ...(item.snoozedUntil !== undefined ? { snoozedUntil: item.snoozedUntil } : {}) };
+      try {
+        const r = await dispatch(principal, { environment: item.env.alias, action: lote.interna, operationId: item.operationId, input });
+        // The Dispatcher answers a known operationId from the journal without sending again.
+        if ('reconciliationRequired' in r) return { result: itemDoJournal(r) };
+        return { result: { status: 'applied', receipt: r.receipt } };
+      } catch (e) {
+        const c = itemCode(e);
+        if (c === 'reconciliation_required' || c === 'journal_failed') return { result: { status: 'uncertain', reconciliationRequired: true, error: itemError(c) }, stop: c === 'journal_failed' ? 'journal_failed' : 'uncertain_send' };
+        if (!status()) return rejected(c, 'session_closed');
+        return rejected(c);
+      }
+    }
+    return executarLote(lote, {
+      caller, store, signal, prazoMs: deadlineMs, executar, erro: itemError,
+      autorizar: () => { status() ?? fail('lease_closed'); },
+      // Recorded results are shown only to the same caller, still allowed to write this action there.
+      autorizarReplay: itens => {
+        const s = status() ?? fail('lease_closed');
+        for (const item of itens.filter(i => i.env)) {
+          const grant = grantFor(s, item.env) ?? fail('ambiente_fora_da_lease');
+          if (!grant.actions.includes(lote.interna)) fail('scope_denied');
+        }
+      },
+      observar: item => item.env ? store('get', chaveOperacao({ environmentId: item.env.environmentId, destination: item.env.destination, caller, operationId: item.operationId })) : undefined,
+    });
+  }
+
   const error = e => {
     // A native refusal keeps its native code and message (OrchestratorMcpFailure code or T3 error tag).
     if (e?.native) return { isError: true, content: [{ type: 'text', text: `${e.native.code}: ${e.native.message}` }] };
@@ -278,6 +354,14 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     return { isError: true, content: [{ type: 'text', text: MESSAGES[c] ? `${c}: ${MESSAGES[c]}${extra}` : c }] };
   };
   const result = async op => { try { return { content: [{ type: 'text', text: JSON.stringify(await op()) }] }; } catch (e) { return error(e); } };
+  const batchResult = async op => {
+    try { return { content: [{ type: 'text', text: JSON.stringify(await op()) }] }; } catch (e) {
+      const c = /^[a-z_]+$/.test(e?.message ?? '') ? code(e.message) : null;
+      if (!c || !BATCH_MESSAGES[c]) return error(e);
+      const where = e instanceof LoteInvalido && e.detail !== undefined ? ` (item key ${JSON.stringify(e.detail)})` : '';
+      return { isError: true, content: [{ type: 'text', text: `${c}: ${BATCH_MESSAGES[c]}${where}` }] };
+    }
+  };
 
   function registerTools(server, principal) {
     // Strict schemas: an unknown or legacy parameter (e.g. `ambiente`) is refused by the SDK.
@@ -303,6 +387,30 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
       inputSchema: z.strictObject({ environment, operationId: z.string(), input: schemaForAction(action) }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     }, ({ environment: env, operationId, input }) => result(() => dispatch(principal, { environment: env, action, operationId, input })));
+    const batchItem = z.strictObject({
+      key: z.string().min(1).max(200).describe('Your correlation label for this item (for example the thread title); unique in the call and echoed in its result'),
+      environment,
+      threadId: z.string().min(1).describe('Exact thread ID in that environment, from t3_thread_find_batch (candidates[].threadId), t3_buscar_threads or t3_thread; never a title'),
+      expectedProjectId: z.string().min(1).describe('projectId of the thread as you observed it (candidates[].project.projectId); if the thread is not in that project the item is refused with precondition_failed and nothing is sent'),
+      operationId: z.string().min(1).max(1024).describe('Stable ID of this item\'s write; new for every new intent, the same only when repeating the same call'),
+      snoozedUntil: z.string().min(1).optional().describe('Required for snooze, refused for unsnooze: absolute ISO 8601 instant with Z or an explicit offset, for example 2026-10-06T09:00:00-03:00 (converted to UTC). Compute relative times such as "tomorrow 9:00" in the user\'s timezone before calling; items may have different instants'),
+    });
+    server.registerTool('t3_thread_inbox_update_batch', {
+      description: `Applies one inbox action, snooze or unsnooze, to up to ${MAX_ITENS} threads in one call, with one result per item in the order sent. ` +
+        'Use it only after every target is resolved to an exact (environment, threadId, projectId), for example with t3_thread_find_batch, and the user confirmed the selection; never pass a title or pick a candidate of an ambiguous match. ' +
+        'snooze hides the thread from the inbox until snoozedUntil and does not interrupt or change its work; unsnooze brings it back now. ' +
+        'Items run one at a time, best-effort, with no transaction: a refused item (thread_not_found, precondition_failed, scope_denied, environment_unknown, environment_unavailable) does not stop the others. An uncertain send, a closed session, a journal failure, a cancellation or the batch deadline stop the batch; `stopped` says why and the remaining items are not_started with nothing sent. ' +
+        'Item `status`: applied (T3 acknowledged it), rejected (nothing was sent; `error` says why), uncertain (do not resend; call t3_reconciliar_escrita with its environment and operationId), not_started, replayed (this operationId was already recorded, so nothing was sent again; `originalStatus` says how it ended) or failed. ' +
+        'Retries are safe: repeating the same call with the same batchId never sends again and returns the recorded results with replay=true, also after reconnecting (inProgress=true: the original call is still running or was interrupted, and its unrecorded items are never resumed); reusing a batchId with other items or values is refused (batch_conflict). To retry rejected or not_started items, re-read them and send a new batch with a new batchId and new operationIds. ' +
+        'A repeated key, thread or operationId, or snoozedUntil missing/misplaced, rejects the whole call before anything is sent. `complete` true: every item has a known outcome (rejections included); `allSucceeded` true: every item was applied. ' +
+        `Authorized by the connector's OAuth session; each item needs the action in the scope approved for its environment.`,
+      inputSchema: z.strictObject({
+        batchId: z.string().min(1).max(1024).describe('Stable ID of this batch intent, scoped to your session subject; repeat it only to repeat the exact same call'),
+        action: z.enum(Object.keys(INBOX_ACTIONS)).describe('One inbox action for every item: snooze or unsnooze'),
+        items: z.array(batchItem).min(1).max(MAX_ITENS).describe('Target threads, at most one item per thread'),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    }, (args, extra) => batchResult(() => inboxBatch(principal, args, { signal: extra?.signal })));
     server.registerTool('t3_reconciliar_escrita', {
       description: 'Looks up the receipt of a write operation in the same environment; never repeats the mutation.',
       inputSchema: z.strictObject({ environment, operationId: z.string() }),
@@ -315,5 +423,5 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     }, ({ environment: env, projectId }) => result(() => countThreads(principal, { environment: env, projectId })));
   }
 
-  return { gate, inventory, dispatch, reconcile, registerTools, close() { for (const c of conexoes) c.fechar?.(); } };
+  return { gate, inventory, dispatch, inboxBatch, reconcile, registerTools, close() { for (const c of conexoes) c.fechar?.(); } };
 }

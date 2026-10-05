@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Batch thread operations ([docs/batch-operations.md](docs/batch-operations.md)). New read tool
+  `t3_thread_find_batch`: up to 50 title/ID queries over one shell read per environment. Each
+  query reports its own `resolution` (`resolved`, `ambiguous`, `not_found`, `inconclusive`),
+  coverage and cursor, and never picks a candidate. New OAuth write tool
+  `t3_thread_inbox_update_batch`: snooze or unsnooze up to 20 exact `(environment, threadId)`
+  targets with `expectedProjectId`, one result per item. Each item uses the existing Dispatcher
+  and journal. Execution is sequential and best-effort, and the batch stops on an uncertain send,
+  a journal failure, a closed session, the deadline or a cancellation. A durable manifest per
+  `batchId` makes repeating the same call return the recorded results without resending. Existing
+  tools are unchanged. `t3_buscar_threads` now shares its per-environment read with the batch
+  search, with the same output.
+
 ## 0.11.2
 
 - Read tools: one source-of-truth contract for thread state and model. `state` now gives an
