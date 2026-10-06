@@ -78,3 +78,16 @@ test('upstream RPC failure remains uncertain, never leaks details or retries lau
  const result=await client.callTool({name:'t3_escrever_thread_launch',arguments:{leaseId:'fake',environment:'isolated',operationId:'pre-send',input:{projectId:'app',title:'isolated',modelSelection:selection,workspaceStrategy:{type:'root'}}}});
  assert.equal(result.isError,true);assert.match(result.content[0].text,/^dispatch_rejected:.*before sending it to T3.*does not mean the model is blocked/);
  });
+
+test('launch replay returns the created thread from the journal and never relaunches',async t=>{
+ const p=await isolated(t);
+ const args={leaseId:p.lease.leaseId,environment:'isolated',operationId:'replayed-launch',
+  input:{projectId:'app',title:'replayed launch',modelSelection:selection,workspaceStrategy:{type:'root'}}};
+ const first=JSON.parse((await p.client.callTool({name:'t3_escrever_thread_launch',arguments:args})).content[0].text);
+ assert.equal(first.state,'completed');assert.ok(first.receipt?.threadId);
+ // Same operationId after a lost answer (e.g. an OAuth session that expired mid-call).
+ const replay=JSON.parse((await p.client.callTool({name:'t3_escrever_thread_launch',arguments:args})).content[0].text);
+ assert.equal(replay.state,'completed');assert.equal(replay.reconciliationRequired,false);
+ assert.deepEqual(replay.receipt,first.receipt);
+ assert.equal(p.frames.length,1);
+});

@@ -107,6 +107,8 @@ export function parseAction(action,input) {
  return {spec:s,input:result.data};
 }
 const RECUSAS=/^(thread_not_found|scope_denied|lease_closed|execution_snapshot_unavailable|ambiente_[a-z_]+|workspace_[a-z_]+|project_[a-z_]+|settle_[a-z_]+)$/;
+// Writes whose receipt names the thread they created.
+const CREATES_THREAD=new Set(['thread.launch','thread.fork']);
 // Writes that create a thread in a project, serialized with project deletes of this connector.
 const PROJECT_SCOPED=new Set(['thread.launch','thread.fork',...PROJECT_ACTIONS]);
 // v2: environment e destino lógico (t3://<environmentId>) estáveis; caller sem boot.
@@ -248,6 +250,9 @@ export class Dispatcher {
   return {state:record.state,operationId,reconciliationRequired:!guardRefusal&&!['completed','failed'].includes(record.state),
    ...(guardRefusal?{sent:false}:{}),
    ...((project||spec.native)&&record.receipt?{receipt:record.receipt,...(record.postCheck??{})}:{}),
+   // A launch or fork recorded the thread it created: return it, so a caller that lost the first
+   // answer (an expired OAuth session hides it) recovers the threadId without launching again.
+   ...(CREATES_THREAD.has(action)&&record.state==='completed'&&record.receipt?{receipt:record.receipt}:{}),
    ...(guard&&record.receipt?{receipt:record.receipt,settlement:record.settlement??Dispatcher.#verificationPending()}:{}),
    ...(record.error?{error:record.error}:{}),
    ...(project&&record.state==='rejected'?{sent:false,...(record.refusal?{refusal:record.refusal}:{})}:{})};

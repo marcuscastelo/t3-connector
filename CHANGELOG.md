@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix: replaying `thread.launch` or `thread.fork` with the same `operationId` now returns the
+  recorded receipt (the created `threadId`), so a caller that lost the first answer recovers the
+  thread without launching again. Nothing is sent on replay.
 - Composition of the orchestration slice with `execution`: `execution` is the single source of
   in-flight work. `settlement` (opt-in on `t3_thread`) and the `settleGuard` take background
   blockers from `execution`, derived from the same full snapshot, so a monitor or subagent
