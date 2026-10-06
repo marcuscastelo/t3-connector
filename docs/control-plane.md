@@ -45,11 +45,11 @@ Hard filters (any failure makes the candidate ineligible, with `reasons`):
 | Filter | Source | Refusal |
 |---|---|---|
 | environment allowed and answering | caller, environment | `environment_not_allowed`, `environment_unavailable` |
-| project live and authorized | shell | `project_unavailable` |
+| project live and authorized (repeated, diverging project rows: `reason: catalog_conflict`) | shell | `project_unavailable` |
 | instance `enabled`, `installed`, `status: ready`, `auth.status: authenticated`, not `availability: unavailable` | `server.getConfig` | `provider_unavailable` |
 | `supportedRuntimeModes` includes the mode; absent or empty means every mode (T3's own rule; codex and claudeAgent do not declare it) | `server.getConfig` | `runtime_mode_unsupported` |
 | exact model slug, options in its option descriptors | `server.getConfig` | `provider_model_unavailable`, `model_option_unsupported` |
-| any of these facts missing | `server.getConfig` | `capability_unknown` |
+| any of these facts missing, or the same instance, model or option descriptor listed twice with different content | `server.getConfig` | `capability_unknown` (`reason: catalog_conflict` for the repetition) |
 | `requiredPlatform` (no source in this connector) | — | `insufficient_evidence` |
 
 Eligible candidates with a known load are ranked by, in order: workspace affinity observed (a

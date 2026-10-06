@@ -10,24 +10,30 @@ const PEDIDO = new Set(['pending', 'resolved', 'expired', 'cancelled']);
 const TRABALHO = new Set(['idle', 'pending', 'running', 'waiting', 'completed', 'failed', 'cancelled', 'interrupted']);
 const PLANO_KIND = new Set(['proposed_plan', 'todo_list']);
 const PLANO_STATUS = new Set(['draft', 'active', 'completed', 'superseded']);
+// Os 26 tipos de OrchestrationV2TurnItem (orchestrationV2.ts:1246-1444). Item de tipo
+// desconhecido pode ser trabalho que o conector não sabe ler; nunca vira "nada em curso".
+const TIPO_ITEM = new Set(['approval_request', 'assistant_message', 'checkpoint', 'command_execution', 'compaction', 'dynamic_tool', 'error', 'file_change', 'file_search', 'fork', 'handoff', 'node', 'notification', 'proposed_plan', 'provider_thread', 'reasoning', 'run', 'run_interrupt_request', 'run_interrupt_result', 'subagent', 'system_notice', 'thread_created', 'todo_list', 'user_input_request', 'user_message', 'web_search']);
+// Coleções de que a ociosidade depende: o contrato as exige (OrchestrationV2ThreadProjection),
+// e a ausência de uma delas não prova ausência de run, pedido ou trabalho (revisão R6, P1).
+const OBRIGATORIAS = ['runs', 'runtimeRequests', 'turnItems', 'subagents', 'plans'];
 
 const objeto = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
 const texto = (x) => typeof x === 'string' && x.trim().length > 0;
 const idDe = (x) => x?.nativeItemRef?.nativeId ?? x?.nativeTaskRef?.nativeId ?? x?.id;
 
-/** Lista de problemas (vazia = bem formada). `campos` ausentes são aceitos; presentes, validados. */
+/** Lista de problemas (vazia = bem formada). Fora de `OBRIGATORIAS`, coleção ausente é aceita; presente, validada. */
 export function problemasDaProjecao(p) {
   if (!objeto(p)) return ['projection_missing'];
   const problemas = [];
-  const lista = (nome, validar) => {
+  const lista = (nome, validar, chave = idDe) => {
     const v = p[nome];
-    if (v === undefined) return;
+    if (v === undefined) { if (OBRIGATORIAS.includes(nome)) problemas.push(`${nome}_missing`); return; }
     if (!Array.isArray(v)) { problemas.push(`${nome}_not_a_list`); return; }
     const ids = new Set();
     for (const x of v) {
       const motivo = objeto(x) ? validar(x) : 'not_an_object';
       if (motivo) { problemas.push(`${nome}_${motivo}`); return; }
-      const id = idDe(x);
+      const id = chave(x);
       if (ids.has(id)) { problemas.push(`${nome}_duplicate_id`); return; }
       ids.add(id);
     }
@@ -42,7 +48,7 @@ export function problemasDaProjecao(p) {
     if (!Array.isArray(pt.pendingBackgroundTasks)) return 'roster_not_a_list';
     return pt.pendingBackgroundTasks.every((t) => objeto(t) && texto(t.taskId)) ? null : 'roster_task_invalid';
   });
-  if (p.turnItems !== undefined && !Array.isArray(p.turnItems)) problemas.push('turnItems_not_a_list');
+  lista('turnItems', (i) => (!texto(i.id) ? 'id_invalid' : !TIPO_ITEM.has(i.type) ? 'type_unknown' : !TRABALHO.has(i.status) ? 'status_unknown' : null), (i) => i.id);
   if (p.messages !== undefined && !Array.isArray(p.messages)) problemas.push('messages_not_a_list');
   // Binding do provider: com roster presente, o provider thread ativo tem de estar nele; a
   // coleção sem ele não cobre o trabalho do provider vinculado (revisão R5, P1).

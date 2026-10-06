@@ -22,6 +22,7 @@ import { buscarFrentes, correrComSinal, falhaSanitizada, lerShellFresca } from '
 import { montarWorkset } from './workset.mjs';
 import { comparador } from './paginacao.mjs';
 import { Cancelada } from './t3.mjs';
+import { itemUnico } from './linhas.mjs';
 
 export const MAX_CANDIDATOS = 10;
 export const PRAZO_ROTA_MS = 10000;
@@ -51,8 +52,9 @@ export function elegibilidadeProvider(provider, { model, options = [], runtimeMo
   else if (Array.isArray(modos) && modos.length > 0 && !modos.includes(runtimeMode)) r('runtime_mode_unsupported', 'supportedRuntimeModes', { value: runtimeMode });
   if (!Array.isArray(provider.models)) r('capability_unknown', 'models');
   else {
-    const m = provider.models.find((x) => x?.slug === model);
-    if (!m) r('provider_model_unavailable', 'models', { value: model });
+    const { item: m, conflito } = itemUnico(provider.models, (x) => x.slug === model);
+    if (conflito) r('capability_unknown', 'models', { value: model, reason: 'catalog_conflict' });
+    else if (!m) r('provider_model_unavailable', 'models', { value: model });
     else if (options.length) {
       const descritores = m.capabilities?.optionDescriptors;
       if (!Array.isArray(descritores)) r('capability_unknown', 'optionDescriptors');
@@ -62,9 +64,10 @@ export function elegibilidadeProvider(provider, { model, options = [], runtimeMo
           // Tipos do contrato (packages/contracts/src/model.ts): select (valor = id de uma
           // opção) e boolean (valor booleano). Outro tipo não é interpretado; opção repetida,
           // ausente ou com valor do tipo errado é recusa.
-          const d = descritores.find((x) => x?.id === o.id);
+          const { item: d, conflito: descritorEmConflito } = itemUnico(descritores, (x) => x.id === o.id);
           if (vistas.has(o.id)) { r('model_option_unsupported', 'optionDescriptors', { option: o.id, reason: 'duplicate' }); continue; }
           vistas.add(o.id);
+          if (descritorEmConflito) { r('capability_unknown', 'optionDescriptors', { option: o.id, reason: 'catalog_conflict' }); continue; }
           if (!d) { r('model_option_unsupported', 'optionDescriptors', { option: o.id }); continue; }
           if (d.type === 'select') {
             if (typeof o.value !== 'string' || !Array.isArray(d.options) || !d.options.some((x) => x?.id === o.value)) r('model_option_unsupported', 'optionDescriptors', { option: o.id });
@@ -76,6 +79,20 @@ export function elegibilidadeProvider(provider, { model, options = [], runtimeMo
     }
   }
   return { eligible: reasons.length === 0, reasons };
+}
+
+/** Elegibilidade da instância `instanceId` num catálogo de providers: instâncias repetidas e divergentes não são escolhidas pela ordem. */
+export function elegibilidadeNoCatalogo(providers, instanceId, pedido) {
+  if (!Array.isArray(providers)) return { eligible: false, reasons: [{ code: 'capability_unknown', source: fonte, field: 'providers' }] };
+  const { item, conflito } = itemUnico(providers, (p) => p.instanceId === instanceId);
+  if (conflito) return { eligible: false, reasons: [{ code: 'capability_unknown', source: fonte, field: 'instanceId', reason: 'catalog_conflict' }] };
+  return elegibilidadeProvider(item, pedido);
+}
+
+/** Projeto vivo `projectId` da shell: `{projeto, conflito}`; linhas divergentes do mesmo projeto não são escolhidas pela ordem. */
+export function projetoDaShell(shell, projectId) {
+  const { item, conflito } = itemUnico(shell?.projects, (p) => p.id === projectId);
+  return { projeto: item && !item.deletedAt ? item : null, conflito };
 }
 
 /** Chave de ordem e ranking dos candidatos elegíveis com carga. Pura e independente da ordem de entrada. */
@@ -111,10 +128,10 @@ function validarRota(ambientes, route) {
 async function lerCandidato(ambientes, r, c, { signal, lerProviders }) {
   return correrComSinal(ambientes.usar(r, async (cliente) => {
     const shell = await lerShellFresca(cliente, { signal });
-    const projeto = (shell.projects ?? []).find((p) => p.id === c.projectId && !p.deletedAt);
+    const { projeto, conflito } = projetoDaShell(shell, c.projectId);
     const autorizado = Boolean(projeto) && r.escopo.projetoPermitido(c.projectId);
     const providers = autorizado ? await lerProviders(cliente, { environmentIdEsperado: r.environmentId, signal }) : null;
-    return { shell, projeto, autorizado, providers };
+    return { shell, projeto, autorizado, providers, projetoEmConflito: conflito && r.escopo.projetoPermitido(c.projectId) };
   }, { signal }), signal);
 }
 
@@ -165,9 +182,8 @@ export async function rotear(ambientes, route, { signal, lerProviders, resumir, 
       item.reasons.push({ code: 'environment_unavailable', source: 'environment', ...falhaSanitizada(e) });
       return item;
     }
-    if (!lido.autorizado) { item.reasons.push({ code: 'project_unavailable', source: 'shell' }); return item; }
-    const provider = lido.providers.find((p) => p?.instanceId === c.modelSelection.instanceId);
-    const el = elegibilidadeProvider(provider, { model: c.modelSelection.model, options: c.modelSelection.options ?? [], runtimeMode: c.runtimeMode });
+    if (!lido.autorizado) { item.reasons.push({ code: 'project_unavailable', source: 'shell', ...(lido.projetoEmConflito ? { reason: 'catalog_conflict' } : {}) }); return item; }
+    const el = elegibilidadeNoCatalogo(lido.providers, c.modelSelection.instanceId, { model: c.modelSelection.model, options: c.modelSelection.options ?? [], runtimeMode: c.runtimeMode });
     item.reasons.push(...el.reasons);
     if (route.constraints?.requiredPlatform) item.reasons.push({ code: 'insufficient_evidence', field: 'platform', source: 'connector' });
     item.eligible = el.eligible && !route.constraints?.requiredPlatform;

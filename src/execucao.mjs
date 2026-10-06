@@ -371,9 +371,10 @@ export function derivarExecucao({ projecao, shellThread = null, fonte = {}, limi
     .filter((q) => q.status === 'pending')
     .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
     .map((q) => ({ requestId: q.id, kind: q.kind, createdAt: q.createdAt ?? null }));
-  const planoAtivo = Array.isArray(projecao.plans)
-    ? projecao.plans.some((p) => p.kind === 'proposed_plan' && p.status === 'active')
-    : Boolean(shellThread?.hasActionableProposedPlan);
+  // Qualquer das duas fontes basta para bloquear: a shell pode sinalizar um plano que a
+  // projeção não traz como artefato, e nenhuma das duas sozinha prova a ausência da outra.
+  const planoAtivo = (Array.isArray(projecao.plans) && projecao.plans.some((p) => p.kind === 'proposed_plan' && p.status === 'active'))
+    || shellThread?.hasActionableProposedPlan === true;
   const limite = limitRecovery;
 
   const ativo = runs.ativo;

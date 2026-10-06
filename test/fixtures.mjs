@@ -60,6 +60,8 @@ export function projecao({ pedidos = [], mensagens = [], turnItems = [], runs = 
     runs,
     runtimeRequests: pedidos,
     turnItems,
+    subagents: [],
+    plans: [],
     providerSessions: [{ id: 'ps-1', status: 'ready', cwd: '/repo/ok', model: 'gpt-6.1-sol' }],
     messages: mensagens,
   };

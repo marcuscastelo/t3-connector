@@ -32,7 +32,16 @@
   blocker `execution_evidence_invalid` (settle incomplete, preflight refused, `execution_idle`
   never returns, legacy `thread.send` `start_immediately` refused); shell rows of the target are
   checked for conflicts before the ACL cut and by every ID lookup (project resolution of
-  writes, guarded reads, workset); only time fields compare by instant.
+  writes, guarded reads, workset); only time fields compare by instant. The boundary also
+  checks every turn item (identity, one of the contract's 26 types, a known status) and
+  requires the lists idleness depends on (`runs`, `runtimeRequests`, `turnItems`,
+  `subagents`, `plans`); a shell row outside the contract is invalid data, not a lagging shell,
+  and the `projection_only` fallback keeps every invalid fact the observation saw and checks
+  the projection belongs to the thread. An active plan blocks when either the projection or
+  the shell shows it. Catalog lookups (projects, provider instances, models, option
+  descriptors; native project reads) no longer pick the first of repeated, diverging rows:
+  route and preflight answer `project_unavailable` / `capability_unknown` with
+  `reason: catalog_conflict`, native reads `project_conflict`.
 - Control-plane v1, live validation fixes: an absent or empty `supportedRuntimeModes` now counts
   as every mode supported, which is T3's own runtime rule (codex and claudeAgent instances do
   not declare the list); a declared list without the mode is still refused. On the write side

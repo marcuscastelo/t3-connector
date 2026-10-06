@@ -16,7 +16,7 @@
 import { createHash } from 'node:crypto';
 import { CONTROL_PLANE_CONTRACT_VERSION } from './control-plane.mjs';
 import { parseAction } from './escrita/adapters.mjs';
-import { elegibilidadeProvider } from './rota.mjs';
+import { elegibilidadeNoCatalogo, projetoDaShell } from './rota.mjs';
 import { buscarFrentes, falhaSanitizada, lerShellFresca } from './busca-threads.mjs';
 import { lerObservacaoComDados } from './settlement.mjs';
 import { Cancelada } from './t3.mjs';
@@ -97,17 +97,17 @@ async function preflightLaunch({ r, input, parsed, expected, duplicateCheck }, f
   try {
     lido = await fontes.ambientes.usar(r, async (cliente) => {
       const shell = await lerShellFresca(cliente, { signal: fontes.signal });
-      const projeto = (shell.projects ?? []).find((p) => p.id === parsed.projectId && !p.deletedAt);
+      const { projeto, conflito } = projetoDaShell(shell, parsed.projectId);
       const permitido = Boolean(projeto) && r.escopo.projetoPermitido(parsed.projectId);
       const providers = permitido ? await fontes.lerProviders(cliente, r, { signal: fontes.signal }) : null;
-      return { projeto: permitido ? projeto : null, providers };
+      return { projeto: permitido ? projeto : null, providers, projetoEmConflito: conflito && r.escopo.projetoPermitido(parsed.projectId) };
     }, { signal: fontes.signal });
   } catch (e) {
     if (e instanceof Cancelada) throw e;
     return { complete: false, extra: { environmentFailure: falhaSanitizada(e) }, material: null, reasons: [...reasons, { code: 'environment_unavailable', source: 'environment' }] };
   }
   let caminho = null;
-  if (!lido.projeto) reasons.push({ code: 'project_unavailable', source: 'shell' });
+  if (!lido.projeto) reasons.push({ code: 'project_unavailable', source: 'shell', ...(lido.projetoEmConflito ? { reason: 'catalog_conflict' } : {}) });
   else {
     const roots = rootsDoProjeto(lido.projeto);
     caminho = ws.type === 'root' ? roots[0] ?? null : ws.type === 'existing_worktree' ? ws.worktreePath : null;
@@ -122,7 +122,7 @@ async function preflightLaunch({ r, input, parsed, expected, duplicateCheck }, f
   const ms = parsed.modelSelection;
   let provider = { eligible: false };
   if (lido.providers) {
-    const el = elegibilidadeProvider(lido.providers.find((p) => p?.instanceId === ms.instanceId), { model: ms.model, options: ms.options ?? [], runtimeMode: parsed.runtimeMode });
+    const el = elegibilidadeNoCatalogo(lido.providers, ms.instanceId, { model: ms.model, options: ms.options ?? [], runtimeMode: parsed.runtimeMode });
     provider = { eligible: el.eligible };
     reasons.push(...el.reasons);
   }
@@ -169,7 +169,8 @@ async function preflightSend({ r, parsed, expected }, fontes, reasons) {
   }
   const thread = obs.thread;
   const execution = obs.execucao;
-  const projeto = (shell.projects ?? []).find((p) => p.id === thread.projectId && !p.deletedAt);
+  const { projeto, conflito: projetoEmConflito } = projetoDaShell(shell, thread.projectId);
+  if (projetoEmConflito) reasons.push({ code: 'project_unavailable', source: 'shell', reason: 'catalog_conflict' });
   const binding = thread.worktreePath
     ? { type: 'existing_worktree', path: thread.worktreePath }
     : { type: 'root', path: projeto ? rootsDoProjeto(projeto)[0] ?? null : null };

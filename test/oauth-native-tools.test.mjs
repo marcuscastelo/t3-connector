@@ -274,3 +274,11 @@ test('OAuth public schema and dispatch expose native runtime modes with backward
   assert.equal(r.state, 'completed');
   assert.equal(f.e.sends[0].payload.runtimeMode, 'approval-required');
 });
+
+test('native reads: project rows repeated and divergent are an error, never the first row (review R6)', async t => {
+  const f = await fixture(t);
+  f.e.projects.push(project('p', { workspaceRoot: '/w/other' }));
+  assert.equal(errorText(await f.read('t3_project_read', { projectId: 'p' })), 'project_conflict: The project has conflicting rows in T3.');
+  f.e.projects.splice(-1, 1, project('p'));
+  assert.equal(body(await f.read('t3_project_read', { projectId: 'p' })).workspaceRoot, '/w/p', 'identical repetition is one row');
+});

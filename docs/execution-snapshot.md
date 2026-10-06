@@ -88,9 +88,13 @@ because they wake the agent.
   `queued_runs`, `pending_request`, `proposed_plan`, `usage_limit`, `usage_limit_auto_resume`,
   `background_work_active`, `background_work_unknown` and `execution_evidence_invalid`.
 - `execution_evidence_invalid` means the projection does not follow the V2 contract (a run,
-  request, subagent or plan with an unknown status or kind, a duplicate ID, a roster task
-  without `taskId`, an active provider thread missing from the roster) or the shell has
-  conflicting rows for the thread. `evidence.problems` lists what failed. Nothing is proven
+  request, subagent, plan or turn item with an unknown status, kind or type, a duplicate ID, a
+  roster task without `taskId`, an active provider thread missing from the roster, a missing
+  `runs`, `runtimeRequests`, `turnItems`, `subagents` or `plans` list) or the shell has
+  conflicting or malformed rows for the thread. When the shell keeps changing and `execution`
+  falls back to the projection alone (`coherence.status: projection_only`), anything invalid
+  the observation saw stays here, and the projection must belong to the thread.
+  `evidence.problems` lists what failed. Nothing is proven
   from such a read: settle refuses (`settle_observation_incomplete`), the dispatch preflight
   refuses, `execution_idle` never returns, and `thread.send` `start_immediately` refuses with
   `execution_evidence_invalid` even without a guard.

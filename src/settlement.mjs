@@ -192,6 +192,19 @@ export function execucaoDoSnapshot({ thread, snapshot, attempts = 1 }) {
  * `{snapshotSequence, projection}` da mesma thread. Nunca lança: entrada inconsistente
  * vira complete=false com bloqueio `observation_incomplete`.
  */
+/** Linha da shell que decide bloqueios: tipos do contrato, ou a lista do que está fora dele. */
+function problemasDaLinha(thread) {
+  const problemas = [];
+  const obj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
+  if (!STATUS_THREAD.has(thread.status)) problemas.push('thread_status_unknown');
+  if (thread.pendingRuntimeRequest != null && !(obj(thread.pendingRuntimeRequest) && typeof thread.pendingRuntimeRequest.id === 'string' && thread.pendingRuntimeRequest.id)) problemas.push('shell_pending_request_invalid');
+  if (thread.limitRecovery != null && !obj(thread.limitRecovery)) problemas.push('shell_limit_recovery_invalid');
+  if (thread.pendingBackgroundTasks != null && !(Array.isArray(thread.pendingBackgroundTasks) && thread.pendingBackgroundTasks.every((t) => obj(t) && typeof t.taskId === 'string' && t.taskId.trim()))) problemas.push('shell_background_roster_invalid');
+  if (thread.hasActionableProposedPlan !== undefined && typeof thread.hasActionableProposedPlan !== 'boolean') problemas.push('shell_plan_flag_invalid');
+  if (thread.activeRunId != null && typeof thread.activeRunId !== 'string') problemas.push('shell_active_run_invalid');
+  return problemas;
+}
+
 export function observarSettlement(args) {
   return observar(args).observacao;
 }
@@ -204,16 +217,7 @@ function observar({ environmentId, thread, snapshot, attempts = 1, version = SET
   if (!p || !Array.isArray(p.runs) || !Array.isArray(p.runtimeRequests)) problemas.push('snapshot_without_runs_or_requests');
   if (!Number.isInteger(snapshot?.snapshotSequence) || snapshot.snapshotSequence < 0) problemas.push('snapshot_sequence_invalid');
   if (thread && p?.thread?.id !== thread.id) problemas.push('snapshot_of_another_thread');
-  if (thread && !STATUS_THREAD.has(thread.status)) problemas.push('thread_status_unknown');
-  // Linha da shell que decide bloqueios: tipos do contrato ou observação incompleta.
-  if (thread) {
-    const obj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
-    if (thread.pendingRuntimeRequest != null && !(obj(thread.pendingRuntimeRequest) && typeof thread.pendingRuntimeRequest.id === 'string' && thread.pendingRuntimeRequest.id)) problemas.push('shell_pending_request_invalid');
-    if (thread.limitRecovery != null && !obj(thread.limitRecovery)) problemas.push('shell_limit_recovery_invalid');
-    if (thread.pendingBackgroundTasks != null && !(Array.isArray(thread.pendingBackgroundTasks) && thread.pendingBackgroundTasks.every((t) => obj(t) && typeof t.taskId === 'string' && t.taskId.trim()))) problemas.push('shell_background_roster_invalid');
-    if (thread.hasActionableProposedPlan !== undefined && typeof thread.hasActionableProposedPlan !== 'boolean') problemas.push('shell_plan_flag_invalid');
-    if (thread.activeRunId != null && typeof thread.activeRunId !== 'string') problemas.push('shell_active_run_invalid');
-  }
+  if (thread) problemas.push(...problemasDaLinha(thread));
   if (Array.isArray(p?.runs) && !p.runs.every((r) => textoNaoVazio(r?.id) && STATUS_RUN.has(r.status))) problemas.push('run_malformed_or_status_unknown');
   if (Array.isArray(p?.runtimeRequests) && !p.runtimeRequests.every((r) => textoNaoVazio(r?.id) && STATUS_PEDIDO.has(r.status))) {
     problemas.push('request_malformed_or_status_unknown');
@@ -337,12 +341,18 @@ export async function lerObservacaoComDados({ environmentId, threadId, lerShell,
   let ultimoSnapshot = null;
   for (let i = 0; i < tentativas; i++) {
     const antes = achar(await lerShell());
-    if (conflito) return { observacao: incompleta(['thread_rows_conflict'], version), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1 };
-    if (!antes) return { observacao: observarSettlement({ environmentId, thread: null, snapshot: null, version }), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1 };
+    if (conflito) return { observacao: incompleta(['thread_rows_conflict'], version), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1, evidenciaInvalida: ['thread_rows_conflict'] };
+    // Linha fora do contrato é dado inválido, não shell atrasada: não repete nem cai para a
+    // projeção como corrida (revisão R6, P1).
+    const linhaInvalida = antes ? problemasDaLinha(antes) : [];
+    if (linhaInvalida.length) return { observacao: incompleta(linhaInvalida, version), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1, evidenciaInvalida: linhaInvalida };
+    if (!antes) return { observacao: observarSettlement({ environmentId, thread: null, snapshot: null, version }), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1, evidenciaInvalida: [] };
     const snapshot = await lerCompleto(threadId);
     ultimoSnapshot = snapshot;
     const depois = achar(await lerShell());
-    if (conflito) return { observacao: incompleta(['thread_rows_conflict'], version), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1 };
+    if (conflito) return { observacao: incompleta(['thread_rows_conflict'], version), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1, evidenciaInvalida: ['thread_rows_conflict'] };
+    const depoisInvalida = depois ? problemasDaLinha(depois) : [];
+    if (depoisInvalida.length) return { observacao: incompleta(depoisInvalida, version), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1, evidenciaInvalida: depoisInvalida };
     // Coerência exigida, não só observada: a shell igual nas duas leituras, o lifecycle e o
     // binding do snapshot iguais aos da shell, e a shell descrevendo a MESMA versão da projeção
     // (updatedAt, último run, run ativo, pedido pendente). Shell atrasada repete; nunca vira
@@ -350,12 +360,15 @@ export async function lerObservacaoComDados({ environmentId, threadId, lerShell,
     if (depois && marcaDaShell(antes) === marcaDaShell(depois) && lifecycleConfere(depois, snapshot?.projection?.thread)
         && snapshot?.projection && compararShell(depois, snapshot.projection).motivos.length === 0) {
       const { observacao, execucao } = observar({ environmentId, thread: depois, snapshot, attempts: i + 1, version });
+      // Shell coerente e observação incompleta: o que faltou é dado fora do contrato (linha da
+      // shell, snapshot de outra thread, run ou pedido malformado), não corrida. Quem cair para a
+      // projeção carrega esses motivos como evidência inválida (revisão R6, P1).
       return observacao.complete
-        ? { observacao, thread: depois, snapshot, execucao, ultimoSnapshot, tentativas: i + 1 }
-        : { observacao, thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1 };
+        ? { observacao, thread: depois, snapshot, execucao, ultimoSnapshot, tentativas: i + 1, evidenciaInvalida: [] }
+        : { observacao, thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1, evidenciaInvalida: observacao.blockers.filter((b) => b.code === 'observation_incomplete').map((b) => b.reason ?? b.code) };
     }
   }
-  return { observacao: incompleta(['thread_changed_during_observation'], version), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas };
+  return { observacao: incompleta(['thread_changed_during_observation'], version), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas, evidenciaInvalida: [] };
 }
 
 /**
@@ -370,12 +383,15 @@ export async function lerExecucaoDaThread(args) {
   if (lido.execucao) return { execucao: lido.execucao, lido };
   const snapshot = lido.ultimoSnapshot ?? (await args.lerCompleto(args.threadId));
   if (!snapshot?.projection) throw new Error('execution_snapshot_unavailable');
-  // Conflito de linhas da shell não vira "só projeção": a evidência continua inválida (R5, P1).
-  const conflitos = lido.observacao.blockers.filter((b) => b.reason === 'thread_rows_conflict').map((b) => b.reason);
+  // Só a corrida (thread mudando, ou fora da shell) vira "só projeção". Dado inválido que a
+  // observação viu (linhas em conflito, linha da shell malformada, snapshot de outra thread)
+  // continua inválido sem a shell (revisões R5 e R6, P1), e o snapshot tem de ser do alvo.
+  const evidenciaInvalida = [...lido.evidenciaInvalida];
+  if (snapshot.projection.thread?.id !== args.threadId && !evidenciaInvalida.includes('snapshot_of_another_thread')) evidenciaInvalida.push('snapshot_of_another_thread');
   const execucao = derivarExecucao({
     projecao: snapshot.projection,
     fonte: { kind: 'thread_full_snapshot', threadSequence: snapshot.snapshotSequence ?? null, historyComplete: true, attempts: lido.tentativas },
-    evidenciaInvalida: conflitos,
+    evidenciaInvalida,
   });
   return { execucao, lido };
 }

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { itemUnico } from '../linhas.mjs';
 
 // Thin wrappers over native T3 MCP tools (T3 8ed276c2, apps/server/src/mcp/toolkits/**), reached
 // remotely over the public RPCs the same services use. Native names, arguments and result shapes
@@ -17,6 +18,14 @@ export class NativeToolError extends Error {
 /** A typed failure answered by T3 (Effect RPC Exit Failure with a tagged error). */
 export class NativeRpcError extends Error {
   constructor(tag, message, fields = {}) { super('t3_error'); this.native = { code: tag, message, ...fields }; }
+}
+
+// Projeto pelo ID no catálogo nativo: linhas repetidas e divergentes não são escolhidas pela
+// ordem (o cwd de vcs e o workspace sairiam da primeira); viram erro (revisão R6, P1).
+function projetoUnico(projects, projectId, vivo = false) {
+  const { item, conflito } = itemUnico(projects, (p) => p.id === projectId);
+  if (conflito) throw new NativeToolError('project_conflict', 'The project has conflicting rows in T3.');
+  return item && (!vivo || item.deletedAt === null) ? item : undefined;
 }
 
 const str = z.string().trim().min(1);
@@ -79,7 +88,7 @@ export const NATIVE_WRITES = {
     },
     async result({ raw, method, native }) {
       if (method !== 'projects.createNew') return raw;
-      const project = (await native.projects()).projects.find(p => p.id === raw.projectId);
+      const project = projetoUnico((await native.projects()).projects, raw.projectId);
       if (!project) throw new Error('project_lookup_failed');
       return { ...project, ...(raw.commitError === undefined ? {} : { commitError: raw.commitError }) };
     },
@@ -172,7 +181,7 @@ export const NATIVE_READS = {
     description: 'Read one registered project by ID (full Project).',
     schema: z.object({ projectId: id }).strict(),
     async run({ input, native, authorize }) {
-      const project = (await native.projects()).projects.find(p => p.id === input.projectId && p.deletedAt === null);
+      const project = projetoUnico((await native.projects()).projects, input.projectId, true);
       if (!project) throw new NativeToolError('invalid_request', 'The project was not found.');
       await authorize([project.id]);
       return project;
@@ -222,7 +231,7 @@ export const NATIVE_READS = {
     async run({ input, native, authorize }) {
       const { thread } = await projection(native, authorize, input.threadId);
       const [projects, settings] = await Promise.all([native.projects(), native.rpc('server.getSettings', {})]);
-      const project = projects.projects.find(p => p.id === thread.projectId);
+      const project = projetoUnico(projects.projects, thread.projectId);
       if (!project) throw new NativeToolError('project_not_found', 'The project was not found.');
       return { attached: thread.worktreePath !== null, worktreePath: thread.worktreePath, branch: thread.branch, projectWorkspaceRoot: project.workspaceRoot, defaultStartFromOrigin: settings.newWorktreesStartFromOrigin };
     },
@@ -232,7 +241,7 @@ export const NATIVE_READS = {
     schema: z.object({ threadId: id, query: z.string().trim().min(1).max(256).optional(), cursor: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(200).optional(), refKind: z.enum(['all', 'local', 'remote']).optional(), includeMatchingRemoteRefs: z.boolean().optional() }).strict(),
     async run({ input, native, authorize }) {
       const { thread } = await projection(native, authorize, input.threadId);
-      const project = (await native.projects()).projects.find(p => p.id === thread.projectId && p.deletedAt === null);
+      const project = projetoUnico((await native.projects()).projects, thread.projectId, true);
       if (!project) throw new NativeToolError('invalid_request', 'The project was not found.');
       const { threadId, ...rest } = input;
       return native.rpc('vcs.listRefs', { ...rest, cwd: thread.worktreePath ?? project.workspaceRoot });

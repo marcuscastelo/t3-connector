@@ -18,6 +18,18 @@ export const chaveCanonica = (v) => JSON.stringify(v, (k, x) => {
  * A linha da thread `id` entre `threads`, considerando TODAS as linhas com esse ID (inclusive
  * apagadas). `conflito: true` quando há mais de uma e elas divergem (revisão c357eae, P1).
  */
+/**
+ * O item de um catálogo (projetos, providers, modelos, descritores) com a chave dada:
+ * `{item, conflito}`. Repetições idênticas na forma canônica contam como uma; divergentes são
+ * conflito e nenhuma é escolhida pela ordem (revisão R6, P1). Catálogo que não é lista: nada.
+ */
+export function itemUnico(lista, pred) {
+  const achados = (Array.isArray(lista) ? lista : []).filter((x) => x && pred(x));
+  if (!achados.length) return { item: null, conflito: false };
+  const base = chaveCanonica(achados[0]);
+  return achados.some((x) => chaveCanonica(x) !== base) ? { item: null, conflito: true } : { item: achados[0], conflito: false };
+}
+
 export function linhaUnica(threads, id) {
   const linhas = (Array.isArray(threads) ? threads : []).filter((t) => t && t.id === id);
   if (!linhas.length) return { linha: null, conflito: false };

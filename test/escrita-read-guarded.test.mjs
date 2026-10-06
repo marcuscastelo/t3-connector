@@ -25,7 +25,7 @@ test('cliente filtrado não lê thread de projeto fora do grant',async()=>{
 });
 
 test('leitura sob lease: t3_thread com settlementContractVersion lê o snapshot completo com a mesma ACL',async()=>{
- const projection={thread:{id:'t'},updatedAt:'2026-10-03T10:05:00.000Z',runs:[{id:'r',ordinal:1,status:'completed'}],runtimeRequests:[],messages:[],turnItems:[],providerSessions:[]};
+ const projection={thread:{id:'t'},updatedAt:'2026-10-03T10:05:00.000Z',runs:[{id:'r',ordinal:1,status:'completed'}],runtimeRequests:[],messages:[],turnItems:[],subagents:[],plans:[],providerSessions:[]};
  const completo={...cliente,thread:async()=>({projection,hasMoreHistory:false}),threadCompleto:async id=>{if(id!=='t')throw new Error('unexpected');return {snapshotSequence:3,projection};}};
  const f=clienteFiltrado(completo,new Set(['one']));
  await assert.rejects(f.threadCompleto('hidden'),/thread_not_found/);
