@@ -153,7 +153,7 @@ thread.
 |---|---|---|
 | `t3_ambientes` (environments) | `check?` (default true) | `default` and `environments` with alias, `default`, `transport`, `allowedProjectCount`, `available`, `name`, `version` or `error` |
 | `t3_projetos` (projects) | `environment?`, `search?`, `limit?`, `cursor?` | `total`, `returned`, `truncated`, `nextCursor?`, `projects` (ordered by title) |
-| `t3_threads` | `environment?`, `projectId?`, `state?`, `includeNoRun?` (include threads without a run, default false), `search?`, `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `nextCursor?`, `changedSinceStart?`, `hiddenNoRun?`, `threads` |
+| `t3_threads` | `environment?`, `projectId?`, `state?`, `includeNoRun?` (include threads without a run, default false), `woke?` (Woke marker filter), `search?`, `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `nextCursor?`, `changedSinceStart?`, `hiddenNoRun?`, `threads` |
 | `t3_buscar_threads` (find threads) | exactly one of `search?` or `threadId?` (exact), `match?` (`partial` = substring, default; `exact` = whole title), `environment?` (restricts; omitted: every environment), `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `complete`, `nextCursor?`, `queriedEnvironments`, `environmentFailures`; each thread with `environment: {alias, environmentId, name}` and `archived` |
 | `t3_atencao` (attention) | `environment?` | threads that need intervention, or failed and were not settled |
 | `t3_thread` | `environment?`, `threadId`, `maxCharacters?` (200-6000, 1500) | thread summary, `pendingRequests`, `providerSession` (informational), `activeRun?`, `latestRun`, `latestResponse`, `history` |
@@ -164,8 +164,8 @@ thread.
 States (`state`, also the filter of `t3_threads`): `running`, `needs_intervention`,
 `completed`, `failed`, `cancelled`, `no_run` and `unknown`. Each thread summary carries
 `threadId`, `title`, `project`, `directory`, `branch`, `model` (`model`, `instanceId`,
-`effort`), `runtimeMode`, `state`, `stateSource`, `statusRun`, `runId`, `updatedAt` and
-`settled`; intervention adds `reason`, `kind`, `identifier` and `since`.
+`effort`), `runtimeMode`, `state`, `stateSource`, `statusRun`, `runId`, `updatedAt`,
+`settled`, `woke` and `wokeAt`; intervention adds `reason`, `kind`, `identifier` and `since`.
 `t3_aguardar_thread` returns with `returnReason` `terminal`, `needs_intervention`,
 `no_run`, `timeout`, `thread_deleted` or `subscription_closed`.
 
@@ -192,6 +192,39 @@ requested. `providerSession` (`status`, `model`) is the provider process as last
 and carries `informational: true`. It can keep the previous model after a model change
 (a `note` says so) and read `ready` while a run is active, so it never decides the model
 or the state. Message `streaming` flags do not decide the state either.
+
+### Woke marker (`woke`, `wokeAt`)
+
+`woke: true` is the "Woke" marker of the T3 sidebar: the thread woke from a snooze and
+nobody has acknowledged it yet. T3 does not store this flag; it derives it from durable
+shell fields (`snoozedUntil`, `snoozedAt`, `lastVisitedAt`, `settledOverride`, the latest
+run and the pending request) plus the clock, and the connector applies the same rule
+(T3 Code `threadWokeAt` and the sidebar indicator, nightly `3e6b4502`):
+
+- a thread wakes when its snooze time passes, or earlier when it raises its hand: a
+  pending approval or question (not `auth_refresh`), a failure newer than the snooze, or
+  a run completed after the snooze;
+- `wokeAt` is that instant: the snooze time, or the completion or failure time for an
+  early wake. It stays set after acknowledgement and is null when the thread never
+  snoozed or is still snoozed;
+- the marker clears when the shared visited watermark (`lastVisitedAt`) reaches `wokeAt`
+  (dismissing the pill, or opening the thread after new activity) or when the thread is
+  explicitly settled (`settledOverride`); unsnooze, pin, a new message or a new snooze
+  reset the snooze itself;
+- `woke: null` means the server does not send the snooze fields or the shared visited
+  watermark (older T3); T3 then falls back to the browser's local watermark, which the
+  connector cannot see.
+
+`woke` is independent of `state` and `settled`, and unrelated to the `completionWake`
+policy of delegated tasks (the write action `delegated_task.wake-policy`). Reading never
+acknowledges the marker: the connector only GETs the shell.
+
+`t3_threads` accepts `woke: true` (only woke threads) or `woke: false`. The filter is
+applied before pagination, combines with the other filters, and is refused with an error
+when the server cannot decide the marker for a matching thread, instead of returning a
+list that looks complete. A snooze expiring or an acknowledgement changes the selection
+without changing `updatedAt`, so pages are a live query and `changedSinceStart` does not
+cover these changes. Omitting `woke` keeps the previous behavior and cursors.
 
 ### Pending runtime requests (`t3_thread`)
 

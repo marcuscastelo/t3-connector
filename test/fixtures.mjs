@@ -1,6 +1,8 @@
 // Fixtures fiéis ao contrato V2 (packages/contracts/src/orchestrationV2.ts no commit 8ed276c2):
 // OrchestrationV2ThreadShell, OrchestrationV2RuntimeRequest e mensagens do /bounded.
 // Campos ausentes aqui são opcionais ou irrelevantes para o estado.
+// Snooze, visita e override vêm como o nightly 3e6b4502 emite (sempre presentes, null sem
+// valor; ProjectionStore.ts:1418-1427); servidor antigo se simula apagando a chave.
 
 export const PROJETO_OK = 'proj-ok';
 export const PROJETO_FORA = 'proj-fora';
@@ -31,7 +33,11 @@ export function thread(campos = {}) {
     createdAt: '2026-10-03T10:00:00.000Z',
     updatedAt: '2026-10-03T10:05:00.000Z',
     archivedAt: null,
+    settledOverride: null,
     settledAt: null,
+    snoozedUntil: null,
+    snoozedAt: null,
+    lastVisitedAt: null,
     deletedAt: null,
     ...campos,
   };

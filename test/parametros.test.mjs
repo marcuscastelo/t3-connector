@@ -102,8 +102,8 @@ test('escrita: `ambiente` ou falta de environment não chegam ao relay; leitura 
   assert.equal(pedidos.length, 0);
   await c.callTool({ name: 't3_escrever_thread_pin', arguments: { ...base, environment: 'remoto' } });
   assert.deepEqual(pedidos[0], { op: 'dispatch', action: 'thread.pin', leaseId: 'l', ambiente: 'remoto', operationId: 'op', input: { threadId: 't' } });
-  await c.callTool({ name: 't3_threads', arguments: { leaseId: 'l', environment: 'local', state: 'needs_intervention', includeNoRun: true, search: 'x', limit: 2 } });
-  assert.deepEqual(pedidos[1].input, { state: 'needs_intervention', includeNoRun: true, search: 'x', limit: 2 });
+  await c.callTool({ name: 't3_threads', arguments: { leaseId: 'l', environment: 'local', state: 'needs_intervention', includeNoRun: true, woke: true, search: 'x', limit: 2 } });
+  assert.deepEqual(pedidos[1].input, { state: 'needs_intervention', includeNoRun: true, woke: true, search: 'x', limit: 2 });
   const antigo = await c.callTool({ name: 't3_threads', arguments: { leaseId: 'l', environment: 'local', estado: 'rodando' } });
   assert.equal(antigo.isError, true);
   assert.equal(pedidos.length, 2);

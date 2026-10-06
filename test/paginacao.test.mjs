@@ -50,7 +50,7 @@ test('schema de t3_threads e t3_projetos: parâmetros em inglês, todos opcionai
   const c = await conectarMcp(ambientesFalsos());
   const { tools } = await c.listTools();
   const threads = tools.find((t) => t.name === 't3_threads').inputSchema;
-  assert.deepEqual(Object.keys(threads.properties).sort(), ['cursor', 'environment', 'includeNoRun', 'limit', 'projectId', 'search', 'state']);
+  assert.deepEqual(Object.keys(threads.properties).sort(), ['cursor', 'environment', 'includeNoRun', 'limit', 'projectId', 'search', 'state', 'woke']);
   assert.deepEqual(threads.required ?? [], []);
   assert.equal(threads.properties.limit.maximum, 50);
   assert.deepEqual(threads.properties.state.enum, ['running', 'needs_intervention', 'completed', 'failed', 'cancelled', 'no_run', 'unknown']);
