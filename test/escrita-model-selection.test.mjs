@@ -178,7 +178,7 @@ test('write connection reads providers from server.getConfig of the same environ
 
 test('lease bridge: refusal code and exact message reach the client through the private HTTP relay', async (t) => {
  const detail = 'option "fastMode" is not offered by model "claude-opus-5-5" of instance "claudeAgent_custom". Offered options: "reasoningEffort" (select). Nothing was sent.';
- const http = createServer((req, res) => {res.writeHead(403, {'content-type': 'application/json'});res.end(JSON.stringify({error: 'model_option_unsupported', detail}));});
+ const http = createServer((req, res) => {res.writeHead(403, {'content-type': 'application/json'});res.end(JSON.stringify({error: 'model_option_unsupported', native: {code: 'model_option_unsupported', message: detail}}));});
  await new Promise((r) => http.listen(0, '127.0.0.1', r));
  const server = criarPonteEscrita({aliases: ['isolated'], approvalOrigin: 'https://approval.example.test', relay: relayHttp({porta: http.address().port, lerCapability: () => 'cap'})});
  const [a, b] = InMemoryTransport.createLinkedPair();await server.connect(b);
