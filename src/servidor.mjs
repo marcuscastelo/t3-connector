@@ -14,7 +14,7 @@ import {
 } from './estado.mjs';
 import { ForaDoEscopo } from './ambientes.mjs';
 import { aguardarThread, TETO_MS } from './espera.mjs';
-import { buscarThreads, EntradaInvalida, PRAZO_AMBIENTE_MS, PRAZO_TOTAL_MS } from './busca-threads.mjs';
+import { buscarThreads, buscarThreadsEmLote, EntradaInvalida, LIMITE_LOTE, MAX_CONSULTAS, PRAZO_AMBIENTE_MS, PRAZO_TOTAL_MS } from './busca-threads.mjs';
 import { lerProviders, resumoProvider } from './providers.mjs';
 import { assinatura, casaBusca, comparador, CursorInvalido, normalizar, paginar } from './paginacao.mjs';
 import { Cancelada, ErroT3 } from './t3.mjs';
@@ -292,6 +292,49 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
     async (args, extra) => {
       try {
         return resposta(await buscarThreads(ambientes, args, { ...opcoesBusca, signal: extra?.signal, resumir: (t, p) => resumoDaThread(t, p) }));
+      } catch (e) {
+        return erro(e);
+      }
+    },
+  );
+
+  const campoChave = z.string().min(1).max(200).describe('Your correlation label for this query (for example the title as the user said it); unique in the call and echoed in its result');
+  const campoLimiteLote = z.number().int().min(1).max(20).optional().describe(`Maximum candidates returned for this query; default ${LIMITE_LOTE}. \`total\` and \`resolution\` always count every match`);
+  const campoCursorLote = z.string().min(1).optional().describe('`nextCursor` of this same query from a previous call with the same queries and environments; omitted: first page');
+  registrar(
+    't3_thread_find_batch',
+    {
+      title: 'Resolve several thread references at once',
+      description:
+        `Resolves up to ${MAX_CONSULTAS} thread references (title, part of a title, or exact ID) in one call, reading each environment once. Use it instead of calling t3_buscar_threads once per name, for example before snoozing several threads. ` +
+        'Each query has its own result, in the same order and with its `key`: `resolution` is `resolved` (exactly one candidate and every environment answered), `ambiguous` (more than one candidate, possibly in different environments or projects), `not_found` (zero candidates and every environment answered) or `inconclusive` (zero or one candidate but some environment failed, so the answer is unproven). ' +
+        'Never pick a candidate of an ambiguous or inconclusive query on your own: show the candidates (environment, project, title, state) and ask the user. A resolved query gives the exact `environment.alias`, `threadId` and `project.projectId` to pass to write tools such as t3_thread_inbox_update_batch. ' +
+        `Each environment has ${PRAZO_AMBIENTE_MS} ms and the whole call ${PRAZO_TOTAL_MS} ms; failures appear in \`environmentFailures\` (per query and for the call) and \`complete\` is false. ` +
+        'Searches the threads each environment lists as live; deleted threads never appear and archived threads may be missing, so `not_found` only covers that universe. An invalid query (both or neither of search/threadId, `match` with threadId, repeated key) rejects the whole call before reading; an invalid cursor fails only its query (`status: "error"`). ' +
+        'Candidates are ordered by environmentId and threadId. ' + CONTRATO_ESTADO + ' Read-only.',
+      shape: {
+        queries: z.array(z.union([
+          z.strictObject({
+            key: campoChave,
+            search: z.string().min(1).describe('Part of the title or threadId, ignoring case and accents; with `match: "exact"`, the whole title or the exact ID'),
+            match: z.enum(['partial', 'exact']).optional().describe('partial (substring, default) or exact (whole title, or exact ID)'),
+            limit: campoLimiteLote,
+            cursor: campoCursorLote,
+          }),
+          z.strictObject({
+            key: campoChave,
+            threadId: z.string().min(1).describe('Exact thread ID, compared literally'),
+            limit: campoLimiteLote,
+            cursor: campoCursorLote,
+          }),
+        ])).min(1).max(MAX_CONSULTAS).describe('One entry per reference to resolve: `{key, search, match?}` or `{key, threadId}`'),
+        environments: z.array(z.string().min(1)).min(1).optional().describe(`Restrict every query to these environments (alias or environmentId): ${nomes}. Omitted: every configured environment`),
+      },
+      annotations: SO_LEITURA,
+    },
+    async (args, extra) => {
+      try {
+        return resposta(await buscarThreadsEmLote(ambientes, args, { ...opcoesBusca, signal: extra?.signal, resumir: (t, p) => resumoDaThread(t, p) }));
       } catch (e) {
         return erro(e);
       }

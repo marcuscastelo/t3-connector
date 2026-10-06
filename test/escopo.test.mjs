@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { criarEscopo } from '../src/ambientes.mjs';
 import { ambientesFalsos, conectarMcp, dados, LOCAL, REMOTO, PROJETO_ALHEIO } from './apoio.mjs';
 
-const FERRAMENTAS = ['t3_aguardar_thread', 't3_ambientes', 't3_atencao', 't3_buscar_threads', 't3_mensagens', 't3_projetos', 't3_providers', 't3_thread', 't3_threads', 't3_workset'];
+const FERRAMENTAS = ['t3_aguardar_thread', 't3_ambientes', 't3_atencao', 't3_buscar_threads', 't3_mensagens', 't3_projetos', 't3_providers', 't3_thread', 't3_thread_find_batch', 't3_threads', 't3_workset'];
 
 test('sem projetos permitidos o ambiente não sobe', () => {
   assert.throws(() => criarEscopo('local', []), /projetosPermitidos/);

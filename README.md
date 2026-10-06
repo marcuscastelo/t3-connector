@@ -134,7 +134,10 @@ version), and refresh the tool list in the client.
    **To find a thread without knowing its environment**, call `t3_buscar_threads` (find
    threads): each result carries the environment where the thread lives. When `total` is
    above 1, ask the user which one; never pick by order, recency or the default
-   environment. Then read with that `environment` and `threadId`.
+   environment. Then read with that `environment` and `threadId`. To resolve several
+   threads at once (for example before snoozing them), call `t3_thread_find_batch`: one
+   result per query with `resolution` (`resolved`, `ambiguous`, `not_found`,
+   `inconclusive`). See [Batch operations](docs/batch-operations.md).
 3. **To follow a thread**, call `t3_aguardar_thread` with `timeoutMs` between 1000 and 2000
    for voice (max 5000). `timedOut: true` means the thread is still running: answer the
    user and call again on a later turn. Do not chain waits in the same turn.
@@ -155,8 +158,8 @@ version), and refresh the tool list in the client.
 ### Read tools
 
 All have `readOnlyHint: true` and `destructiveHint: false`. Every response includes
-`environment: {alias, environmentId}`, except `t3_buscar_threads`, which puts it on each
-thread.
+`environment: {alias, environmentId}`, except `t3_buscar_threads` and `t3_thread_find_batch`,
+which put it on each thread.
 
 | Tool | Input | Main output |
 |---|---|---|
@@ -164,6 +167,7 @@ thread.
 | `t3_projetos` (projects) | `environment?`, `search?`, `limit?`, `cursor?` | `total`, `returned`, `truncated`, `nextCursor?`, `projects` (ordered by title) |
 | `t3_threads` | `environment?`, `projectId?`, `state?`, `includeNoRun?` (include threads without a run, default false), `search?`, `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `nextCursor?`, `changedSinceStart?`, `hiddenNoRun?`, `threads` |
 | `t3_buscar_threads` (find threads) | exactly one of `search?` or `threadId?` (exact), `match?` (`partial` = substring, default; `exact` = whole title), `environment?` (restricts; omitted: every environment), `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `complete`, `nextCursor?`, `queriedEnvironments`, `environmentFailures`; each thread with `environment: {alias, environmentId, name}` and `archived` |
+| `t3_thread_find_batch` | `queries` (1-50; each `{key, search, match?}` or `{key, threadId}`, with `limit?` (1-20, 5) and `cursor?`), `environments?` | `summary`, `complete`, `environmentFailures`; `results` in query order, each with `resolution`, `total`, `complete`, `environmentFailures` and `candidates` |
 | `t3_atencao` (attention) | `environment?` | threads that need intervention, or failed and were not settled |
 | `t3_workset` | `environments?` (omitted: every environment), `limitPerGroup?` (1-100, 25) | `observedAt`, `complete`, `queriedEnvironments`, `environmentFailures`, `counts`, `truncated?`, `actionable` and `inFlight` (the active queue: no settled idle, future-snoozed or archived threads), `groups` (needs_intervention, running, background_pending, unknown, snoozed, failed_unsettled, completed_unsettled, cancelled_unsettled), `archived` (listed apart; `available: false` until a validated source exists) |
 | `t3_thread` | `environment?`, `threadId`, `maxCharacters?` (200-6000, 1500), `settlementContractVersion?` (1) | thread summary, `pendingRequests`, `providerSession` (informational), `activeRun?`, `latestRun`, `latestResponse`, `history`, `execution` (see [Execution snapshot](docs/execution-snapshot.md)); with `settlementContractVersion: 1` also `settlement` (blockers, observationId, lifecycle fields), built from the same full-snapshot observation as `execution` |
@@ -493,6 +497,11 @@ HTTPS. Mobile, Bitwarden sync and hosted ChatGPT E2E still require separate depl
 The default `restricted` project policy preserves the sandbox read ACL and write snapshot at sign-in.
 `T3_CONNECTOR_OAUTH_WRITE_PROJECTS` is available only in that mode and conflicts with `all`.
 See [`examples/oauth-all-projects.env`](examples/oauth-all-projects.env) for configuration.
+
+The OAuth write tools include `t3_thread_inbox_update_batch`: snooze or unsnooze up to 20 exact
+threads in one call. Each item has its own result and goes through the same journal and checks as
+the single write. Repeating a `batchId` returns the recorded results and never resends. See
+[Batch operations](docs/batch-operations.md).
 
 ## Development
 
