@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.11.3
+
 - Writes: a typed answer from T3 to a sent canonical action (`OrchestrationV2DispatchCommandError`,
   `OrchestrationV2ThreadLaunchError`, `EnvironmentAuthorizationError`) no longer ends every OAuth
   session (or lease). The operation is journaled `uncertain` with T3's code and message, the tool
@@ -15,8 +17,11 @@
   exists). Lost transport, malformed frames, timeouts and journal failures still end every session.
 - Writes: typed T3 errors are sanitized at the transport: the tag must be an identifier, `cause`
   (T3's defect chain) and nested fields never leave the frame, `code`/`message` cannot be overridden
-  by the payload, strings are clipped to 2000 characters. The lease relay and the stdio bridge carry
-  T3's typed code and message.
+  by the payload, field names must be identifiers (at most 16 fields), strings are clipped to 2000
+  characters. The lease relay and the stdio bridge carry T3's typed code and message.
+- OAuth writes: an audit record that cannot be written now ends every session before the error
+  surfaces, like the lease gate; before, the post-delete audit (`project_delete_live_threads`)
+  swallowed the failure and the sessions stayed.
 
 ## 0.11.2
 
