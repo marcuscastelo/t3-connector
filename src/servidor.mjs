@@ -24,8 +24,10 @@ import { GRUPOS, LIMITE_PADRAO, montarWorkset, PRAZO_AMBIENTE_MS as PRAZO_WORKSE
 import { compararShell, derivarExecucao } from './execucao.mjs';
 import { lerShellFresca } from './busca-threads.mjs';
 import { chamar } from './ws.mjs';
-import { CONTROL_PLANE_CONTRACT_VERSION, montarRevisao } from './control-plane.mjs';
+import { CONTROL_PLANE_CONTRACT_VERSION, montarRevisao, SELETOR_FRENTE } from './control-plane.mjs';
 import { MAX_CANDIDATOS, rotear } from './rota.mjs';
+import { preflightDespacho } from './despacho.mjs';
+import { dispatchExpected } from './escrita/adapters.mjs';
 
 export { lerShellFresca };
 
@@ -177,14 +179,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
             modelSelection: z.strictObject({ instanceId: z.string().min(1), model: z.string().min(1), options: z.array(z.strictObject({ id: z.string().min(1), value: z.union([z.string(), z.boolean()]) })).optional() }),
             runtimeMode: z.enum(['approval-required', 'auto-accept-edits', 'auto', 'full-access']),
           })).min(1).max(MAX_CANDIDATOS).describe('Where the work could run: one per environment, with that environment\'s own project and provider instance IDs'),
-          front: z.strictObject({
-            threadId: z.string().min(1).optional(),
-            title: z.strictObject({ value: z.string().min(1), match: z.enum(['exact', 'partial']).optional() }).optional(),
-            branch: z.string().min(1).optional(),
-            worktreePath: z.string().min(1).optional(),
-            pullRequest: z.strictObject({ host: z.string().min(1), repository: z.string().min(1), number: z.number().int().positive() }).optional(),
-            projectIds: z.array(z.strictObject({ environment: z.string().min(1), projectId: z.string().min(1) })).min(1).max(20).optional(),
-          }).optional().describe('Selector of the front this work belongs to (as in t3_thread_find_batch); searched with population all'),
+          front: SELETOR_FRENTE.optional().describe('Selector of the front this work belongs to (as in t3_thread_find_batch); searched with population all'),
           discoveryEnvironments: z.array(z.string().min(1)).min(1).optional().describe('Where to look for the front; required with `front`'),
           constraints: z.strictObject({
             allowedEnvironments: z.array(z.string().min(1)).min(1).optional(),
@@ -386,14 +381,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
           }),
           z.strictObject({
             key: campoChave,
-            selector: z.strictObject({
-              threadId: z.string().min(1).optional(),
-              title: z.strictObject({ value: z.string().min(1), match: z.enum(['exact', 'partial']).optional() }).optional().describe('Thread title; exact (default) or partial, ignoring case and accents'),
-              branch: z.string().min(1).optional().describe('Branch bound to the thread, compared literally'),
-              worktreePath: z.string().min(1).optional().describe('Worktree path bound to the thread, compared literally (metadata, not a filesystem check)'),
-              pullRequest: z.strictObject({ host: z.string().min(1), repository: z.string().min(1).describe('owner/repo (GitHub) or group/project (GitLab)'), number: z.number().int().positive() }).optional(),
-              projectIds: z.array(z.strictObject({ environment: z.string().min(1), projectId: z.string().min(1) })).min(1).max(20).optional(),
-            }).describe(`Structural selector (all conditions must hold; controlPlaneContractVersion ${CONTROL_PLANE_CONTRACT_VERSION}); needs at least one of threadId, title, branch, worktreePath, pullRequest`),
+            selector: SELETOR_FRENTE.describe(`Structural selector (all conditions must hold; controlPlaneContractVersion ${CONTROL_PLANE_CONTRACT_VERSION}); needs at least one of threadId, title, branch, worktreePath, pullRequest`),
             relations: z.strictObject({
               direction: z.enum(['children', 'descendants']).optional(),
               maxDepth: z.number().int().min(1).max(4).optional(),
@@ -497,6 +485,40 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         if (args.reviewQueue && args.controlPlaneContractVersion !== CONTROL_PLANE_CONTRACT_VERSION) throw new EntradaInvalida(`\`reviewQueue\` needs controlPlaneContractVersion: ${CONTROL_PLANE_CONTRACT_VERSION}`);
         return resposta(await montarWorkset(ambientes, args, { ...opcoesWorkset, signal: extra?.signal, resumir: (t, p) => resumoDaThread(t, p) }));
       } catch (e) {
+        return erro(e);
+      }
+    },
+  );
+
+  registrar(
+    't3_dispatch_preflight',
+    {
+      title: 'Check a launch or send before doing it',
+      description:
+        `Control-plane v${CONTROL_PLANE_CONTRACT_VERSION}: checks whether thread.launch or thread.send would be admitted, without sending, reserving or writing anything. ` +
+        'Launch: workspace root or an existing approved worktree (creating a worktree is workspace_creation_preflight_unsupported), explicit runtimeMode, provider ready and authenticated with that mode and the exact model, and a duplicateCheck (selector, environments, population all) that finds no existing front (front_exists / front_ambiguous / front_discovery_incomplete refuse). ' +
+        'Send: the thread binding you expect, and the blockers of execution from a coherent observation (start_immediately needs canStartNow; queue_after_active needs an active run; steer_active/restart_active are delivery_capability_unknown). ' +
+        'An admissible answer gives inputDigest and observationId: pass them with `expected` (and duplicateCheck for launch, expectedRunId for send) in the write\'s `dispatchGuard`, which repeats this check right before sending and refuses with dispatch_* codes on any change. writeAuthorization is not_checked: this never grants a write. The worktree path is verified on the host by the write itself. Read-only.',
+      shape: {
+        controlPlaneContractVersion: z.literal(CONTROL_PLANE_CONTRACT_VERSION),
+        environment: z.string().min(1).describe(`Environment of the write (alias or environmentId): ${nomes}`),
+        action: z.enum(['thread.launch', 'thread.send']),
+        input: z.record(z.string(), z.unknown()).describe('The exact input of the write, without dispatchGuard'),
+        expected: dispatchExpected,
+        duplicateCheck: z.strictObject({ environments: z.array(z.string().min(1)).min(1).max(10), population: z.literal('all'), selector: SELETOR_FRENTE }).optional().describe('Required for thread.launch: where and how to look for an existing front'),
+      },
+      annotations: SO_LEITURA,
+    },
+    async (args, extra) => {
+      try {
+        return resposta(await preflightDespacho(args, {
+          ambientes,
+          signal: extra?.signal,
+          lerProviders: (cliente, r, o) => lerProviders(cliente, { environmentIdEsperado: r.environmentId, signal: o?.signal, ...opcoesProviders }),
+          lerArquivadas: opcoesBusca.lerArquivadas === undefined ? lerArquivadasWs : opcoesBusca.lerArquivadas,
+        }));
+      } catch (e) {
+        if (e?.codigo === 'invalid_input') return erro(new EntradaInvalida(e.message));
         return erro(e);
       }
     },

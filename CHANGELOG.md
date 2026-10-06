@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Control-plane v1, protected dispatch: new read tool `t3_dispatch_preflight` checks a
+  `thread.launch` or `thread.send` without sending or reserving anything (inputDigest,
+  observationId, reasons; `writeAuthorization: not_checked`). Launch needs workspace `root` or an
+  approved existing worktree (creating one is `workspace_creation_preflight_unsupported`), an
+  explicit runtimeMode, an eligible provider (same filters as the route) and a `duplicateCheck`
+  with population `all` that finds no front. Send takes its blockers from execution (v2
+  observation); `queue_after_active` needs an active run; steer/restart are
+  `delivery_capability_unknown`. `thread.launch` and `thread.send` accept `dispatchGuard`
+  (version 1): the connector repeats the same preflight right before the send, inside the project
+  lock for launch, and refuses with `dispatch_*` codes (nothing sent, replay is a known result).
+  A protected launch returns and replays `createdThread`. The guard is never forwarded to T3;
+  without it both writes are unchanged.
 - Control-plane v1, review: `t3_workset` with `reviewQueue` (group `completed_unsettled`) pages
   the whole group before `limitPerGroup`, with a cursor bound to the environments and their
   snapshot sequences (`cursor_snapshot_changed` when they move) and the next read per item.

@@ -3,7 +3,19 @@
 // trabalho em curso vem de execution (src/execucao.mjs), filas do workset, aceite do
 // settlement e escrita do Dispatcher/journal. Nenhum estado próprio de thread.
 
+import { z } from 'zod';
+
 export const CONTROL_PLANE_CONTRACT_VERSION = 1;
+
+/** Seletor estrutural de frente (E lógico), compartilhado por find_batch, rota e dispatchGuard. */
+export const SELETOR_FRENTE = z.strictObject({
+  threadId: z.string().min(1).optional(),
+  title: z.strictObject({ value: z.string().min(1), match: z.enum(['exact', 'partial']).optional() }).optional().describe('Thread title; exact (default) or partial, ignoring case and accents'),
+  branch: z.string().min(1).optional().describe('Branch bound to the thread, compared literally'),
+  worktreePath: z.string().min(1).optional().describe('Worktree path bound to the thread, compared literally (metadata, not a filesystem check)'),
+  pullRequest: z.strictObject({ host: z.string().min(1), repository: z.string().min(1).describe('owner/repo (GitHub) or group/project (GitLab)'), number: z.number().int().positive() }).optional(),
+  projectIds: z.array(z.strictObject({ environment: z.string().min(1), projectId: z.string().min(1) })).min(1).max(20).optional(),
+});
 
 export const REVISAO_MAX_ITENS = 20;
 

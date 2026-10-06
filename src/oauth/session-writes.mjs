@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Dispatcher, ACTIONS, schemaForAction, parseAction, chaveOperacao, SEND_DESCRIPTION, SETTLE_DESCRIPTION } from '../escrita/adapters.mjs';
 import { MENSAGENS_GUARD } from '../settlement.mjs';
+import { fontesEscrita, preflightDespacho } from '../despacho.mjs';
 import { grantDoAmbiente } from '../escrita/gate.mjs';
 import { grantFromInventory, escopoDosGrants } from '../escrita/scope.mjs';
 import { identidadeSessaoOAuth, exigirIdentidade } from '../escrita/identidade.mjs';
@@ -121,7 +122,7 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
   const gate = new SessionWriteGate({ authority, issuer, audit });
   const registros = conexoes.map(c => c.registro);
   const porAlias = new Map(conexoes.map(c => [c.registro.alias, c]));
-  const dispatchers = new Map(all ? [] : conexoes.map(c => [c.registro.alias, new Dispatcher({ gate, adapter: c.adapter, journal, environmentId: c.registro.environmentId, destination: c.registro.destination })]));
+  const dispatchers = new Map(all ? [] : conexoes.map(c => [c.registro.alias, new Dispatcher({ gate, adapter: c.adapter, journal, environmentId: c.registro.environmentId, destination: c.registro.destination, dispatchPreflight: (pedido, { scope }) => preflightDespacho(pedido, fontesEscrita(conexoes, scope)) })]));
   const identity = principal => identidadeSessaoOAuth({ issuer, subject: principal.sub });
   const resolve = chave => porAlias.get(resolverAmbiente(registros, chave).alias);
 
@@ -186,6 +187,7 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     const adapter = { ...c.adapter, projectForThread: async id => threadProject(shell, id) };
     const d = new Dispatcher({ gate: opGate, adapter, journal, environmentId: c.registro.environmentId, destination: c.registro.destination,
       authorizeRecorded: target => authorizeRecord(principal, c, target.action),
+      dispatchPreflight: (pedido, { scope }) => preflightDespacho(pedido, fontesEscrita(conexoes, scope)),
       resolveGrant: async () => { shell = await liveShell(principal, c); opGate.operationGrant = grantFrom(shell); return opGate.operationGrant; },
       validateTarget: async ({ target, input, spec, validateWorkspace }) => {
         const latest = await liveShell(principal, c);

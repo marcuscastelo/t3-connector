@@ -6,6 +6,7 @@ import { exigirIdentidade } from './identidade.mjs';
 import { PROJECT_ACTIONS, PROJECT_SCHEMAS, isProjectAction, guardProjectDelete, lockProject } from './project-admin.mjs';
 import { NATIVE_WRITES, NATIVE_WRITE_ACTIONS, NativeToolError, NativeRpcError } from './native.mjs';
 import { avaliarGuard, SETTLEMENT_CONTRACT_VERSION, SETTLEMENT_CONTRACT_VERSIONS } from '../settlement.mjs';
+import { SELETOR_FRENTE } from '../control-plane.mjs';
 const str=z.string().trim().min(1).max(1024), id=str;
 const model=z.object({instanceId:str.describe('Exact ID of the provider instance configured in the chosen environment, as listed by the read tool t3_providers (instanceId); keep case, underscores and hyphens, for example claudeAgent_custom.'),model:str.describe('Exact model ID for that instance (models[].slug in t3_providers), including custom models, for example claude-opus-5-5. The connector has no model enum or allowlist; availability is decided by T3 in that environment.'),options:z.array(z.object({id:str,value:z.union([z.string(),z.boolean()])}).strict()).optional()}).strict();
 const runtimeMode=z.enum(['approval-required','auto-accept-edits','auto','full-access']).default('full-access').describe('T3 execution mode; omitted preserves the connector default full-access. Supported modes are decided by the selected provider in T3.');
@@ -51,7 +52,14 @@ const workspace=z.discriminatedUnion('type',[
  z.object({type:z.literal('root'),branch:str.optional()}).strict(),
  z.object({type:z.literal('existing_worktree'),worktreePath:str,branch:str.optional()}).strict(),
  z.object({type:z.literal('worktree'),baseRef:str,branch:str.optional(),startFromOrigin:z.boolean().optional()}).strict()]);
-specs.set('thread.launch',{method:'orchestration.launchThread',refs:[],schema:z.object({projectId:id,title:str,modelSelection:model,workspaceStrategy:workspace,runtimeMode,text:z.string().max(100000).optional()}).strict(),encode:p=>{const {text,...rest}=p;return {...rest,commandId:randomUUID(),threadId:randomUUID(),interactionMode:'default',...(text!==undefined?{initialMessage:{messageId:randomUUID(),text,attachments:[]}}:{})};}});
+// Optional dispatchGuard (control-plane v1): the connector redoes t3_dispatch_preflight right before
+// the send and refuses (dispatch_*, nothing sent) on any difference. Never forwarded to T3.
+export const dispatchExpected=z.object({projectId:id,workspace:z.object({type:z.enum(['root','existing_worktree','worktree']),path:str.nullable().optional(),branch:str.nullable()}).strict()}).strict().describe('The binding you reviewed in the preflight (expected from t3_dispatch_preflight input)');
+const dispatchGuardBase={version:z.number().int().positive().describe('Dispatch guard version; supported: 1'),expectedInputDigest:str.max(80).describe('inputDigest from t3_dispatch_preflight'),expectedObservationId:str.max(128).describe('observationId from t3_dispatch_preflight (admissible only)'),expected:dispatchExpected};
+const dispatchGuardLaunch=z.object({...dispatchGuardBase,duplicateCheck:z.object({environments:z.array(str).min(1).max(10),population:z.literal('all'),selector:SELETOR_FRENTE}).strict()}).strict().optional().describe('Protected launch (control-plane v1): from an admissible t3_dispatch_preflight; refused with dispatch_* codes when anything changed, a front already exists or discovery is incomplete. Omitted: legacy launch');
+const dispatchGuardSend=z.object({...dispatchGuardBase,expectedRunId:id.nullable().describe('expectedRunId from the preflight: null for start_immediately, the active run otherwise')}).strict().optional().describe('Protected send (control-plane v1): from an admissible t3_dispatch_preflight; blockers come from execution; refused with dispatch_* codes. Omitted: legacy send');
+export const DISPATCH_GUARDED=Object.freeze(['thread.launch','thread.send']);
+specs.set('thread.launch',{method:'orchestration.launchThread',refs:[],schema:z.object({projectId:id,title:str,modelSelection:model,workspaceStrategy:workspace,runtimeMode,text:z.string().max(100000).optional(),dispatchGuard:dispatchGuardLaunch}).strict(),encode:p=>{const {text,dispatchGuard,...rest}=p;return {...rest,commandId:randomUUID(),threadId:randomUUID(),interactionMode:'default',...(text!==undefined?{initialMessage:{messageId:randomUUID(),text,attachments:[]}}:{})};}});
 // One branch per mode: tools/list carries conditional requirements, not just runtime refinements.
 export const SEND_DESCRIPTIONS=Object.freeze({
  start_immediately:'Starts a new run when there is no active run to preserve. Does not correct or interrupt a current run. If a run is active, T3 may turn this into a queued message: read t3_thread first; to correct the current run use steer_active with targetRunId.',
@@ -61,7 +69,7 @@ export const SEND_DESCRIPTIONS=Object.freeze({
 });
 export const SEND_DESCRIPTION='Sends an instruction to the thread. thread.send does NOT answer a pending runtime request: read t3_thread.pendingRequests[].nextAction and use runtime-request.answer for user_input or runtime-request.approve for approval with its requestId. A send can be queued behind a run waiting for user_input and leave it blocked. Correction or requirement change for the work in progress: steer_active + targetRunId (see t3_thread). No active run to preserve: start_immediately. Explicit interrupt/restart: restart_active + targetRunId. queue_after_active only for an explicit request for later work, with deferUntilActiveCompletes=true; never to correct the current run. There is no default mode and no automatic fallback in the connector.';
 export const ON_BACKGROUND_WORK='refuse (default): right before sending, the connector reads the thread; if provider background work that holds the thread is still pending (subagent, monitor, unnamed background task; commands do not hold), nothing is sent and the result is state=rejected, sent=false, refusal.code=background_work_active with the current `execution` snapshot. Wait with t3_aguardar_thread until=execution_idle, then send again with a NEW clientRequestId. send: send anyway (the provider may refuse a model/setting change while that work runs).';
-const sendBase={threadId:id,text:z.string().min(1).max(100000),clientRequestId:id};
+const sendBase={threadId:id,text:z.string().min(1).max(100000),clientRequestId:id,dispatchGuard:dispatchGuardSend};
 const targetRunId=z.string({error:'targetRunId required: read t3_thread and pass the active run for steer_active or restart_active'}).trim().min(1,'targetRunId required: pass the active run').max(1024).describe('Required for steer_active and restart_active: ID of the active run of the same thread/environment, obtained from t3_thread. Do not use the threadId or the ID of a finished run.');
 const sendSchema=z.discriminatedUnion('delivery',[
  z.object({...sendBase,delivery:z.literal('steer_active').describe(SEND_DESCRIPTIONS.steer_active),targetRunId}).strict(),
@@ -106,7 +114,7 @@ export function parseAction(action,input) {
  }
  return {spec:s,input:result.data};
 }
-const RECUSAS=/^(thread_not_found|scope_denied|lease_closed|execution_snapshot_unavailable|ambiente_[a-z_]+|workspace_[a-z_]+|project_[a-z_]+|settle_[a-z_]+)$/;
+const RECUSAS=/^(thread_not_found|scope_denied|lease_closed|execution_snapshot_unavailable|ambiente_[a-z_]+|workspace_[a-z_]+|project_[a-z_]+|settle_[a-z_]+|dispatch_[a-z_]+)$/;
 // Writes whose receipt names the thread they created.
 const CREATES_THREAD=new Set(['thread.launch','thread.fork']);
 // Writes that create a thread in a project, serialized with project deletes of this connector.
@@ -115,9 +123,9 @@ const PROJECT_SCOPED=new Set(['thread.launch','thread.fork',...PROJECT_ACTIONS])
 export const chaveOperacao=({environmentId,destination,caller,operationId})=>digest(['v2',environmentId,destination,caller,operationId]);
 // The journal is retained across restarts. An uncertain result is never resubmitted.
 export class Dispatcher {
- constructor({gate,adapter,journal,environmentId,destination,resolveGrant,validateTarget,authorizeRecorded}) {
+ constructor({gate,adapter,journal,environmentId,destination,resolveGrant,validateTarget,authorizeRecorded,dispatchPreflight}) {
   if(!journal.reserve)throw new Error('atomic_journal_required');
-  Object.assign(this,{gate,adapter,journal,environmentId,destination,resolveGrant,validateTarget,authorizeRecorded});
+  Object.assign(this,{gate,adapter,journal,environmentId,destination,resolveGrant,validateTarget,authorizeRecorded,dispatchPreflight});
  }
  #store(method,...args) {try{return this.journal[method](...args);}catch{this.gate.close();throw new Error('journal_failed');}}
  #key(caller,operationId) {return chaveOperacao({environmentId:this.environmentId,destination:this.destination,caller,operationId});}
@@ -176,7 +184,10 @@ export class Dispatcher {
    if(guard) await this.#guardSettle(parsed.input.threadId,guard);
    // Last read before a new run starts: provider background work that holds the thread
    // refuses the send with the snapshot that decided it (nothing sent, record final).
-   const refusal=await this.#backgroundPreflight(action,parsed.input);
+   // A protected dispatch replaces this check: its own blockers come from execution.
+   const dguard=DISPATCH_GUARDED.includes(action)?parsed.input.dispatchGuard:undefined;
+   if(dguard) await this.#guardDispatch(action,input,parsed.input,dguard,status.scope);
+   const refusal=dguard?null:await this.#backgroundPreflight(action,parsed.input);
    if(refusal) {this.#store('put',key,{...initial,state:'rejected',target,refusal:{code:refusal.code,message:refusal.message}});return {state:'rejected',operationId,sent:false,reconciliationRequired:false,refusal:{code:refusal.code,message:refusal.message},execution:refusal.execution};}
    // Native wrappers read what the native handler reads (e.g. the existing task) last, then build.
    if(parsed.spec.native) {
@@ -196,6 +207,7 @@ export class Dispatcher {
     this.#store('put',key,{...done,settlement});
     return {state:'completed',operationId,receipt:done.receipt,settlement};
    }
+   if(action==='thread.launch'&&parsed.input.dispatchGuard) return {state:'completed',operationId,sent:true,reconciliationRequired:false,receipt:done.receipt,...Dispatcher.#createdThread(this.environmentId,target,done.receipt),guarantee:'acknowledged_dispatch'};
    if(!isProjectAction(action)) return {state:'completed',operationId,receipt:done.receipt};
    // The post-check is evidence: kept with the record so a replay returns it too.
    const postCheck=await this.#afterDelete(parsed.input.projectId,operationId);
@@ -216,7 +228,7 @@ export class Dispatcher {
    // A refusal before the send keeps its known reason, so a replay explains it too: a project
    // action records it as `refusal`, a settle guard refusal as `error` (its settle_* code).
    const refusal=record.state==='preparing'&&RECUSAS.test(error.message)?error.message:null;
-   this.#store('put',key,{...record,state:record.state==='preparing'?'rejected':'uncertain',...(refusal&&isProjectAction(action)?{refusal}:{}),...(refusal&&/^settle_[a-z_]+$/.test(refusal)?{error:refusal}:{})});
+   this.#store('put',key,{...record,state:record.state==='preparing'?'rejected':'uncertain',...(refusal&&isProjectAction(action)?{refusal}:{}),...(refusal&&/^(settle|dispatch)_[a-z_]+$/.test(refusal)?{error:refusal}:{})});
    // Recusa antes do envio devolve o motivo conhecido (nada foi enviado); o resto é genérico.
    if(record.state==='preparing') throw new Error(refusal??'dispatch_rejected');
    throw new Error('reconciliation_required');
@@ -246,13 +258,14 @@ export class Dispatcher {
    this.#store('put',key,record);
   }
   if(action==='thread.send'&&record.refusal) return {state:record.state,operationId,sent:false,reconciliationRequired:false,refusal:record.refusal};
-  const guardRefusal=record.state==='rejected'&&/^settle_[a-z_]+$/.test(record.error??'');
+  const guardRefusal=record.state==='rejected'&&/^(settle|dispatch)_[a-z_]+$/.test(record.error??'');
   return {state:record.state,operationId,reconciliationRequired:!guardRefusal&&!['completed','failed'].includes(record.state),
    ...(guardRefusal?{sent:false}:{}),
    ...((project||spec.native)&&record.receipt?{receipt:record.receipt,...(record.postCheck??{})}:{}),
    // A launch or fork recorded the thread it created: return it, so a caller that lost the first
    // answer (an expired OAuth session hides it) recovers the threadId without launching again.
    ...(CREATES_THREAD.has(action)&&record.state==='completed'&&record.receipt?{receipt:record.receipt}:{}),
+   ...(action==='thread.launch'&&input.dispatchGuard&&record.state==='completed'&&record.receipt?Dispatcher.#createdThread(this.environmentId,record.target,record.receipt):{}),
    ...(guard&&record.receipt?{receipt:record.receipt,settlement:record.settlement??Dispatcher.#verificationPending(guard.version)}:{}),
    ...(record.error?{error:record.error}:{}),
    ...(project&&record.state==='rejected'?{sent:false,...(record.refusal?{refusal:record.refusal}:{})}:{})};
@@ -263,6 +276,22 @@ export class Dispatcher {
   if(!spec.result) return args.raw;
   try {return await spec.result({...args,native:this.adapter.native});} catch {return {raw:args.raw,resultUnavailable:true};}
  }
+ // Protected launch/send: the same preflight, fresh, right before the send. Any difference refuses.
+ async #guardDispatch(action,rawInput,parsedInput,guard,scope) {
+  if(guard.version!==1) throw new Error('dispatch_guard_version_unsupported');
+  if(!this.dispatchPreflight) throw new Error('dispatch_guard_unavailable');
+  const {dispatchGuard,...input}=rawInput;
+  let r;
+  try {r=await this.dispatchPreflight({action,environment:this.environmentId,input,expected:guard.expected,...(action==='thread.launch'?{duplicateCheck:guard.duplicateCheck}:{})},{scope});}
+  catch {throw new Error('dispatch_observation_incomplete');}
+  if(r.inputDigest!==guard.expectedInputDigest) throw new Error('dispatch_input_changed');
+  if(!r.admissible) {const code=r.reasons[0]?.code??'dispatch_observation_incomplete';throw new Error(code.startsWith('dispatch_')?code:`dispatch_${code}`);}
+  if(action==='thread.send'&&(guard.expectedRunId??null)!==(r.expectedRunId??null)) throw new Error('dispatch_run_changed');
+  if(r.observationId!==guard.expectedObservationId) throw new Error('dispatch_observation_changed');
+ }
+ // The thread a protected launch created, from the receipt (never a title match). Preparation of
+ // its workspace is not observed by the ACK: read t3_thread for it.
+ static #createdThread(environmentId,target,receipt) {return receipt?.threadId?{createdThread:{environmentId,threadId:receipt.threadId,projectId:target?.projectIds?.[0]??null},workspacePostCheck:'pending'}:{};}
  async #guardSettle(threadId,guard) {
   if(!this.adapter.settlementObservation) throw new Error('settle_observation_incomplete');
   let observation;

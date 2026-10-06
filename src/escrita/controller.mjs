@@ -5,6 +5,7 @@ import {grantFromInventory,escopoDosGrants} from './scope.mjs';
 import {identidadeCanal,exigirIdentidade} from './identidade.mjs';
 import {resolverAmbiente} from './config.mjs';
 import {leituraProtegida} from './read-guarded.mjs';
+import {fontesEscrita,preflightDespacho} from '../despacho.mjs';
 // Private relay only. Its fixed binding is provisioned by the operator bootstrap,
 // never selected by a tool argument/sessionId/callId. No generic RPC forwarding.
 //
@@ -16,7 +17,7 @@ export function controller({conexoes,passkeys,journal,organization,tunnelId,inve
  const gate=new Gate({audit:e=>journal.audit(e),verify:p=>passkeys.verify(p)});
  const identity=identidadeCanal({organization,tunnelId});
  const registros=conexoes.map(c=>c.registro);
- const dispatchers=new Map(conexoes.map(c=>[c.registro.alias,new Dispatcher({gate,adapter:c.adapter,journal,environmentId:c.registro.environmentId,destination:c.registro.destination})]));
+ const dispatchers=new Map(conexoes.map(c=>[c.registro.alias,new Dispatcher({gate,adapter:c.adapter,journal,environmentId:c.registro.environmentId,destination:c.registro.destination,dispatchPreflight:(pedido,{scope})=>preflightDespacho(pedido,fontesEscrita(conexoes,scope))})]));
  const porAlias=new Map(conexoes.map(c=>[c.registro.alias,c]));
  const identidade=r=>({alias:r.alias,environmentId:r.environmentId});
  const authenticate=value=>{if(typeof value!=='string'||value.length!==capability.length||!timingSafeEqual(Buffer.from(value),Buffer.from(capability)))throw new Error('channel_unverified');};
