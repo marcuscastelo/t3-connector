@@ -83,6 +83,21 @@ test('all: unknown environment, foreign thread and absent/deleted project fail w
   assert.equal(f.connections.reduce((n, c) => n + invokes(c), 0), 0);
 });
 
+test('all: batch read spans both environments under the live policy, failing only the foreign and unknown items', async t => {
+  const f = await fixture(t); const at = (await f.c.signIn()).tokens.access_token;
+  const local = f.add('local'), remoto = f.add('remoto');
+  const r = body(await f.c.callTool(at, 't3_thread_read_batch', { items: [
+    { environment: 'local', threadId: `t-${local}` },
+    { environment: 'remoto', threadId: `t-${remoto}` },
+    { environment: 'local', threadId: `t-${remoto}` },
+    { environment: 'unknown', threadId: `t-${local}` },
+  ] }));
+  assert.deepEqual(r.items.map(x => [x.status, x.error?.code ?? null]), [['ok', null], ['ok', null], ['error', 'thread_not_found'], ['error', 'environment_not_allowed']]);
+  assert.equal(r.items[1].thread.state, 'needs_intervention');
+  assert.equal(r.items[0].thread.latestResponse.text, `message-${local}`);
+  assert.equal(f.connections.reduce((n, c) => n + invokes(c), 0), 0);
+});
+
 for (const change of ['delete-project', 'move-thread', 'delete-thread', 'change-root']) test(`all: ${change} during prepare is refused before invoke`, async t => {
   const f = await fixture(t); const id = f.add('local'), cx = f.connections[0]; const at = (await f.c.signIn()).tokens.access_token;
   cx.prepareHook = () => {

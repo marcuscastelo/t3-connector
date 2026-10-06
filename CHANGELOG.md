@@ -26,6 +26,15 @@
   `precondition_pending` is re-evaluated), concurrent duplicates share one execution, and the
   result states `precondition_pending | precondition_failed | failed | uncertain | completed`, with
   `delivery.deliveredAs` from the run T3 created. No new consented action; existing tools unchanged.
+- Read tools: new `t3_thread_read_batch` reads up to 20 threads in one call, each named by
+  `{environment, threadId}` (environments can be mixed). Each successful item carries the
+  same result as `t3_thread` (state, active/latest run, pending requests, latest response),
+  built by the same code. Failure is per item with a code (`thread_not_found`,
+  `environment_not_allowed`, `unavailable`, `global_timeout`, ...), so one broken target does
+  not hide the others; `allSucceeded` and `complete` summarize. One shell observation per
+  environment per call; a repeated target is read once. Available on the read server and the
+  OAuth profile, not in the write plugin's lease reads. `t3_thread` output is unchanged. See
+  ADR 0005.
 
 ## 0.12.1
 

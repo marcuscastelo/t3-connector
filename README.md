@@ -147,8 +147,8 @@ version), and refresh the tool list in the client.
 ### Read tools
 
 All have `readOnlyHint: true` and `destructiveHint: false`. Every response includes
-`environment: {alias, environmentId}`, except `t3_buscar_threads`, which puts it on each
-thread.
+`environment: {alias, environmentId}`, except `t3_buscar_threads` and
+`t3_thread_read_batch`, which put it on each thread or item.
 
 | Tool | Input | Main output |
 |---|---|---|
@@ -158,6 +158,7 @@ thread.
 | `t3_buscar_threads` (find threads) | exactly one of `search?` or `threadId?` (exact), `match?` (`partial` = substring, default; `exact` = whole title), `environment?` (restricts; omitted: every environment), `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `complete`, `nextCursor?`, `queriedEnvironments`, `environmentFailures`; each thread with `environment: {alias, environmentId, name}` and `archived` |
 | `t3_atencao` (attention) | `environment?` | threads that need intervention, or failed and were not settled |
 | `t3_thread` | `environment?`, `threadId`, `maxCharacters?` (200-6000, 1500) | thread summary, `pendingRequests`, `providerSession` (informational), `activeRun?`, `latestRun`, `latestResponse`, `history` |
+| `t3_thread_read_batch` (read several threads) | `items` (1-20 `{environment, threadId}`, environment required per item), `maxCharacters?` (200-6000, 1500), `timeoutMs?` (1000-30000, 10000) | `returned`, `summary`, `allSucceeded`, `complete`, `environments`, `items` in input order, each `ok` with `thread` (the `t3_thread` result) or `error: {code, reason}` |
 | `t3_mensagens` (messages) | `environment?`, `threadId`, `limit?` (1-20, 6), `maxCharacters?` (100-4000, 800) | `messages` and `history.complete` |
 | `t3_providers` (provider instances) | `environment?`, `instanceId?` (exact, case-sensitive), `includeModels?` (include models, default false) | `source`, `total`, `providers` in T3 order, each with the T3 field names (see below) |
 | `t3_aguardar_thread` (wait) | **`environment`**, `threadId`, **`timeoutMs`** (1-5000), `runId?`, `includeLatestResponse?`, `maxCharacters?` | `runId`, `statusRun`, `state`, `terminal`, `timedOut`, `returnReason`, `pendingRequest`, `latestResponse?` |
@@ -193,6 +194,44 @@ requested. `providerSession` (`status`, `model`) is the provider process as last
 and carries `informational: true`. It can keep the previous model after a model change
 (a `note` says so) and read `ready` while a run is active, so it never decides the model
 or the state. Message `streaming` flags do not decide the state either.
+
+### Batch thread read (`t3_thread_read_batch`)
+
+One call reads up to 20 threads, each named by `{environment, threadId}`; threads of
+different environments can be mixed. It is meant for a control plane that follows
+several owner threads at once. Each item that succeeds carries in `thread` exactly what
+`t3_thread` returns for that thread (the same code builds both): `state` and
+`stateSource`, `activeRun`, `latestRun`, `pendingRequests` with `requestId`, content and
+`nextAction`, `latestResponse` and `history`. The state contract above applies unchanged.
+
+Failure is per item. `items` has one entry per input, in input order (`index`), with
+`status: "ok"` or `status: "error"` and `error: {code, reason}`. One broken target never
+hides the others, and a failed item is never an empty success:
+
+| `error.code` | Meaning |
+|---|---|
+| `environment_not_allowed` | The environment is not configured (or is outside the OAuth policy); `environment` is `null` and `requestedEnvironment` echoes the input |
+| `thread_not_found` | Missing, deleted or outside the authorized projects of that environment (one answer for all three); never looked up in another environment |
+| `unavailable`, `timeout`, `environment_mismatch`, `http_<status>`, `connection_refused` | The environment or the thread projection could not be read; same codes as `environmentFailures` in `t3_buscar_threads` |
+| `global_timeout` | `timeoutMs` (whole call, default 10000, max 30000) ran out before this item was read |
+| `failed` | Any other failure, without internal detail |
+
+`summary` counts `ok` and `error`. `allSucceeded` is true only when every item is `ok`.
+`complete` is false when some item failed for a transient reason (anything except
+`thread_not_found` and `environment_not_allowed`), so rereading those items may succeed.
+`environments` lists each environment touched, with `status` and `observedAt`.
+
+Coherence: each environment is read from **one shell observation per call**, shared by
+all its items (`observedAt` on the item and on `environments`), so states of threads of
+the same environment are judged at the same instant. Each thread projection is read right
+after, as in `t3_thread`; there is no cross-environment snapshot. A repeated target is read
+once and answered at each of its positions. Up to 4 projections per environment are read
+in parallel, and environments in parallel with each other.
+
+Reading never answers, approves or acknowledges anything: pending requests are answered
+one by one with the write actions, as in `t3_thread`. The tool exists on the read server
+and on the OAuth profile; the write plugin's lease reads (one environment per lease) keep
+`t3_thread`.
 
 ### Woke marker (`woke`, `wokeAt`)
 

@@ -25,7 +25,7 @@ export class CoberturaMudou extends CursorInvalido {
 }
 
 /** Rejeita quando `signal` aborta, mesmo que a promessa ignore o sinal. */
-function correrComSinal(promessa, signal) {
+export function correrComSinal(promessa, signal) {
   return new Promise((resolve, reject) => {
     const aoAbortar = () => reject(signal.reason);
     if (signal.aborted) return aoAbortar();
@@ -35,7 +35,7 @@ function correrComSinal(promessa, signal) {
 }
 
 /** Código e motivo sem detalhes internos (caminho do token, stack, saída do ssh). */
-function falhaSanitizada(e) {
+export function falhaSanitizada(e) {
   if (e instanceof ErroT3) {
     if (e.codigo === 'prazo') return { code: 'timeout', reason: 'environment did not respond in time' };
     if (e.codigo === 'indisponivel') return { code: 'unavailable', reason: 'T3 unavailable in this environment' };

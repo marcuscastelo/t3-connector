@@ -20,6 +20,7 @@ import { lerProviders, resumoProvider } from './providers.mjs';
 import { assinatura, casaBusca, comparador, CursorInvalido, normalizar, paginar } from './paginacao.mjs';
 import { Cancelada, ErroT3 } from './t3.mjs';
 import { resumirPedidosRuntime } from './pedidos-runtime.mjs';
+import { lerThreadsEmLote, MAX_ALVOS, PRAZO_MAX_MS, PRAZO_PADRAO_MS } from './leitura-lote.mjs';
 
 export const VERSAO = '0.12.1';
 const ESTADOS = ['running', 'needs_intervention', 'completed', 'failed', 'cancelled', 'no_run', 'unknown'];
@@ -78,6 +79,40 @@ export function resumoSessao(projecao, thread, modeloCanonico) {
     model: sessao.model,
     informational: true,
     ...(divergente ? { note: `provider session still reports ${sessao.model}; the thread uses ${modeloCanonico.model} (\`activeRun.model\` while a run is active, otherwise \`model\`)` } : {}),
+  };
+}
+
+/**
+ * Detalhe de uma thread autorizada (o resultado de t3_thread), julgado sobre `shell`.
+ * Compartilhado por t3_thread e t3_thread_read_batch para manter um contrato só.
+ */
+export async function detalheDaThread({ r, cliente, shell, threadId, signal, maxCaracteres = 1500 }) {
+  const thread = r.escopo.exigirThread(shell, threadId);
+  const projeto = projetosPorId(shell).get(thread.projectId);
+  const bounded = await cliente.thread(threadId, { signal });
+  const projecao = bounded.projection;
+  const pendentes = pedidosPendentes(projecao);
+  const resumo = resumoDaThread(thread, projeto, pendentes);
+  const ativo = runAtivoDaShell(thread);
+  const runDoAtivo = ativo && (projecao.runs ?? []).find((x) => x.id === ativo.runId);
+  const runDoUltimo = (projecao.runs ?? []).find((x) => x.id === thread.latestRunId);
+  const activeRun = ativo
+    ? {
+        runId: ativo.runId,
+        ordinal: runDoAtivo?.ordinal ?? null,
+        status: runDoAtivo?.status ?? ativo.status,
+        model: resumoModelo(runDoAtivo?.modelSelection),
+      }
+    : null;
+  return {
+    ...resumo,
+    pendingRequests: resumirPedidosRuntime(projecao, thread),
+    providerSession: resumoSessao(projecao, thread, activeRun?.model ?? resumo.model),
+    activeRun,
+    // Último run pela shell (a mesma regra do T3); o snapshot pode não trazer todos os runs.
+    latestRun: thread.latestRunId ? { runId: thread.latestRunId, ordinal: runDoUltimo?.ordinal ?? null, status: thread.status } : null,
+    latestResponse: ultimaResposta(projecao, maxCaracteres),
+    history: { complete: !bounded.hasMoreHistory, payloadBudgetExceeded: Boolean(bounded.payloadBudgetExceeded) },
   };
 }
 
@@ -339,36 +374,43 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       },
       annotations: SO_LEITURA,
     },
-    noAmbiente(async ({ r, cliente, signal, threadId, maxCharacters: maxCaracteres = 1500 }) => {
-      const shell = await cliente.shell({ signal });
-      const thread = r.escopo.exigirThread(shell, threadId);
-      const projeto = projetosPorId(shell).get(thread.projectId);
-      const bounded = await cliente.thread(threadId, { signal });
-      const projecao = bounded.projection;
-      const pendentes = pedidosPendentes(projecao);
-      const resumo = resumoDaThread(thread, projeto, pendentes);
-      const ativo = runAtivoDaShell(thread);
-      const runDoAtivo = ativo && (projecao.runs ?? []).find((x) => x.id === ativo.runId);
-      const runDoUltimo = (projecao.runs ?? []).find((x) => x.id === thread.latestRunId);
-      const activeRun = ativo
-        ? {
-            runId: ativo.runId,
-            ordinal: runDoAtivo?.ordinal ?? null,
-            status: runDoAtivo?.status ?? ativo.status,
-            model: resumoModelo(runDoAtivo?.modelSelection),
-          }
-        : null;
-      return {
-        ...resumo,
-        pendingRequests: resumirPedidosRuntime(projecao, thread),
-        providerSession: resumoSessao(projecao, thread, activeRun?.model ?? resumo.model),
-        activeRun,
-        // Último run pela shell (a mesma regra do T3); o snapshot pode não trazer todos os runs.
-        latestRun: thread.latestRunId ? { runId: thread.latestRunId, ordinal: runDoUltimo?.ordinal ?? null, status: thread.status } : null,
-        latestResponse: ultimaResposta(projecao, maxCaracteres),
-        history: { complete: !bounded.hasMoreHistory, payloadBudgetExceeded: Boolean(bounded.payloadBudgetExceeded) },
-      };
-    }),
+    noAmbiente(async ({ r, cliente, signal, threadId, maxCharacters: maxCaracteres = 1500 }) =>
+      detalheDaThread({ r, cliente, shell: await cliente.shell({ signal }), threadId, signal, maxCaracteres })),
+  );
+
+  registrar(
+    't3_thread_read_batch',
+    {
+      title: 'State of several threads in one call',
+      description:
+        `Reads up to ${MAX_ALVOS} threads in one call, each named by \`{environment, threadId}\` (environment required per item; threads of different environments can be mixed). ` +
+        'Each successful item carries in `thread` exactly what t3_thread returns for it: canonical `state`, `activeRun`, `latestRun`, `pendingRequests` with requestId/content/nextAction, `latestResponse` and `history`. ' +
+        'Failure is per item: `items` keeps the input order with one entry per input (`index`), `status: "ok"` with `thread`, or `status: "error"` with `error: {code, reason}` ' +
+        '(environment_not_allowed, thread_not_found, timeout, unavailable, environment_mismatch, http_<status>, connection_refused, global_timeout, failed); a broken target never hides the others and is never an empty success. ' +
+        '`allSucceeded` is true only when every item is ok; `complete` is false when some item failed for a transient reason (deadline, environment down) and rereading it may succeed. ' +
+        'Each environment is read from one shell observation per call (`environments[].observedAt`, also on each item); the thread projection is read right after, as in t3_thread. A repeated target is read once and answered at each position. ' +
+        `\`timeoutMs\` (default ${PRAZO_PADRAO_MS}, max ${PRAZO_MAX_MS}) bounds the whole call, not each item. Reading never answers, approves or acknowledges anything. ` +
+        CONTRATO_ESTADO + ' ' + CONTRATO_WOKE + ' Read-only.',
+      shape: {
+        items: z.array(z.object({
+          environment: z.string().min(1).describe(`Environment of this thread (alias or environmentId): ${nomes}`),
+          threadId: z.string().min(1),
+        }).strict()).min(1).max(MAX_ALVOS).describe(`Targets to read, 1-${MAX_ALVOS}; the answer keeps this order`),
+        maxCharacters: z.number().int().min(200).max(6000).optional().describe('Maximum length of each latest response; default 1500'),
+        timeoutMs: z.number().int().min(1000).max(PRAZO_MAX_MS).optional().describe(`Deadline for the whole call in ms; default ${PRAZO_PADRAO_MS}`),
+      },
+      annotations: SO_LEITURA,
+    },
+    async ({ items, maxCharacters: maxCaracteres = 1500, timeoutMs }, extra) => {
+      try {
+        return resposta(await lerThreadsEmLote(ambientes, { items, timeoutMs }, {
+          signal: extra?.signal,
+          ler: ({ r, cliente, shell, threadId, signal }) => detalheDaThread({ r, cliente, shell, threadId, signal, maxCaracteres }),
+        }));
+      } catch (e) {
+        return erro(e);
+      }
+    },
   );
 
   registrar(
