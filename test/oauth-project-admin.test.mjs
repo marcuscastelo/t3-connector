@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ambientesFalsos, dadosPadrao } from './apoio.mjs';
 import { startConnector } from './oauth-apoio.mjs';
-import { memoryJournal } from './escrita-fixtures.mjs';
+import { memoryJournal, providersFor } from './escrita-fixtures.mjs';
 import { t3Tools } from '../src/oauth/t3-tools.mjs';
 import { loadOAuthConfig } from '../src/oauth/config.mjs';
 import { ACTIONS, ALL_ACTIONS } from '../src/escrita/adapters.mjs';
@@ -59,6 +59,7 @@ async function fixture(t, { projects, threads, projectAdmin = true }) {
       cliente: async () => ({ shell: async () => { await c.onShell?.(); return structuredClone(sim.shell()); } }),
       adapter: {
         prepare: async () => {},
+        providers: async () => providersFor({ instanceId: 'codex', model: 'm' }),
         invoke: async (method, payload) => {
           c.calls.push({ method, payload });
           await c.beforeInvoke?.(method, payload);

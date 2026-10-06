@@ -34,7 +34,8 @@ const comAmbiente=({ambiente,...r})=>ambiente?{environment:ambiente,...r}:r;
 
 export function criarPonteEscrita({relay,aliases=[],approvalOrigin}) {
  const lista=aliases.length?aliases.join(', '):'see t3_pedir_aprovacao';
- const erro=e=>{const code=/^[a-z_]+$/.test(e.message)?codigo(e.message):'gate_rejected';const extra=code==='environment_unknown'?` (configured: ${lista})`:'';return {isError:true,content:[{type:'text',text:MENSAGENS[code]?`${code}: ${MENSAGENS[code]}${extra}`:code}]};};
+ // A typed refusal (e.g. an invalid modelSelection) keeps its code and exact message.
+ const erro=e=>{if(e?.native&&/^[a-z_]+$/.test(e.native.code??''))return {isError:true,content:[{type:'text',text:`${e.native.code}: ${e.native.message}`}]};const code=/^[a-z_]+$/.test(e.message)?codigo(e.message):'gate_rejected';const extra=code==='environment_unknown'?` (configured: ${lista})`:'';return {isError:true,content:[{type:'text',text:MENSAGENS[code]?`${code}: ${MENSAGENS[code]}${extra}`:code}]};};
  const resultado=async op=>{try{return {content:[{type:'text',text:JSON.stringify(await op())}]};}catch(e){return erro(e);}};
  const environment=z.string().min(1).describe(`T3 environment where the thread/project lives (required; alias or environmentId): ${lista}. IDs from one environment are not valid in another.`);
  const server=new McpServer({name:'t3-connector-write',version:VERSAO_ESCRITA});
@@ -75,6 +76,6 @@ export function relayHttp({porta,lerCapability,timeoutMs=20000}) {
  return async request=>{
   let capability;try{capability=lerCapability();}catch{throw new Error('gate_indisponivel');}
   let r;try{r=await fetch(`http://localhost:${porta}/relay`,{method:'POST',headers:{'content-type':'application/json','x-t3-private-relay':capability},body:JSON.stringify(request),signal:AbortSignal.timeout(timeoutMs)});}catch{throw new Error('gate_indisponivel');}
-  const v=await r.json();if(!r.ok)throw new Error(v.error);return v;
+  const v=await r.json();if(!r.ok)throw Object.assign(new Error(v.error),typeof v.detail==='string'?{native:{code:v.error,message:v.detail}}:{});return v;
  };
 }

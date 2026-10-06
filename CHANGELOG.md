@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Writes with `modelSelection` (`thread.launch`, `thread.model-selection.set`,
+  `provider.switch`, `delegated_task.request`) validate it themselves against the
+  environment's `server.getConfig`, read fresh on every write: a client no longer needs
+  `t3_providers` first to learn whether an option such as `fastMode` is offered. An
+  unsupported instance, model, option or value is refused before sending with a precise code
+  (`provider_instance_unavailable`, `provider_model_unavailable`, `model_option_unsupported`,
+  `model_option_value_unsupported`, `model_capabilities_unknown`,
+  `model_capabilities_unavailable`) and a message naming the offered values, on both the
+  lease and OAuth paths. Valid selections are sent unchanged, with no default added.
+
 ## 0.12.0
 
 - Read tools: thread summaries add `woke` and `wokeAt`, the "Woke" marker of the T3 sidebar

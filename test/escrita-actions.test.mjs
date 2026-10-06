@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { ACTIONS,Dispatcher,parseAction } from '../src/escrita/adapters.mjs';
-import { setup,memoryJournal } from './escrita-fixtures.mjs';
+import { setup,memoryJournal,providersFor } from './escrita-fixtures.mjs';
 import { fixtures } from './escrita-acoes-fixtures.mjs';
 const contract=readFileSync(new URL('../reference/packages_contracts_src_orchestrationV2.ts',import.meta.url),'utf8');
 function requiredFields(type) {
@@ -18,7 +18,7 @@ test('handwritten fixtures account for every exposed adapter, without implying A
 for(const fixture of fixtures) {
  test(`adapter ${fixture.action}: actual outbound, contract essentials, malformed input, preapproval and revocation`,async()=>{
   const s=setup();s.env.actions=[fixture.action];const l=await s.grant(),calls=[];
-  const adapter={verifyWorkspace:async()=>true,projectForThread:async()=> 'app',invoke:(method,payload)=>{calls.push({method,payload});return Promise.resolve(method==='orchestration.launchThread'?{threadId:payload.threadId,resumed:false}:{sequence:7});},receipt:r=>r};
+  const adapter={providers:async()=>providersFor(...(fixture.input.modelSelection?[fixture.input.modelSelection]:[])),verifyWorkspace:async()=>true,projectForThread:async()=> 'app',invoke:(method,payload)=>{calls.push({method,payload});return Promise.resolve(method==='orchestration.launchThread'?{threadId:payload.threadId,resumed:false}:{sequence:7});},receipt:r=>r};
   const d=new Dispatcher({gate:s.gate,adapter,journal:memoryJournal(),environmentId:s.env.environmentId,destination:s.env.destination});
   const op={operationId:'fixture-op',action:fixture.action,input:fixture.input};
   await assert.rejects(d.dispatch(s.caller,'fake-lease',op));assert.equal(calls.length,0);
