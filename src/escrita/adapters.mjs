@@ -49,11 +49,12 @@ export const SEND_DESCRIPTIONS=Object.freeze({
  queue_after_active:'Exceptional: follow-up work that must only run after the current run; does not change the current run and may arrive too late to correct architecture/requirements. Almost never use it in conversation. Requires deferUntilActiveCompletes=true and an explicit request to defer; with no active run it may start immediately. Example: when the implementation is done, do a separate review.',
 });
 export const SEND_DESCRIPTION='Sends an instruction to the thread. thread.send does NOT answer a pending runtime request: read t3_thread.pendingRequests[].nextAction and use runtime-request.answer for user_input or runtime-request.approve for approval with its requestId. A send can be queued behind a run waiting for user_input and leave it blocked. Correction or requirement change for the work in progress: steer_active + targetRunId (see t3_thread). No active run to preserve: start_immediately. Explicit interrupt/restart: restart_active + targetRunId. queue_after_active only for an explicit request for later work, with deferUntilActiveCompletes=true; never to correct the current run. There is no default mode and no automatic fallback in the connector.';
+export const ON_BACKGROUND_WORK='refuse (default): right before sending, the connector reads the thread; if provider background work that holds the thread is still pending (subagent, monitor, unnamed background task; commands do not hold), nothing is sent and the result is state=rejected, sent=false, refusal.code=background_work_active with the current `execution` snapshot. Wait with t3_aguardar_thread until=execution_idle, then send again with a NEW clientRequestId. send: send anyway (the provider may refuse a model/setting change while that work runs).';
 const sendBase={threadId:id,text:z.string().min(1).max(100000),clientRequestId:id};
 const targetRunId=z.string({error:'targetRunId required: read t3_thread and pass the active run for steer_active or restart_active'}).trim().min(1,'targetRunId required: pass the active run').max(1024).describe('Required for steer_active and restart_active: ID of the active run of the same thread/environment, obtained from t3_thread. Do not use the threadId or the ID of a finished run.');
 const sendSchema=z.discriminatedUnion('delivery',[
  z.object({...sendBase,delivery:z.literal('steer_active').describe(SEND_DESCRIPTIONS.steer_active),targetRunId}).strict(),
- z.object({...sendBase,delivery:z.literal('start_immediately').describe(SEND_DESCRIPTIONS.start_immediately)}).strict(),
+ z.object({...sendBase,delivery:z.literal('start_immediately').describe(SEND_DESCRIPTIONS.start_immediately),onBackgroundWork:z.enum(['refuse','send']).optional().describe(ON_BACKGROUND_WORK)}).strict(),
  z.object({...sendBase,delivery:z.literal('restart_active').describe(SEND_DESCRIPTIONS.restart_active),targetRunId}).strict(),
  z.object({...sendBase,delivery:z.literal('queue_after_active').describe(SEND_DESCRIPTIONS.queue_after_active),deferUntilActiveCompletes:z.literal(true,{error:'queue_after_active requires explicit intent: pass deferUntilActiveCompletes=true only if deferring was explicitly requested; to correct the current run use steer_active + targetRunId'}).describe('Confirms an explicit request to run only after the current run. Never infer true from a correction, a conversation follow-up or reluctance to interrupt.')}).strict(),
 ]).describe(SEND_DESCRIPTION);
@@ -94,7 +95,7 @@ export function parseAction(action,input) {
  }
  return {spec:s,input:result.data};
 }
-const RECUSAS=/^(thread_not_found|scope_denied|lease_closed|ambiente_[a-z_]+|workspace_[a-z_]+|project_[a-z_]+)$/;
+const RECUSAS=/^(thread_not_found|scope_denied|lease_closed|execution_snapshot_unavailable|ambiente_[a-z_]+|workspace_[a-z_]+|project_[a-z_]+)$/;
 // Writes that create a thread in a project, serialized with project deletes of this connector.
 const PROJECT_SCOPED=new Set(['thread.launch','thread.fork',...PROJECT_ACTIONS]);
 // v2: environment e destino lógico (t3://<environmentId>) estáveis; caller sem boot.
@@ -134,7 +135,7 @@ export class Dispatcher {
   const initial={hash,state:'preparing',action,operationId,environmentId:this.environmentId,destination:this.destination};
   const owned=this.#store('reserve',key,initial);
   const old=owned?null:this.#store('get',key);
-  if(old) {if(old.hash!==hash) throw new Error('operation_conflict');if(old.target)(this.authorizeRecorded??((target)=>this.gate.check(identity,leaseId,target)))(old.target);return {state:old.state,operationId,reconciliationRequired:!['completed','failed'].includes(old.state),...((isProjectAction(action)||parsed.spec.native)&&old.receipt?{receipt:old.receipt,...(old.postCheck??{})}:{}),...(old.error?{error:old.error}:{})};}
+  if(old) {if(old.hash!==hash) throw new Error('operation_conflict');if(old.target)(this.authorizeRecorded??((target)=>this.gate.check(identity,leaseId,target)))(old.target);if(old.refusal)return {state:old.state,operationId,sent:false,reconciliationRequired:false,refusal:old.refusal};return {state:old.state,operationId,reconciliationRequired:!['completed','failed'].includes(old.state),...((isProjectAction(action)||parsed.spec.native)&&old.receipt?{receipt:old.receipt,...(old.postCheck??{})}:{}),...(old.error?{error:old.error}:{})};}
   if(!owned)throw new Error('journal_failed');
   let release=null;
   try {
@@ -156,6 +157,10 @@ export class Dispatcher {
    // Last read before the send: a count taken before the target validation could be stale.
    // The native force:false refusal still applies; the cross-client window remains T3's.
    if(isProjectAction(action)) guardProjectDelete(action,parsed.input,await this.#occupancy(parsed.input.projectId));
+   // Last read before a new run starts: provider background work that holds the thread
+   // refuses the send with the snapshot that decided it (nothing sent, record final).
+   const refusal=await this.#backgroundPreflight(action,parsed.input);
+   if(refusal) {this.#store('put',key,{...initial,state:'rejected',target,refusal:{code:refusal.code,message:refusal.message}});return {state:'rejected',operationId,sent:false,reconciliationRequired:false,refusal:{code:refusal.code,message:refusal.message},execution:refusal.execution};}
    // Native wrappers read what the native handler reads (e.g. the existing task) last, then build.
    if(parsed.spec.native) {
     if(!this.adapter.native) throw new Error('native_unavailable');
@@ -186,6 +191,16 @@ export class Dispatcher {
    if(record.state==='preparing') throw new Error(RECUSAS.test(error.message)?error.message:'dispatch_rejected');
    throw new Error('reconciliation_required');
   } finally {release?.();}
+ }
+ // Only start_immediately starts a run that background work can collide with; steer/restart/queue
+ // name the active run explicitly. Adapters without executionSnapshot (tests, old wiring) skip it.
+ async #backgroundPreflight(action,input) {
+  if(action!=='thread.send'||input.delivery!=='start_immediately'||input.onBackgroundWork==='send'||!this.adapter.executionSnapshot)return null;
+  let execution;
+  try {execution=await this.adapter.executionSnapshot(input.threadId);} catch {throw new Error('execution_snapshot_unavailable');}
+  if(execution?.signals?.backgroundWorkHoldsThread!==true)return null;
+  const tasks=execution.background.pending.filter(t=>t.holdsThread).map(t=>`${t.kind} ${t.taskId}`).join(', ');
+  return {code:'background_work_active',message:`provider background work still holds the thread (${tasks}); nothing was sent. Wait with t3_aguardar_thread until=execution_idle, then send with a new clientRequestId, or pass onBackgroundWork=send.`,execution};
  }
  // The native result is a projection of what T3 answered (plus a read for createNew). It cannot
  // fail the completed operation: on a projection failure the raw answer is kept.

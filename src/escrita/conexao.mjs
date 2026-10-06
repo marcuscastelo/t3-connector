@@ -11,6 +11,7 @@ import { criarCliente, ErroT3, verificarIdentidade } from '../t3.mjs';
 import { criarTransporteSsh, criarTransporteUrl } from '../transporte.mjs';
 import { StagingRpcTransport, projectReceipt } from './transport-staging.mjs';
 import { lerOcupacao } from './project-admin.mjs';
+import { derivarExecucao } from '../execucao.mjs';
 
 export const ESCOPOS_ESCRITA = ['orchestration:operate', 'orchestration:read'];
 
@@ -147,6 +148,11 @@ export function criarConexaoEscrita(registro, {
         return lerOcupacao({ projectId, readActive: () => clienteLeitura.shell(), readArchived: () => socket.invoke('orchestration.getArchivedShellSnapshot', {}) });
       },
       projectForThread: async (id) => (await clienteLeitura.shell()).threads?.find((t) => t.id === id && !t.deletedAt)?.projectId,
+      // Send preflight: execution snapshot from the full thread projection (one transaction).
+      executionSnapshot: async (id) => {
+        const completo = await clienteLeitura.threadCompleto(id);
+        return derivarExecucao({ projecao: completo.projection ?? {}, fonte: { kind: 'thread_full_snapshot', threadSequence: completo.snapshotSequence ?? null, historyComplete: true } });
+      },
       // Canonicalização de caminho só vale no domínio de execução: local para loopback,
       // no host SSH para environment remoto. Mesma regra nos dois: caminho canônico igual a
       // um root aprovado.

@@ -140,7 +140,13 @@ version), and refresh the tool list in the client.
    user and call again on a later turn. Do not chain waits in the same turn.
 4. **`needs_intervention`** (approval, question, plan) is not an end
    state. The connector only reports it; answering requires T3 itself.
-5. **Before choosing a provider or model**, call `t3_providers` in the target environment.
+5. **Before deciding to wait, continue or settle**, read `t3_thread.execution`. A finished
+   run is not finished work: the provider can keep background work (subagent, monitor,
+   background command) after the run ends, and the latest response can belong to an older
+   run. `execution.continuation` says whether a new run can start now, why not
+   (`blockers`), and which facts leave work to pick up (`reasons`); the target is always the
+   same thread. See [Execution snapshot](docs/execution-snapshot.md).
+6. **Before choosing a provider or model**, call `t3_providers` in the target environment.
    See [Provider instances](#provider-instances-t3_providers).
 
 ### Read tools
@@ -156,10 +162,10 @@ thread.
 | `t3_threads` | `environment?`, `projectId?`, `state?`, `includeNoRun?` (include threads without a run, default false), `search?`, `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `nextCursor?`, `changedSinceStart?`, `hiddenNoRun?`, `threads` |
 | `t3_buscar_threads` (find threads) | exactly one of `search?` or `threadId?` (exact), `match?` (`partial` = substring, default; `exact` = whole title), `environment?` (restricts; omitted: every environment), `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `complete`, `nextCursor?`, `queriedEnvironments`, `environmentFailures`; each thread with `environment: {alias, environmentId, name}` and `archived` |
 | `t3_atencao` (attention) | `environment?` | threads that need intervention, or failed and were not settled |
-| `t3_thread` | `environment?`, `threadId`, `maxCharacters?` (200-6000, 1500) | thread summary, `pendingRequests`, `providerSession` (informational), `activeRun?`, `latestRun`, `latestResponse`, `history` |
+| `t3_thread` | `environment?`, `threadId`, `maxCharacters?` (200-6000, 1500) | thread summary, `pendingRequests`, `providerSession` (informational), `activeRun?`, `latestRun`, `latestResponse`, `history`, `execution` (see [Execution snapshot](docs/execution-snapshot.md)) |
 | `t3_mensagens` (messages) | `environment?`, `threadId`, `limit?` (1-20, 6), `maxCharacters?` (100-4000, 800) | `messages` and `history.complete` |
 | `t3_providers` (provider instances) | `environment?`, `instanceId?` (exact, case-sensitive), `includeModels?` (include models, default false) | `source`, `total`, `providers` in T3 order, each with the T3 field names (see below) |
-| `t3_aguardar_thread` (wait) | **`environment`**, `threadId`, **`timeoutMs`** (1-5000), `runId?`, `includeLatestResponse?`, `maxCharacters?` | `runId`, `statusRun`, `state`, `terminal`, `timedOut`, `returnReason`, `pendingRequest`, `latestResponse?` |
+| `t3_aguardar_thread` (wait) | **`environment`**, `threadId`, **`timeoutMs`** (1-5000), `runId?`, `until?` (`run_terminal`, default; `execution_idle`), `includeLatestResponse?`, `maxCharacters?` | `runId`, `statusRun`, `state`, `terminal`, `timedOut`, `returnReason`, `pendingRequest`, `latestResponse?`; with `execution_idle` also `executionIdle`, `execution` and `backgroundClearedDuringWait` |
 
 States (`state`, also the filter of `t3_threads`): `running`, `needs_intervention`,
 `completed`, `failed`, `cancelled`, `no_run` and `unknown`. Each thread summary carries
@@ -167,7 +173,8 @@ States (`state`, also the filter of `t3_threads`): `running`, `needs_interventio
 `effort`), `runtimeMode`, `state`, `stateSource`, `statusRun`, `runId`, `updatedAt` and
 `settled`; intervention adds `reason`, `kind`, `identifier` and `since`.
 `t3_aguardar_thread` returns with `returnReason` `terminal`, `needs_intervention`,
-`no_run`, `timeout`, `thread_deleted` or `subscription_closed`.
+`no_run`, `timeout`, `thread_deleted` or `subscription_closed`, and `execution_idle` in
+that mode.
 
 **Sources of truth.** `state` and `model` are canonical; clients should not weigh other
 fields against them. `state` applies this precedence, and `stateSource` names the signal
@@ -327,6 +334,13 @@ terminal or intervention event, without polling. Reaching the deadline with an o
 state is a normal result (`timedOut: true`). It never acquires, renews or releases a lease
 or lock, and never interrupts the run.
 
+`until: "execution_idle"` waits for the thread's real work rather than one run. It returns
+when no run is active or queued, no intervention is pending, and no background work holds
+the thread, after 1.5 s without changes. It subscribes to the full projection, applies
+events in order of `sequence`, returns `execution` with the same contract as `t3_thread`,
+and lists in `backgroundClearedDuringWait` the tasks that left the provider roster during
+the wait. `runId` does not apply in this mode.
+
 ### Provider instances (`t3_providers`)
 
 Lists the provider instances of one environment from the source that feeds T3's
@@ -440,6 +454,13 @@ MCP SDK with error `-32602` before anything reaches the gate.
 
 A correction of the current work uses `steer_active`; it is never deferred until after the
 work it is meant to correct. Refused steer/restart requests never fall back to a queue.
+
+`start_immediately` checks the thread right before sending. If provider background work that
+holds the thread is still pending (subagent, monitor, unnamed task; commands do not hold it),
+nothing is sent. The result is `state: "rejected"`, `sent: false`,
+`refusal.code: "background_work_active"`, with the `execution` snapshot that decided it. Wait
+with `t3_aguardar_thread` `until: "execution_idle"`, then send again with a new
+`clientRequestId`. `onBackgroundWork: "send"` skips the check.
 
 ## OAuth session profile (experimental)
 

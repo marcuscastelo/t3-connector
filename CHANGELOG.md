@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Read tools: `t3_thread` adds `execution` (contract version 1), derived from one thread
+  projection read. It correlates the latest, active, latest-executed and queued runs; the
+  latest response and its `relation` to those runs; pending requests; the provider session;
+  and provider background work (`background.pending` with `holdsThread`, and
+  `background.endedSinceLatestRun`). It adds safe signals (`responseStale`,
+  `backgroundWorkActive`, `backgroundWorkHoldsThread`, `backgroundWorkEndedUnconsumed`,
+  `latestRunHasNoAssistantResponse`, `operationallyIdle`) and `continuation` (`canStartNow`,
+  `blockers`, `reasons`, `recommended`, target `same_thread`). Background work is read without
+  the shell's post-turn gate, which hides it while a run is active. `coherence` compares the
+  shell with the projection (version, latest run, active run, pending request) and reads them
+  again once when they differ. See `docs/execution-snapshot.md`.
+- `t3_aguardar_thread` accepts `until: "execution_idle"`, which waits until no run is active or
+  queued, nothing is pending and no background work holds the thread, stable for 1.5 s. It
+  returns `execution` and `backgroundClearedDuringWait`.
+- `thread.send` with `start_immediately` now refuses before sending while provider background
+  work holds the thread. It returns `state: "rejected"`, `sent: false`,
+  `refusal.code: "background_work_active"` and the `execution` snapshot. `onBackgroundWork:
+  "send"` skips the check. A failed preflight read refuses with
+  `execution_snapshot_unavailable`.
+
 ## 0.11.2
 
 - Read tools: one source-of-truth contract for thread state and model. `state` now gives an
