@@ -12,6 +12,7 @@ import { criarTransporteSsh, criarTransporteUrl } from '../transporte.mjs';
 import { StagingRpcTransport, projectReceipt } from './transport-staging.mjs';
 import { lerOcupacao } from './project-admin.mjs';
 import { lerExecucaoDaThread, lerObservacao } from '../settlement.mjs';
+import { linhaUnica } from '../linhas.mjs';
 
 export const ESCOPOS_ESCRITA = ['orchestration:operate', 'orchestration:read'];
 
@@ -159,7 +160,8 @@ export function criarConexaoEscrita(registro, {
         lerShell: () => clienteLeitura.shell(),
         lerCompleto: (id) => clienteLeitura.threadCompleto(id),
       }),
-      projectForThread: async (id) => (await clienteLeitura.shell()).threads?.find((t) => t.id === id && !t.deletedAt)?.projectId,
+      // Linhas divergentes da mesma thread: nenhum projeto é atribuído (thread_not_found).
+      projectForThread: async (id) => { const { linha, conflito } = linhaUnica((await clienteLeitura.shell()).threads, id); return !conflito && linha && !linha.deletedAt ? linha.projectId : undefined; },
       // Send preflight: the same coherent acquisition as the settle guard (shell → full → shell),
       // so usage limit, plan and the shell roster count; projection only if the thread keeps changing.
       executionSnapshot: async (id) => (await lerExecucaoDaThread({

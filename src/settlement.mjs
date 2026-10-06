@@ -214,6 +214,8 @@ function observar({ environmentId, thread, snapshot, attempts = 1, version = SET
   }
   if (problemas.length) return { observacao: incompleta(problemas, version), execucao: null };
   const execution = execucaoDoSnapshot({ thread, snapshot, attempts });
+  // Evidência fora do contrato não sustenta settle em nenhuma versão (revisão R5).
+  if (!execution.evidence.valid) return { observacao: incompleta(['execution_evidence_invalid', ...execution.evidence.problems], version), execucao: execution };
 
   const pendentesProjecao = pedidosPendentes(p);
   const estado = estadoDaThread(thread, pendentesProjecao);
@@ -359,9 +361,12 @@ export async function lerExecucaoDaThread(args) {
   if (lido.execucao) return { execucao: lido.execucao, lido };
   const snapshot = lido.ultimoSnapshot ?? (await args.lerCompleto(args.threadId));
   if (!snapshot?.projection) throw new Error('execution_snapshot_unavailable');
+  // Conflito de linhas da shell não vira "só projeção": a evidência continua inválida (R5, P1).
+  const conflitos = lido.observacao.blockers.filter((b) => b.reason === 'thread_rows_conflict').map((b) => b.reason);
   const execucao = derivarExecucao({
     projecao: snapshot.projection,
     fonte: { kind: 'thread_full_snapshot', threadSequence: snapshot.snapshotSequence ?? null, historyComplete: true, attempts: lido.tentativas },
+    evidenciaInvalida: conflitos,
   });
   return { execucao, lido };
 }

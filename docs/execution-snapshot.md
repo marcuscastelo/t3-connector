@@ -86,7 +86,14 @@ because they wake the agent.
 
 - `canStartNow` is true when there are no `blockers`. Possible blockers: `active_run`,
   `queued_runs`, `pending_request`, `proposed_plan`, `usage_limit`, `usage_limit_auto_resume`,
-  `background_work_active` and `background_work_unknown`.
+  `background_work_active`, `background_work_unknown` and `execution_evidence_invalid`.
+- `execution_evidence_invalid` means the projection does not follow the V2 contract (a run,
+  request, subagent or plan with an unknown status or kind, a duplicate ID, a roster task
+  without `taskId`, an active provider thread missing from the roster) or the shell has
+  conflicting rows for the thread. `evidence.problems` lists what failed. Nothing is proven
+  from such a read: settle refuses (`settle_observation_incomplete`), the dispatch preflight
+  refuses, `execution_idle` never returns, and `thread.send` `start_immediately` refuses with
+  `execution_evidence_invalid` even without a guard.
 - `reasons` lists deterministic facts that leave work to pick up:
   `background_work_ended_after_latest_run`, `latest_run_without_assistant_response` and
   `latest_run_failed`.
@@ -142,7 +149,7 @@ change while that work runs (Claude: `ClaudeBackgroundWorkBlocksQueryReplacement
 `steer_active`, `restart_active` and `queue_after_active` name the active run explicitly and
 are not checked. If the read fails, the send is refused before sending with
 `execution_snapshot_unavailable`. An unknown background state (a server without a roster) does
-not refuse.
+not refuse; invalid evidence (`execution_evidence_invalid`) does.
 
 ## Limits
 

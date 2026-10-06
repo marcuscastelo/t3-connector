@@ -27,6 +27,7 @@
 // Tudo aqui é puro: não faz I/O, não lê journal, não envia nada.
 
 import { msIso, nsIso } from './instante.mjs';
+import { problemasDaProjecao } from './validacao.mjs';
 
 export const EXECUTION_CONTRACT_VERSION = 1;
 
@@ -357,7 +358,9 @@ export function compararShell(shellThread, projecao) {
  * @param shellThread linha da shell ou null
  * @param fonte {kind, threadSequence, historyComplete, attempts, observedAt}
  */
-export function derivarExecucao({ projecao, shellThread = null, fonte = {}, limitRecovery = shellThread?.limitRecovery ?? null }) {
+export function derivarExecucao({ projecao, shellThread = null, fonte = {}, limitRecovery = shellThread?.limitRecovery ?? null, evidenciaInvalida = [] }) {
+  const problemas = [...problemasDaProjecao(projecao), ...evidenciaInvalida];
+  if (!projecao || typeof projecao !== 'object') projecao = {};
   const comparacao = shellThread ? compararShell(shellThread, projecao) : null;
   const shellConcorda = Boolean(comparacao && comparacao.motivos.length === 0);
   const runs = runsDaProjecao(projecao, shellThread);
@@ -391,6 +394,8 @@ export function derivarExecucao({ projecao, shellThread = null, fonte = {}, limi
   if (limite) blockers.push(limite.autoResume ? 'usage_limit_auto_resume' : 'usage_limit');
   if (fundo._segura === true) blockers.push('background_work_active');
   if (fundo._segura === null) blockers.push('background_work_unknown');
+  // Projeção fora do contrato (ou linhas da shell em conflito): nada é provado a partir dela.
+  if (problemas.length) blockers.push('execution_evidence_invalid');
 
   const reasons = [];
   if (encerradoSemAbsorver) reasons.push('background_work_ended_after_latest_run');
@@ -408,6 +413,7 @@ export function derivarExecucao({ projecao, shellThread = null, fonte = {}, limi
       shellUpdatedAt: shellThread?.updatedAt ?? null,
       history: historicoCompleto ? 'complete' : 'window',
     },
+    evidence: problemas.length ? { valid: false, problems: problemas } : { valid: true },
     coherence: {
       status: !shellThread ? 'projection_only' : shellConcorda ? 'coherent' : 'shell_lagging',
       attempts: fonte.attempts ?? 1,

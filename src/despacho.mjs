@@ -35,6 +35,7 @@ const RECUSA_BLOQUEIO = {
   usage_limit_auto_resume: 'dispatch_unresolved_work',
   background_work_active: 'dispatch_unresolved_work',
   background_work_unknown: 'dispatch_unresolved_work',
+  execution_evidence_invalid: 'dispatch_observation_incomplete',
 };
 
 /** Item mínimo da busca de duplicata: IDs só, igual nos dois lados (leitura e escrita). */
@@ -148,9 +149,10 @@ async function preflightSend({ r, parsed, expected }, fontes, reasons) {
       const obs = await lerObservacaoComDados({
         environmentId: r.environmentId,
         threadId: parsed.threadId,
+        // As linhas do alvo passam pela ACL TODAS, para o conflito entre projetos aparecer.
         lerShell: async () => {
           const atual = await lerShellFresca(cliente, { signal: fontes.signal });
-          return { ...atual, threads: (atual.threads ?? []).filter((t) => r.escopo.projetoPermitido(t.projectId)) };
+          return { ...atual, threads: (atual.threads ?? []).filter((t) => t?.id === parsed.threadId || r.escopo.projetoPermitido(t?.projectId)) };
         },
         lerCompleto: (id) => cliente.threadCompleto(id, { signal: fontes.signal }),
         version: 2,

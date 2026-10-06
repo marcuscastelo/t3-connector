@@ -30,6 +30,7 @@ import { correrComSinal, falhaSanitizada } from './busca-threads.mjs';
 import { resumoModelo } from './estado.mjs';
 import { seguraAThread } from './execucao.mjs';
 import { msIso } from './instante.mjs';
+import { linhaUnica } from './linhas.mjs';
 import { assinatura, comparador, CursorInvalido, paginar, VERSAO_CURSOR } from './paginacao.mjs';
 import { CONTROL_PLANE_CONTRACT_VERSION } from './control-plane.mjs';
 
@@ -157,10 +158,17 @@ export async function montarWorkset(ambientes, args, {
       );
       const projetos = new Map((shell.projects ?? []).map((p) => [p.id, p]));
       const ambiente = { ...ambientes.identidade(r), name: info?.nome ?? null };
-      const itens = r.escopo.threadsVisiveis(shell).map((t) => {
+      // Uma linha por thread: repetidas iguais contam uma vez; divergentes (revisão R5) viram
+      // um item `unknown`, nunca a mesma thread em dois grupos.
+      const vistos = new Set();
+      const itens = [];
+      for (const t of r.escopo.threadsVisiveis(shell)) {
+        if (vistos.has(t.id)) continue;
+        vistos.add(t.id);
         const projeto = projetos.get(t.projectId);
-        return itemCompacto(t, resumir(t, projeto), ambiente, projeto);
-      });
+        const item = itemCompacto(t, resumir(t, projeto), ambiente, projeto);
+        itens.push(linhaUnica(shell.threads, t.id).conflito ? { ...item, state: 'unknown', stateSource: 'thread_rows_conflict', reason: 'thread_rows_conflict' } : item);
+      }
       const arquivo = arquivadas?.ok
         ? {
             ok: true,

@@ -240,6 +240,9 @@ export class Dispatcher {
   if(action!=='thread.send'||input.delivery!=='start_immediately'||input.onBackgroundWork==='send'||!this.adapter.executionSnapshot)return null;
   let execution;
   try {execution=await this.adapter.executionSnapshot(input.threadId);} catch {throw new Error('execution_snapshot_unavailable');}
+  // Evidência fora do contrato (ou linhas em conflito) recusa: nunca prova que nada segura a
+  // thread. Servidor sem roster (knowledge unknown por ausência) segue sem recusar.
+  if(execution?.continuation?.blockers?.includes('execution_evidence_invalid'))return {code:'execution_evidence_invalid',message:'the thread projection is not well formed (or the shell has conflicting rows for it), so background work cannot be ruled out; nothing was sent. Read t3_thread again.',execution};
   if(execution?.signals?.backgroundWorkHoldsThread!==true)return null;
   const tasks=execution.background.pending.filter(t=>t.holdsThread).map(t=>`${t.kind} ${t.taskId}`).join(', ');
   return {code:'background_work_active',message:`provider background work still holds the thread (${tasks}); nothing was sent. Wait with t3_aguardar_thread until=execution_idle, then send with a new clientRequestId, or pass onBackgroundWork=send.`,execution};

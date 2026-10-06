@@ -54,8 +54,10 @@ test('R4-2 linhas repetidas e divergentes do alvo na shell: settlement incomplet
 });
 
 test('R4-3 (não bloqueante) instantes equivalentes não são conflito na união; diferentes são', async () => {
-  assert.equal(chaveCanonica({ u: '2026-10-03T10:05:00.000Z' }), chaveCanonica({ u: '2026-10-03T07:05:00-03:00' }));
-  assert.notEqual(chaveCanonica({ u: '2026-10-03T10:05:00.000Z' }), chaveCanonica({ u: '2026-10-03T10:05:00.001Z' }));
+  assert.equal(chaveCanonica({ updatedAt: '2026-10-03T10:05:00.000Z' }), chaveCanonica({ updatedAt: '2026-10-03T07:05:00-03:00' }));
+  assert.notEqual(chaveCanonica({ updatedAt: '2026-10-03T10:05:00.000Z' }), chaveCanonica({ updatedAt: '2026-10-03T10:05:00.001Z' }));
+  // Texto livre que parece data não é instante (revisão R5, P1).
+  assert.notEqual(chaveCanonica({ title: '2026-10-03T10:05:00.000Z' }), chaveCanonica({ title: '2026-10-03T07:05:00-03:00' }));
   assert.equal(linhaUnica([thread({ updatedAt: '2026-10-03T10:05:00.000Z' }), thread({ updatedAt: '2026-10-03T07:05:00-03:00' })], 'thread-1').conflito, false);
   const d = dadosPadrao();
   d.local.shell.snapshotSequence = 9; d.remoto.shell.snapshotSequence = 9;

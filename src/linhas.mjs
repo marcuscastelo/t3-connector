@@ -5,8 +5,11 @@
 
 import { nsIso } from './instante.mjs';
 
-export const chaveCanonica = (v) => JSON.stringify(v, (_k, x) => {
-  if (typeof x === 'string') { const n = nsIso(x); return n === null ? x : `\u0000ns:${n}`; }
+// Só campos temporais (…At, …Until) comparam pelo instante; texto livre (título) que pareça
+// data continua texto (revisão R5, P1).
+const TEMPORAL = /(At|Until)$/;
+export const chaveCanonica = (v) => JSON.stringify(v, (k, x) => {
+  if (typeof x === 'string' && TEMPORAL.test(k)) { const n = nsIso(x); return n === null ? x : `\u0000ns:${n}`; }
   if (x && typeof x === 'object' && !Array.isArray(x)) return Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
   return x;
 });

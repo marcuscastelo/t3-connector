@@ -5,6 +5,7 @@ import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {InMemoryTransport} from '@modelcontextprotocol/sdk/inMemory.js';
 import {criarServidor} from '../servidor.mjs';
 import {criarEscopo} from '../ambientes.mjs';
+import {linhaUnica} from '../linhas.mjs';
 
 export const LEITURAS=Object.freeze(['t3_projetos','t3_threads','t3_atencao','t3_thread','t3_mensagens','t3_providers','t3_aguardar_thread']);
 // Control-plane v1 (§1): leituras que atravessam environments, sobre todos os da lease, cada um
@@ -14,9 +15,9 @@ export const LEITURAS_MULTI=Object.freeze(['t3_ambientes','t3_thread_find_batch'
 export function clienteFiltrado(cliente,readIds) {
  return {
   shell:async o=>{const s=await cliente.shell(o);return {...s,projects:(s.projects??[]).filter(p=>readIds.has(p.id)),threads:(s.threads??[]).filter(t=>readIds.has(t.projectId))};},
-  thread:async(id,o)=>{const s=await cliente.shell(o);const t=(s.threads??[]).find(t=>t.id===id&&!t.deletedAt);if(!t||!readIds.has(t.projectId))throw new Error('thread_not_found');return cliente.thread(id,o);},
+  thread:async(id,o)=>{const s=await cliente.shell(o);const {linha:t,conflito}=linhaUnica(s.threads,id);if(conflito||!t||t.deletedAt||!readIds.has(t.projectId))throw new Error('thread_not_found');return cliente.thread(id,o);},
   // Full snapshot (settlement observation): same ACL as the bounded read.
-  threadCompleto:async(id,o)=>{const s=await cliente.shell(o);const t=(s.threads??[]).find(t=>t.id===id&&!t.deletedAt);if(!t||!readIds.has(t.projectId))throw new Error('thread_not_found');return cliente.threadCompleto(id,o);},
+  threadCompleto:async(id,o)=>{const s=await cliente.shell(o);const {linha:t,conflito}=linhaUnica(s.threads,id);if(conflito||!t||t.deletedAt||!readIds.has(t.projectId))throw new Error('thread_not_found');return cliente.threadCompleto(id,o);},
   // WS (providers, espera, arquivadas): a ACL de thread é conferida pela shell filtrada antes.
   ...(cliente.ticketWs?{ticketWs:o=>cliente.ticketWs(o),base:cliente.base}:{}),
  };

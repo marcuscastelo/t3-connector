@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Dispatcher, ACTIONS, schemaForAction, parseAction, chaveOperacao, SEND_DESCRIPTION, SETTLE_DESCRIPTION } from '../escrita/adapters.mjs';
 import { MENSAGENS_GUARD } from '../settlement.mjs';
 import { fontesEscrita, preflightDespacho } from '../despacho.mjs';
+import { linhaUnica } from '../linhas.mjs';
 import { grantDoAmbiente } from '../escrita/gate.mjs';
 import { grantFromInventory, escopoDosGrants } from '../escrita/scope.mjs';
 import { identidadeSessaoOAuth, exigirIdentidade } from '../escrita/identidade.mjs';
@@ -103,7 +104,7 @@ const BATCH_MESSAGES = {
   snoozed_until_invalid: 'snoozedUntil must be an absolute ISO 8601 instant with Z or an explicit offset (for example 2026-10-06T09:00:00-03:00); nothing was sent',
   batch_size_invalid: `pass 1-${MAX_ITENS} items; split larger selections into several batches`,
 };
-const threadProject = (s, id) => s.threads?.find(t => t.id === id && !t.deletedAt)?.projectId;
+const threadProject = (s, id) => { const { linha, conflito } = linhaUnica(s.threads, id); return !conflito && linha && !linha.deletedAt ? linha.projectId : undefined; };
 const describe = action => PROJECT_DESCRIPTIONS[action] ?? (action === 'thread.send' ? SEND_DESCRIPTION
   : action === 'thread.settle' ? SETTLE_DESCRIPTION
   : action === 'runtime-request.answer' ? 'Answers a pending user_input runtime request using requestId and answers keyed by question ID from t3_thread.pedidosPendentes; thread.send does NOT answer it.'

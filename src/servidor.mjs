@@ -571,7 +571,8 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
           // Mesma ACL da leitura: thread de projeto não autorizado não é observada.
           lerShell: async () => {
             const atual = await lerShellFresca(cliente, { signal });
-            return { ...atual, threads: (atual.threads ?? []).filter((t) => r.escopo.projetoPermitido(t.projectId)) };
+            // As linhas do alvo passam todas: conflito entre projetos aparece (revisão R5).
+            return { ...atual, threads: (atual.threads ?? []).filter((t) => t?.id === threadId || r.escopo.projetoPermitido(t?.projectId)) };
           },
           lerCompleto: (id) => cliente.threadCompleto(id, { signal }),
           version: settlementContractVersion,

@@ -27,7 +27,12 @@
   knowledge `unknown`, so nothing proves the thread idle; repeated, diverging shell rows of the
   target thread make the settlement observation incomplete (`thread_rows_conflict`) and the
   thread reads fail instead of picking the first row; rows are compared canonically, so
-  equivalent instants (`Z` vs offset) are not a conflict.
+  equivalent instants (`Z` vs offset) are not a conflict. One validation boundary for the
+  thread projection (`src/validacao.mjs`): anything outside the V2 contract adds the canonical
+  blocker `execution_evidence_invalid` (settle incomplete, preflight refused, `execution_idle`
+  never returns, legacy `thread.send` `start_immediately` refused); shell rows of the target are
+  checked for conflicts before the ACL cut and by every ID lookup (project resolution of
+  writes, guarded reads, workset); only time fields compare by instant.
 - Control-plane v1, live validation fixes: an absent or empty `supportedRuntimeModes` now counts
   as every mode supported, which is T3's own runtime rule (codex and claudeAgent instances do
   not declare the list); a declared list without the mode is still refused. On the write side
