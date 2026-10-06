@@ -32,7 +32,7 @@ async function montar({ local = {}, remoto = {}, journal = { ...memoryJournal(),
   return { c, l, r, data, send, journal };
 }
 
-test('catalog: eight read tools plus the write catalog without leaseId; no lease approval tool', async t => {
+test('catalog: the read tools plus the write catalog without leaseId; no lease approval tool', async t => {
   const { c } = await montar(); t.after(c.close);
   const tok = (await c.signIn()).tokens;
   const tools = (await c.mcp(tok.access_token, 'tools/list')).data.result.tools;
