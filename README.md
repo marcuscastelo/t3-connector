@@ -596,7 +596,9 @@ optional `waitMs` (0–10000) to wait for R to end inside the call.
   the journal's atomic reservation, the one the Dispatcher uses to own an operationId: a later
   write under it is refused and never sends, and if another writer already holds it, that
   writer's state is reported instead. A refusal that leaves no record (lease, scope) refuses the
-  call and states nothing about the step.
+  call and states nothing about the step. Replaying a negative answer recorded before this rule
+  closes its steps the same way first; if another writer holds one, the answer is rebuilt as
+  `uncertain` (`step_changed_after_result`).
 - `state`: `precondition_pending` (R still active), `precondition_failed` (`reason`
   `other_run_active`, `run_superseded`, `run_unknown`; terminal, nothing sent), `failed`
   (`failedStep` refused before sending, proven by the journal; earlier steps stay applied and

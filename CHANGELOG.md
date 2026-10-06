@@ -28,7 +28,8 @@
   `uncertain`, and replay a final answer only while the journal agrees with it. "Not sent" is
   stated only for a step whose journal record is a refusal: before concluding it, the request
   reserves the step's operationId as refused (atomic, like the Dispatcher's own reservation), so no
-  later write sends under it; a refusal that leaves no record refuses the call instead. Concurrent
+  later write sends under it; a refusal that leaves no record refuses the call instead. A replayed
+  negative answer recorded without that refusal closes the steps first or is rebuilt as uncertain. Concurrent
   duplicates share one execution, and the
   result states `precondition_pending | precondition_failed | failed | uncertain | completed`, with
   `delivery.deliveredAs` from the run T3 created. No new consented action; existing tools unchanged.
