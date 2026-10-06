@@ -12,7 +12,7 @@ import {Dispatcher} from '../src/escrita/adapters.mjs';
 import {identidadeCanal,identidadeSessaoOAuth,exigirIdentidade} from '../src/escrita/identidade.mjs';
 import {conditionalSend as legacySend} from './conditional/legacy-1708a32.mjs';
 import {criarPonteEscrita} from '../src/escrita/ponte-mcp.mjs';
-import {conditionalSend,evaluatePrecondition,sameModel,manifestKey,CONDITIONAL_TOOL,conditionalSchema} from '../src/escrita/conditional.mjs';
+import {conditionalSend,evaluatePrecondition,sameModel,manifestKey,CONDITIONAL_TOOL,conditionalSchema,stepIds} from '../src/escrita/conditional.mjs';
 const conditionalSchemaParse=i=>conditionalSchema.parse(i);
 import {ACTIONS,chaveOperacao,parseAction} from '../src/escrita/adapters.mjs';
 import {digest} from '../src/escrita/gate.mjs';
@@ -593,4 +593,12 @@ test('OAuth all: same contract through the session dispatch, steps checked per s
  t3.endRun();
  const theirs=await w.conditional({sid:other,sub:'local:otherSubject002'},{environment:'local',operationId:'cs-1',input:req({afterRunId:t3.thread.latestRunId})});
  assert.equal(theirs.replayed,false);assert.equal(theirs.state,'completed');
+});
+
+test('clientRequestId: refused up front when a derived step operationId would exceed the write ID limit',()=>{
+ const ok='x'.repeat(1008),tooLong='x'.repeat(1009);
+ assert.equal(conditionalSchema.safeParse(req({clientRequestId:ok})).success,true);
+ assert.ok(Object.values(stepIds(ok)).every(id=>id.length<=1024));
+ assert.equal(conditionalSchema.safeParse(req({clientRequestId:tooLong})).success,false);
+ assert.equal(conditionalSchema.safeParse(req({clientRequestId:tooLong,modelSelection:undefined})).success,false);
 });
