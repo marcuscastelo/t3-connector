@@ -213,7 +213,12 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
       caller: exigirIdentidade(identity(principal)),
       environment: { environmentId: c.registro.environmentId, destination: c.registro.destination },
       journal, audit: e => gate.audit(e), failClosed: () => gate.close(),
-      authorize: actions => { for (const a of actions) all ? authorizeRecord(principal, c, a) : (!sessionGrant().actions.includes(a) && fail('scope_denied')); },
+      // All mode consents the environment, not project IDs (as the Dispatcher's recorded replay);
+      // restricted mode also requires the project in this session's grant (the caller has no sid).
+      authorize: (actions, projectId) => {
+        for (const a of actions) all ? authorizeRecord(principal, c, a) : (!sessionGrant().actions.includes(a) && fail('scope_denied'));
+        if (!all && projectId !== undefined && !sessionGrant().projects.some(p => p.id === projectId)) fail('scope_denied');
+      },
       observe: async threadId => {
         const thread = (await readShell()).threads?.find(t => t.id === threadId && !t.deletedAt);
         if (!thread) fail('thread_not_found');

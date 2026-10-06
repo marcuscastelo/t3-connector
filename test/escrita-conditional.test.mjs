@@ -9,6 +9,7 @@ import {ACTIONS} from '../src/escrita/adapters.mjs';
 import {sessionWrites} from '../src/oauth/session-writes.mjs';
 import {SessionAuthority} from '../src/oauth/session-authority.mjs';
 import {consentAll} from '../src/oauth/project-policy.mjs';
+import {grantFromInventory,escopoDosGrants} from '../src/escrita/scope.mjs';
 import {setup,memoryJournal,ORIGIN,providersFor} from './escrita-fixtures.mjs';
 
 const OPUS={instanceId:'claudeAgent',model:'claude-opus-5-5'};
@@ -227,6 +228,30 @@ test('interrupted after the model step committed: resume adopts it and does not 
  assert.equal(resumed.state,'completed');
  assert.deepEqual(t3.calls,['thread.model-selection.set','message.dispatch']);
  assert.deepEqual(resumed.steps.map(x=>[x.operationId,x.state]),[['cs-1:model-selection','completed'],['cs-1:send','completed']]);
+});
+
+test('replay under a narrower lease: a request of a project no longer granted is scope_denied, nothing revealed',async()=>{
+ for(const first of [{},{active:'r1'}]) {
+  const t3=fakeT3(first),h=await leaseHarness(t3);
+  const original=await h.call(req());
+  assert.equal(original.state,first.active?'precondition_pending':'completed');
+  h.c.gate.revoke(h.lease.leaseId,h.lease.credentialId);
+  h.inventory.projetos=[{id:'other',name:'other',directory:'/w/other'}];
+  const narrow=await h.aprovar();
+  await assert.rejects(h.call(req(),{leaseId:narrow.leaseId}),/scope_denied/);
+  if(!first.active)await assert.rejects(h.c.relay(h.c.capability,{op:'reconcile',ambiente:'local',leaseId:narrow.leaseId,operationId:'cs-1:model-selection'}),/scope_denied/);
+ }
+});
+
+test('OAuth restricted: replay requires the project in this session grant, not only the caller',async()=>{
+ const t3=fakeT3(),authority=new SessionAuthority(),registro={alias:'local',environmentId:'env-p',destination:'t3://env-p',acoes:['thread.send','thread.model-selection.set']};
+ const grant=ids=>escopoDosGrants([grantFromInventory({alias:'local',environmentId:'env-p',label:'local',destination:'t3://env-p',actions:registro.acoes,projects:ids.map(id=>({id,name:id,directory:`/w/${id}`}))})]);
+ const sub='local:abcdefghijkl',wide=authority.create({sub,clientId:'c',credentialId:'k',scope:'connector:write',resource:'r',grants:grant(['app','other'])});
+ const w=sessionWrites({conexoes:[{registro,cliente:t3.cliente,adapter:t3.adapter}],journal:{...memoryJournal(),audit(){}},authority,issuer:'https://as.example'});
+ assert.equal((await w.conditional({sid:wide,sub},{environment:'local',operationId:'cs-1',input:req({modelSelection:undefined})})).state,'completed');
+ const narrow=authority.create({sub,clientId:'c',credentialId:'k',scope:'connector:write',resource:'r',grants:grant(['other'])});
+ await assert.rejects(w.conditional({sid:narrow,sub},{environment:'local',operationId:'cs-1',input:req({modelSelection:undefined})}),/scope_denied/);
+ assert.equal((await w.conditional({sid:wide,sub},{environment:'local',operationId:'cs-1',input:req({modelSelection:undefined})})).replayed,true);
 });
 
 // Engine-level cases with a controlled clock and host.

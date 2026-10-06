@@ -69,7 +69,7 @@ export function controller({conexoes,passkeys,journal,organization,tunnelId,inve
     return grant;
    };
    const host={caller,environment:{environmentId:r.environmentId,destination:r.destination},journal,audit:e=>gate.audit(e),failClosed:()=>gate.close(),
-    authorize:actions=>{if(actions.some(a=>!grantAtivo().actions.includes(a)))throw new Error('scope_denied');},
+    authorize:(actions,projectId)=>{const grant=grantAtivo();if(actions.some(a=>!grant.actions.includes(a))||(projectId!==undefined&&!grant.projects.some(p=>p.id===projectId)))throw new Error('scope_denied');},
     observe:async threadId=>{
      const grant=grantAtivo(),shell=await (await c.cliente()).shell();
      const thread=(shell.threads??[]).find(t=>t.id===threadId&&!t.deletedAt);

@@ -78,8 +78,9 @@ const inflight = new Map();
  * @param host.caller          canonical caller identity (journal key)
  * @param host.environment     {environmentId, destination}
  * @param host.journal         same atomic journal as the Dispatcher
- * @param host.authorize(actions)  throws unless the caller may run these actions now
- * @param host.observe(threadId)   shell thread (authorized), throws thread_not_found
+ * @param host.authorize(actions, projectId?)  throws unless the caller may run these actions now
+ *                                   (and, with projectId, in that project)
+ * @param host.observe(threadId)   shell thread (project authorized), throws thread_not_found
  * @param host.readThread(threadId) full projection {runs, ...} for the post-check (optional)
  * @param host.dispatch(action, operationId, input)  the existing dispatch path
  * @param host.audit(event)
@@ -90,7 +91,7 @@ export function conditionalSend(host, operationId, rawInput, { sleep = ms => new
   if (input.clientRequestId !== operationId) throw new Error('request_id_mismatch');
   const key = manifestKey({ ...host.environment, caller: host.caller, clientRequestId: input.clientRequestId });
   // Concurrent duplicates in this process share one execution and one result.
-  if (inflight.has(key)) return inflight.get(key);
+  if (inflight.has(key)) return inflight.get(key).then(result => { host.authorize(requiredActions(input), result.projectId); return structuredClone(result); });
   const running = run(host, key, input, { sleep, now }).finally(() => inflight.delete(key));
   inflight.set(key, running);
   return running;
@@ -107,6 +108,10 @@ async function run(host, key, input, { sleep, now }) {
   if (!store('reserve', key, record)) {
     const old = store('get', key);
     if (old.hash !== hash) throw new Error('operation_conflict');
+    // A recorded request reveals its thread, observations and model: the caller's current lease or
+    // session must still cover that thread's project, as the Dispatcher's replay re-checks its target.
+    if (old.projectId !== undefined) host.authorize(requiredActions(input), old.projectId);
+    else if (old.observations.length || old.steps.length) old.projectId = (await host.observe(input.threadId)).projectId;
     if (FINAL.has(old.state)) return view(old, true);
     record = old; // pending, or interrupted mid-way: steps are idempotent by their own operationIds
   }
@@ -125,7 +130,12 @@ async function run(host, key, input, { sleep, now }) {
     if (durable.hash !== digest([action, parseAction(action, stepInput).input])) throw new Error('operation_conflict');
     return [stepFromDispatcher(durable, operationId, at())];
   });
-  if (recovered.length) { record.steps = [...record.steps, ...recovered]; save(); }
+  if (recovered.length) {
+    // Nothing about these steps is returned before the thread's project is authorized.
+    if (record.projectId === undefined) record.projectId = (await host.observe(input.threadId)).projectId;
+    record.steps = [...record.steps, ...recovered];
+    save();
+  }
   const finish = (state, extra = {}) => {
     Object.assign(record, { state, finishedAt: at(), ...extra });
     save();
@@ -134,6 +144,7 @@ async function run(host, key, input, { sleep, now }) {
   };
   const observe = async phase => {
     const thread = await host.observe(input.threadId);
+    record.projectId ??= thread.projectId;
     const evaluation = evaluatePrecondition(thread, input.afterRunId);
     const entry = { phase, at: at(), verdict: evaluation.verdict, reason: evaluation.reason, ...evaluation.observation, model: thread.modelSelection ?? null };
     record.observations.push(entry);
