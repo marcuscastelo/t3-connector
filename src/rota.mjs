@@ -56,10 +56,22 @@ export function elegibilidadeProvider(provider, { model, options = [], runtimeMo
     else if (options.length) {
       const descritores = m.capabilities?.optionDescriptors;
       if (!Array.isArray(descritores)) r('capability_unknown', 'optionDescriptors');
-      else for (const o of options) {
-        const d = descritores.find((x) => x?.id === o.id);
-        const valido = d && (d.type !== 'select' || (Array.isArray(d.options) && d.options.some((x) => x?.id === o.value)));
-        if (!valido) r('model_option_unsupported', 'optionDescriptors', { option: o.id });
+      else {
+        const vistas = new Set();
+        for (const o of options) {
+          // Tipos do contrato (packages/contracts/src/model.ts): select (valor = id de uma
+          // opção) e boolean (valor booleano). Outro tipo não é interpretado; opção repetida,
+          // ausente ou com valor do tipo errado é recusa.
+          const d = descritores.find((x) => x?.id === o.id);
+          if (vistas.has(o.id)) { r('model_option_unsupported', 'optionDescriptors', { option: o.id, reason: 'duplicate' }); continue; }
+          vistas.add(o.id);
+          if (!d) { r('model_option_unsupported', 'optionDescriptors', { option: o.id }); continue; }
+          if (d.type === 'select') {
+            if (typeof o.value !== 'string' || !Array.isArray(d.options) || !d.options.some((x) => x?.id === o.value)) r('model_option_unsupported', 'optionDescriptors', { option: o.id });
+          } else if (d.type === 'boolean') {
+            if (typeof o.value !== 'boolean') r('model_option_unsupported', 'optionDescriptors', { option: o.id });
+          } else r('capability_unknown', 'optionDescriptors', { option: o.id, type: d.type ?? null });
+        }
       }
     }
   }

@@ -46,6 +46,27 @@ test('elegibilidade: só ready+authenticated+modo+modelo+opções explícitos; a
   assert.ok(elegibilidadeProvider(provider(), { ...pedido, options: [{ id: 'reasoningEffort', value: 'ultra' }] }).reasons.some((x) => x.code === 'model_option_unsupported'));
 });
 
+test('elegibilidade: valor de opção conforme o tipo do descriptor; tipo desconhecido e repetição falham fechado (revisão 334a1840 P2)', () => {
+  const comDescritores = (descritores) => provider({ models: [{ slug: 'gpt-6.1-sol', capabilities: { optionDescriptors: descritores } }] });
+  const sel = { id: 'reasoningEffort', type: 'select', options: [{ id: 'high' }] };
+  const bool = { id: 'fastMode', type: 'boolean' };
+  const ok = (p, options) => elegibilidadeProvider(p, { ...pedido, options });
+  assert.equal(ok(comDescritores([sel, bool]), [{ id: 'reasoningEffort', value: 'high' }, { id: 'fastMode', value: true }]).eligible, true);
+  const casos = [
+    [[bool], [{ id: 'fastMode', value: 'garbage' }], 'model_option_unsupported'],
+    [[bool], [{ id: 'fastMode', value: 'true' }], 'model_option_unsupported'],
+    [[sel], [{ id: 'reasoningEffort', value: true }], 'model_option_unsupported'],
+    [[{ id: 'novo', type: 'slider' }], [{ id: 'novo', value: 'x' }], 'capability_unknown'],
+    [[{ id: 'semTipo' }], [{ id: 'semTipo', value: 'x' }], 'capability_unknown'],
+    [[sel], [{ id: 'reasoningEffort', value: 'high' }, { id: 'reasoningEffort', value: 'high' }], 'model_option_unsupported'],
+  ];
+  for (const [descritores, options, code] of casos) {
+    const e = ok(comDescritores(descritores), options);
+    assert.equal(e.eligible, false, JSON.stringify(options));
+    assert.ok(e.reasons.some((x) => x.code === code), `${code}: ${JSON.stringify(e.reasons)}`);
+  }
+});
+
 test('elegibilidade: supportedRuntimeModes ausente ou vazio é a regra do T3 para "todos os modos" (codex e claudeAgent ao vivo)', () => {
   // RuntimePolicy.ts:79-87 (8ed276c2): undefined ou [] roda o modo pedido; lista sem ele cai em approval-required.
   for (const modos of [undefined, []]) {
