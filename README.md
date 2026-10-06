@@ -590,6 +590,13 @@ optional `waitMs` (0–10000) to wait for R to end inside the call.
   journal of its operationId, never assumed: `precondition_pending` and `uncertain` are evaluated
   again on retry, and a final answer is replayed only while the journal still agrees with its
   steps. Concurrent duplicates in one process share one execution.
+- "Not sent" (`sent: false`, `precondition_failed`, a refused step) is stated only for a step whose
+  journal record is a refusal. When the request itself concludes it (precondition, model not
+  reflected, an earlier step refused), it first reserves the step's operationId as refused with
+  the journal's atomic reservation, the one the Dispatcher uses to own an operationId: a later
+  write under it is refused and never sends, and if another writer already holds it, that
+  writer's state is reported instead. A refusal that leaves no record (lease, scope) refuses the
+  call and states nothing about the step.
 - `state`: `precondition_pending` (R still active), `precondition_failed` (`reason`
   `other_run_active`, `run_superseded`, `run_unknown`; terminal, nothing sent), `failed`
   (`failedStep` refused before sending, proven by the journal; earlier steps stay applied and
