@@ -25,7 +25,10 @@
   the same journal records every observation and step. Each step's state is read from the write
   journal of its operationId (a step another call still holds, or one without acknowledgement, is
   `uncertain`, never "not sent"); retries never send twice, re-evaluate `precondition_pending` and
-  `uncertain`, and replay a final answer only while the journal agrees with it. Concurrent
+  `uncertain`, and replay a final answer only while the journal agrees with it. "Not sent" is
+  stated only for a step whose journal record is a refusal: before concluding it, the request
+  reserves the step's operationId as refused (atomic, like the Dispatcher's own reservation), so no
+  later write sends under it; a refusal that leaves no record refuses the call instead. Concurrent
   duplicates share one execution, and the
   result states `precondition_pending | precondition_failed | failed | uncertain | completed`, with
   `delivery.deliveredAs` from the run T3 created. No new consented action; existing tools unchanged.
