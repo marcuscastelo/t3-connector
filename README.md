@@ -142,6 +142,10 @@ version), and refresh the tool list in the client.
    state. The connector only reports it; answering requires T3 itself.
 5. **Before choosing a provider or model**, call `t3_providers` in the target environment.
    See [Provider instances](#provider-instances-t3_providers).
+6. **To decide what to do next across machines**, call `t3_control_plane` once. Act only
+   on what it lists; if `complete` is false, say which environments are missing instead
+   of reporting that nothing needs attention. See
+   [Control plane snapshot](#control-plane-snapshot-t3_control_plane).
 
 ### Read tools
 
@@ -156,6 +160,7 @@ thread.
 | `t3_threads` | `environment?`, `projectId?`, `state?`, `includeNoRun?` (include threads without a run, default false), `woke?` (Woke marker filter), `search?`, `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `nextCursor?`, `changedSinceStart?`, `hiddenNoRun?`, `threads` |
 | `t3_buscar_threads` (find threads) | exactly one of `search?` or `threadId?` (exact), `match?` (`partial` = substring, default; `exact` = whole title), `environment?` (restricts; omitted: every environment), `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `complete`, `nextCursor?`, `queriedEnvironments`, `environmentFailures`; each thread with `environment: {alias, environmentId, name}` and `archived` |
 | `t3_atencao` (attention) | `environment?` | threads that need intervention, or failed and were not settled |
+| `t3_control_plane` (control plane snapshot) | `environment?` (restricts; omitted: every environment), `limit?` (per list, 1-100, 20) | `contractVersion`, `scope`, `complete`, `incompleteReason?`, `coherence`, `queriedEnvironments` (with `snapshotSequence`, `readAt`, `byState`), `environmentFailures`, and the lists `needsIntervention`, `running` and `ready` (each `total`, `returned`, `truncated`, `threads`) |
 | `t3_thread` | `environment?`, `threadId`, `maxCharacters?` (200-6000, 1500) | thread summary, `pendingRequests`, `providerSession` (informational), `activeRun?`, `latestRun`, `latestResponse`, `history` |
 | `t3_mensagens` (messages) | `environment?`, `threadId`, `limit?` (1-20, 6), `maxCharacters?` (100-4000, 800) | `messages` and `history.complete` |
 | `t3_providers` (provider instances) | `environment?`, `instanceId?` (exact, case-sensitive), `includeModels?` (include models, default false) | `source`, `total`, `providers` in T3 order, each with the T3 field names (see below) |
@@ -351,6 +356,43 @@ never reads `/bounded` per candidate.
   must start again. Pages are not a snapshot.
 - **Actions** in the write bridge still require `environment`; the search only finds
   candidates.
+
+### Control plane snapshot (`t3_control_plane`)
+
+One call returns what an operator or orchestrator needs to pick the next action, across
+every configured environment (or only `environment`), each under its own ACL. It reuses
+the sweep of `t3_buscar_threads` (4 s per environment, 10 s in total, at most 4 at a time,
+sanitized failures) and the thread summary of `t3_threads`.
+
+- **Lists.** `needsIntervention` and `running` are the canonical `state` (the same rule as
+  `t3_threads` and `t3_atencao`). `ready` is work that is *potentially* actionable and can
+  be derived from the shell without guessing: the latest run is `completed`, `failed` or
+  `cancelled` and the thread is neither settled nor snoozed (`readyReasons`:
+  `latest_run_<state>_unsettled`), or the thread is woke (`woke`). Threads without a run,
+  in `unknown` state, settled or still snoozed are left out of the lists but counted in
+  `queriedEnvironments[].byState`; archived threads and other projects are not counted.
+- **Items.** Each item is the `t3_threads` summary plus `environment: {alias,
+  environmentId, name}`, `activeRun` (`runId`, `status` or null), `pendingRequest`
+  (`requestId`, `kind`, `reason`, `since`; the question or approval content and the answer
+  path are read with `t3_thread`), `snoozedUntil` when snoozed, and `next`, the
+  `t3_thread` call (`environment`, `threadId`) that reads it. `ready` items add
+  `readyReasons`, `blockers` and `actionableNow`: `blockers: ["background_work_pending"]`
+  means the shell reports background tasks (`backgroundTasks`).
+- **Not acceptance.** `ready` does not mean the work is correct or that the thread is idle.
+  Background work the shell has not published yet is only visible in `t3_thread`. Read the
+  thread before continuing or settling it.
+- **Partial failures.** Environments that fail or time out are in `environmentFailures`
+  (same codes as `t3_buscar_threads`), `complete` is false and `incompleteReason` says the
+  answer is not a global view: those environments' threads are missing from every list and
+  count. If every environment fails the envelope is still a normal result. Empty lists only
+  mean "nothing to do" when `complete` is true.
+- **Coherence.** Each environment is one shell read, a single backend snapshot
+  (`snapshotSequence` when T3 sends it, `readAt`). Environments are read concurrently, not
+  at one instant (`coherence.mode: "per_environment"`); a thread can change right after its
+  environment was read.
+- **Size.** Each list is ordered by `updatedAt` (newest first, then environmentId and
+  threadId) and cut at `limit`; `total` and `truncated` say how much was left out. There is
+  no cursor: for more, call `t3_threads` with `state` in that environment.
 
 ### Waiting (`t3_aguardar_thread`)
 

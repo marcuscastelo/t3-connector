@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- New read tool `t3_control_plane`: a control plane snapshot in one call across every
+  configured environment (or only `environment`), each with its own ACL. It returns
+  `needsIntervention`, `running` and `ready` lists (ready = latest run completed, failed or
+  cancelled and not settled nor snoozed, or woke; with `readyReasons`, `blockers` and
+  `actionableNow`). Items carry the `t3_threads` summary plus `environment`, `activeRun`, a
+  `pendingRequest` summary from the shell and `next` (the `t3_thread` call). Environments
+  that fail or time out are listed in `environmentFailures` with `complete: false` and an
+  `incompleteReason`; per-environment `snapshotSequence`, `readAt` and counts by state are in
+  `queriedEnvironments`. One shell read per environment, no per-thread read. Existing tools
+  are unchanged. The environment sweep lives in `src/varredura.mjs`.
+
 ## 0.12.0
 
 - Read tools: thread summaries add `woke` and `wokeAt`, the "Woke" marker of the T3 sidebar
