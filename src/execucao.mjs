@@ -35,6 +35,12 @@ const ATIVIDADE = new Set(['preparing', 'starting', 'running', 'waiting']);
 // Statuses em que o backend deixa o roster aparecer na shell (gate de UI pós-turn).
 const ASSENTADO_PARA_FUNDO = new Set(['cancelled', 'completed', 'failed', 'interrupted', 'waiting']);
 const TRABALHO_ATIVO = new Set(['pending', 'running', 'waiting']);
+// Status de turn item e de subagent no contrato V2 (OrchestrationV2TurnItemStatus, Subagent.status).
+const STATUS_TRABALHO = new Set(['idle', 'pending', 'running', 'waiting', 'completed', 'failed', 'cancelled', 'interrupted']);
+const identidadeValida = (x) => {
+  const nativo = x?.nativeItemRef?.nativeId ?? x?.nativeTaskRef?.nativeId;
+  return (typeof nativo === 'string' && nativo.length > 0) || (typeof x?.id === 'string' && x.id.length > 0);
+};
 const TIPOS_DE_FUNDO = new Set(['command_execution', 'dynamic_tool', 'subagent']);
 const DESFECHOS = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
 const ENTREGA_PENDENTE = new Set(['pending', 'claimed']);
@@ -112,8 +118,12 @@ export function trabalhoEmSegundoPlano(projecao, { historicoCompleto, shellThrea
   // Mesma tarefa em várias fontes (roster, turn item, subagent): nenhuma evidência que segura a
   // thread é descartada por ter chegado depois; a entrada fica com o kind/fonte que segura e
   // registra as outras fontes (revisão aacaf76, P1).
+  // Evidência de fundo malformada (tarefa sem identidade, status fora do contrato, roster que
+  // não é lista) não é descartada em silêncio: o conhecimento vira `unknown` e nada prova
+  // ausência de trabalho (revisão c357eae, P1).
+  let malformado = false;
   const adicionar = (taskId, dados) => {
-    if (!taskId) return;
+    if (!taskId) { malformado = true; return; }
     const novo = { taskId, ...dados, holdsThread: seguraAThread(dados.kind) };
     const atual = pendentes.get(taskId);
     if (!atual) { pendentes.set(taskId, novo); return; }
@@ -126,7 +136,9 @@ export function trabalhoEmSegundoPlano(projecao, { historicoCompleto, shellThrea
   if (temRoster) {
     const threadsDoProvider = providerAtivo ? projecao.providerThreads.filter((t) => t.id === providerAtivo) : projecao.providerThreads;
     for (const pt of threadsDoProvider) {
+      if (!pt || typeof pt !== 'object' || (pt.pendingBackgroundTasks != null && !Array.isArray(pt.pendingBackgroundTasks))) { malformado = true; continue; }
       for (const t of pt.pendingBackgroundTasks ?? []) {
+        if (!t || typeof t.taskId !== 'string' || !t.taskId.trim()) { malformado = true; continue; }
         adicionar(t.taskId, {
           kind: t.kind ?? 'background_task',
           description: descricao(t.description),
@@ -140,7 +152,9 @@ export function trabalhoEmSegundoPlano(projecao, { historicoCompleto, shellThrea
     }
   }
   for (const item of projecao.turnItems ?? []) {
-    if (!TIPOS_DE_FUNDO.has(item.type) || !TRABALHO_ATIVO.has(item.status)) continue;
+    if (!item || !TIPOS_DE_FUNDO.has(item.type)) continue;
+    if (!STATUS_TRABALHO.has(item.status) || !identidadeValida(item)) { malformado = true; continue; }
+    if (!TRABALHO_ATIVO.has(item.status)) continue;
     if (doTurnAtivo(item.runId) || descartado(item.runId)) continue;
     // Ferramenta dinâmica persistente (monitor do Grok) fica fora, como no backend.
     if (item.type === 'dynamic_tool' && item.input && typeof item.input === 'object' && item.input.persistent === true) continue;
@@ -155,6 +169,7 @@ export function trabalhoEmSegundoPlano(projecao, { historicoCompleto, shellThrea
     });
   }
   for (const s of projecao.subagents ?? []) {
+    if (!s || !STATUS_TRABALHO.has(s.status) || !identidadeValida(s)) { malformado = true; continue; }
     if (!TRABALHO_ATIVO.has(s.status) || doTurnAtivo(s.runId) || descartado(s.runId)) continue;
     if (s.runId == null && runsAtivos.size > 0) continue;
     adicionar(idNativo(s), {
@@ -174,7 +189,7 @@ export function trabalhoEmSegundoPlano(projecao, { historicoCompleto, shellThrea
     }
   }
 
-  const knowledge = !temRoster ? 'unknown' : historicoCompleto || gateAberto ? 'complete' : 'partial';
+  const knowledge = !temRoster || malformado ? 'unknown' : historicoCompleto || gateAberto ? 'complete' : 'partial';
   const lista = [...pendentes.values()];
   return {
     knowledge,

@@ -12,6 +12,7 @@ import { Cancelada, ErroT3 } from './t3.mjs';
 import { assinatura, casaBusca, comparador, CursorInvalido, normalizar, paginar, VERSAO_CURSOR } from './paginacao.mjs';
 import { validRow } from './escrita/project-admin.mjs';
 import { CONTROL_PLANE_CONTRACT_VERSION } from './control-plane.mjs';
+import { chaveCanonica } from './linhas.mjs';
 
 export const PRAZO_AMBIENTE_MS = 4000;
 export const PRAZO_TOTAL_MS = 10000;
@@ -25,9 +26,6 @@ export class CoberturaMudou extends CursorInvalido {
     this.message = 'the environments that answered changed since the first page; repeat the search without a cursor';
   }
 }
-
-/** JSON com chaves ordenadas em todos os níveis, para comparar linhas de fontes diferentes. */
-const estavel = (v) => JSON.stringify(v, (_k, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x));
 
 /** Shell lida de novo: no OAuth all, `shell` devolve o inventário da invocação (em cache). */
 export const lerShellFresca = (cliente, opcoes) => (typeof cliente.shellFresca === 'function' ? cliente.shellFresca(opcoes) : cliente.shell(opcoes));
@@ -143,7 +141,7 @@ async function consultarAmbientes(ambientes, selecionados, { signal, prazoAmbien
       // de uma fonte): a mesma thread conta uma vez só se todas as linhas concordam na linha
       // inteira (menos o que só diz a fonte: archivedAt). Qualquer divergência não é resolvida
       // escolhendo uma: a população fica incompleta (revisões a8d1170, 737d9be e aacaf76).
-      const evidencia = (t) => estavel(Object.fromEntries(Object.entries(t).filter(([k]) => k !== 'archivedAt' && k !== '_arquivada')));
+      const evidencia = (t) => chaveCanonica(Object.fromEntries(Object.entries(t).filter(([k]) => k !== 'archivedAt' && k !== '_arquivada')));
       const porId = new Map();
       const linhas = [
         ...(Array.isArray(shell.threads) ? shell.threads : []).filter(Boolean).map((t) => ({ t, arquivada: false })),

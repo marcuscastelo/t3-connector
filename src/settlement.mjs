@@ -25,6 +25,7 @@ import { createHash } from 'node:crypto';
 import { estadoDaThread, pedidosPendentes, runAtivoDaShell } from './estado.mjs';
 import { compararShell, derivarExecucao, seguraAThread } from './execucao.mjs';
 import { nsIso } from './instante.mjs';
+import { linhaUnica } from './linhas.mjs';
 
 export const SETTLEMENT_CONTRACT_VERSION = 1;
 // v2: bloqueios projetados de `execution.continuation.blockers` (mesmos códigos), fundo
@@ -312,16 +313,25 @@ export async function lerObservacao(args) {
  * validou (null quando incompleta), para quem monta uma resposta a partir dos MESMOS dados.
  */
 export async function lerObservacaoComDados({ environmentId, threadId, lerShell, lerCompleto, tentativas = TENTATIVAS_OBSERVACAO, version = SETTLEMENT_CONTRACT_VERSION }) {
-  const achar = (shell) => (shell?.threads ?? []).find((t) => t.id === threadId && !t.deletedAt);
+  // A linha do alvo: linhas repetidas e divergentes da mesma thread não são escolhidas pela
+  // primeira (revisão c357eae, P1); a observação fica incompleta.
+  let conflito = false;
+  const achar = (shell) => {
+    const { linha, conflito: c } = linhaUnica(shell?.threads, threadId);
+    if (c) conflito = true;
+    return linha && !linha.deletedAt && !c ? linha : null;
+  };
   // `ultimoSnapshot`: o último snapshot completo lido, mesmo sem observação coerente; só serve a
   // quem precisa de uma projeção (uma transação) e declara a falta da shell.
   let ultimoSnapshot = null;
   for (let i = 0; i < tentativas; i++) {
     const antes = achar(await lerShell());
+    if (conflito) return { observacao: incompleta(['thread_rows_conflict'], version), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1 };
     if (!antes) return { observacao: observarSettlement({ environmentId, thread: null, snapshot: null, version }), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1 };
     const snapshot = await lerCompleto(threadId);
     ultimoSnapshot = snapshot;
     const depois = achar(await lerShell());
+    if (conflito) return { observacao: incompleta(['thread_rows_conflict'], version), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1 };
     // Coerência exigida, não só observada: a shell igual nas duas leituras, o lifecycle e o
     // binding do snapshot iguais aos da shell, e a shell descrevendo a MESMA versão da projeção
     // (updatedAt, último run, run ativo, pedido pendente). Shell atrasada repete; nunca vira

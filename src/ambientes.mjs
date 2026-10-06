@@ -2,6 +2,7 @@
 // demanda, confere identidade e escopo do token e aplica a ACL daquele environment.
 // Não há fallback entre environments: um ID ausente aqui não é procurado em outro.
 
+import { linhaUnica } from './linhas.mjs';
 import { Cancelada, ErroT3, criarCliente, lerToken, verificarConexao } from './t3.mjs';
 import { criarTransporteSsh, criarTransporteUrl } from './transporte.mjs';
 
@@ -35,7 +36,9 @@ export function criarEscopo(alias, projetosPermitidos) {
       }
     },
     exigirThread(shell, threadId) {
-      const thread = shell.threads.find((t) => t.id === threadId && !t.deletedAt);
+      const { linha, conflito } = linhaUnica(shell.threads, threadId);
+      if (conflito) throw new ErroT3(`thread ${threadId} appears in the shell with conflicting rows; read again`, { codigo: 'resposta_invalida' });
+      const thread = linha && !linha.deletedAt ? linha : null;
       // Mesma resposta para inexistente e fora do escopo: não revela threads de outros projetos.
       if (!thread || !permitidos.has(thread.projectId)) {
         throw new ForaDoEscopo(`thread ${threadId} not found in the authorized projects of environment ${alias}`);

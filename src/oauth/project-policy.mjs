@@ -2,6 +2,8 @@ import { readFile } from 'node:fs/promises';
 import { CONFIG_PADRAO, expandir, validarConfig } from '../config.mjs';
 import { criarAmbientes, ForaDoEscopo } from '../ambientes.mjs';
 import { ACTIONS } from '../escrita/adapters.mjs';
+import { linhaUnica } from '../linhas.mjs';
+import { ErroT3 } from '../t3.mjs';
 
 // OAuth-only endpoint loader. The stdio validator and its on-disk input stay unchanged.
 export function validarConfigOAuthAll(raw) {
@@ -52,7 +54,12 @@ export function liveReadContext(base, authority, principal) {
       r.escopo = {
         permitidos: ids, projetoPermitido: id => ids.has(id), exigirProjeto,
         threadsVisiveis: s => s.threads.filter(t => ids.has(t.projectId) && !t.deletedAt && !t.archivedAt),
-        exigirThread(s, id) { const t = s.threads.find(t => t.id === id && !t.deletedAt && ids.has(t.projectId)); if (!t) throw new ForaDoEscopo(`thread ${id} not found in the authorized projects of environment ${r.alias}`); return t; },
+        exigirThread(s, id) {
+          const { linha, conflito } = linhaUnica(s.threads, id);
+          if (conflito) throw new ErroT3(`thread ${id} appears in the shell with conflicting rows; read again`, { codigo: 'resposta_invalida' });
+          const t = linha && !linha.deletedAt && ids.has(linha.projectId) ? linha : null;
+          if (!t) throw new ForaDoEscopo(`thread ${id} not found in the authorized projects of environment ${r.alias}`); return t;
+        },
       };
       return shell;
     };

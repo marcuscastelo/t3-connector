@@ -21,7 +21,13 @@
   source, must agree or the population is incomplete; background work seen in several sources
   keeps the evidence that holds the thread; the legacy lookups (`t3_buscar_threads`,
   `t3_thread_find_batch` without the version) no longer report `not_found`/`complete` over rows
-  without a text title or malformed rows (well-formed answers are unchanged).
+  without a text title or malformed rows (well-formed answers are unchanged). Malformed
+  background evidence (a roster task without `taskId`, a turn item or subagent outside the
+  contract's statuses or without identity, a roster that is not a list) makes background
+  knowledge `unknown`, so nothing proves the thread idle; repeated, diverging shell rows of the
+  target thread make the settlement observation incomplete (`thread_rows_conflict`) and the
+  thread reads fail instead of picking the first row; rows are compared canonically, so
+  equivalent instants (`Z` vs offset) are not a conflict.
 - Control-plane v1, live validation fixes: an absent or empty `supportedRuntimeModes` now counts
   as every mode supported, which is T3's own runtime rule (codex and claudeAgent instances do
   not declare the list); a declared list without the mode is still refused. On the write side
