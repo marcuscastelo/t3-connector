@@ -260,3 +260,13 @@ test('local rejected answer: revoked session, other issuer/subject, anomalous ta
   await assert.rejects(d.w.reconcile(d.principal, { environment: 'local', operationId: 'op-r' }), /lease_closed/);
   assert.deepEqual(d.calls, []);
 });
+
+
+test('write gate: an audit that cannot be written ends every session before the error surfaces', async () => {
+  const { SessionWriteGate } = await import('../src/oauth/session-writes.mjs');
+  const authority = new SessionAuthority();
+  const sid = authority.create({ sub: 'local:abcdefghijkl', clientId: 'c', credentialId: 'k', scope: 'connector:write', resource: 'r' });
+  const gate = new SessionWriteGate({ authority, issuer: 'https://as.example', audit: () => { throw new Error('disk'); } });
+  assert.throws(() => gate.audit({ event: 'project_delete_live_threads' }), /audit_failed/);
+  assert.throws(() => authority.check(sid), /write_path_failure/);
+});

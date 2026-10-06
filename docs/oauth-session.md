@@ -193,8 +193,22 @@ OAuth preflight hooks. Legacy callers do not use these hooks. Ordering remains:
 
 The caller is `oauth:<subject>|oauth-issuer:<issuer>` and remains stable across sign-ins and refresh.
 The journal is `<oauth state>/write-journal.sqlite`, separate from the lease journal. Journal/audit
-failures and uncertain sends end every OAuth session. Missing/deleted projects or moved/deleted
+failures and sends whose transport was lost end every OAuth session; a typed answer from T3 does not
+(next paragraph but one). Missing/deleted projects or moved/deleted
 threads fail before invoking T3; rejected operations stay journaled without costing a reconnect.
+A typed answer from T3 to a sent canonical action (`OrchestrationV2DispatchCommandError`,
+`OrchestrationV2ThreadLaunchError`, `EnvironmentAuthorizationError`) proves that T3 received the
+command and keeps a receipt under its `commandId`; it does not prove that the command had no effect
+(T3 8ed276c2 commits `queue.resume` before its post-steps and creates the thread of a launch before
+later steps, and wraps those failures in the same typed error). So the operation stays `uncertain`
+and is never resent, the record and the reply carry T3's code and message
+(`reconciliation_required: ... T3 answered <ErrorTag>: <message>`), `t3_reconciliar_escrita` returns
+them too, and **no session or lease ends**: the transport is healthy and the connector is in sync
+with T3. Ending every OAuth session is reserved to a lost transport mid-send (untyped failure,
+malformed frame, timeout, closed socket) and to a failed journal or audit. Native wrappers keep
+their 0.11.0 contract (a typed answer is `failed`). Before 0.11.3 a typed answer to a canonical
+action (e.g. `thread.send` to a thread that still needs attention) was treated as a lost transport,
+which cost a manual Reconnect and a passkey (4 of the 6 reconnects observed on 05-06/10/2026).
 A reservation error before any durable commit leaves no record and has sent nothing; another
 attempt still fails closed while storage remains unavailable. If reservation committed before
 reporting failure, its `preparing` record dedupes after storage recovery and fresh sign-in without
@@ -323,9 +337,10 @@ to a deleted project. The connector:
 It cannot exclude other clients (T3 UI, MCP, scheduler). Treat the guarantee as connector-local
 until T3 makes the check and the delete one transaction.
 
-A native refusal after the send (the project gained a thread between the connector's count and
-T3's check) is uncertain for the connector. Like any uncertain send, it fails closed: no retry,
-sessions end, and reconciliation is by `t3_reconciliar_escrita`.
+A typed refusal after the send (the project gained a thread between the connector's count and
+T3's check) is uncertain for the connector: no retry, T3's code and message are recorded and
+answered, reconciliation is by `t3_reconciliar_escrita`, and the sessions stay (T3 answered; the
+transport was not lost).
 
 ## 2. What ChatGPT does, and why the token lifetimes are what they are
 

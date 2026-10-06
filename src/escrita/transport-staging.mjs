@@ -29,7 +29,9 @@ export class StagingRpcTransport {
   socket.addEventListener('close',()=>this.fail());socket.addEventListener('error',()=>this.fail());
  }
  // nativeErrors: a typed T3 failure (Exit Failure, cause Fail with a tagged error) rejects that call
- // with NativeRpcError and keeps the socket; without it any failure is uncertain (fail closed).
+ // with NativeRpcError and keeps the socket; without it any failure is uncertain (fail closed). The
+ // Dispatcher asks for typed errors on every method and decides what a typed answer means. Untyped
+ // failures, malformed frames, timeouts and socket loss stay uncertain and close the transport.
  invoke(method,payload,{nativeErrors=false}={}) {
   if(!RESULTS[method]) throw new Error('rpc_unavailable');
   if(this.#closed || this.socket.readyState!==1) throw new Error('control_socket_closed');
@@ -53,10 +55,13 @@ export class StagingRpcTransport {
    if(!pending) return; // A late/duplicate response never causes a new invocation.
    if(frame.exit?._tag!=='Success') {
     const error=pending.nativeErrors&&frame.exit?._tag==='Failure'&&Array.isArray(frame.exit.cause)&&frame.exit.cause.length===1&&frame.exit.cause[0]?._tag==='Fail'?frame.exit.cause[0].error:null;
-    if(error&&typeof error._tag==='string') {
-     const {_tag,message,...fields}=error;
+    if(error&&typeof error._tag==='string'&&/^[A-Za-z][A-Za-z0-9_.-]{0,127}$/.test(error._tag)) {
+     // Only the tag, a clipped message and at most 16 primitive fields with identifier names and clipped
+     // values leave the frame: `cause` (T3's defect chain) never does, and `code`/`message` cannot be
+     // overridden by the payload.
+     const {_tag,message,cause,code,...fields}=error, clip=v=>typeof v==='string'?v.slice(0,2000):v;
      this.#pending.delete(frame.requestId);clearTimeout(pending.timer);
-     pending.reject(new NativeRpcError(_tag,typeof message==='string'?message.slice(0,2000):'',Object.fromEntries(Object.entries(fields).filter(([,v])=>['string','number','boolean'].includes(typeof v)))));
+     pending.reject(new NativeRpcError(_tag,typeof message==='string'?message.slice(0,2000):'',Object.fromEntries(Object.entries(fields).filter(([k,v])=>/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(k)&&['string','number','boolean'].includes(typeof v)).slice(0,16).map(([k,v])=>[k,clip(v)]))));
      return;
     }
     this.fail();return;

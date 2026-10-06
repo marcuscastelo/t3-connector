@@ -45,7 +45,7 @@ export async function iniciarGate(config,{log=console.log}={}) {
     let parts=[],size=0;for await(const c of req){size+=c.length;if(size>131072)throw new Error('body_too_large');parts.push(c);}
     const request=JSON.parse(Buffer.concat(parts).toString('utf8'));
     const result=await control.relay(req.headers['x-t3-private-relay'],request);res.writeHead(200);res.end(JSON.stringify(result));
-   }catch(error){res.writeHead(403);res.end(JSON.stringify({error:/^[a-z_]+$/.test(error.message)?error.message:'relay_rejected'}));}
+   }catch(error){res.writeHead(403);res.end(JSON.stringify({error:/^[a-z_]+$/.test(error.message)?error.message:'relay_rejected',...(error.native?{native:error.native}:{})}));}
    return;
   }
   await handler(req,res);

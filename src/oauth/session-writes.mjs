@@ -47,9 +47,11 @@ export class SessionWriteGate {
     this.check(identity, sid, target);
     return invoke();
   }
-  audit(event) { this.auditSink(event); }
-  // The Dispatcher calls close() when the journal fails or a send became uncertain: fail closed by
-  // ending every OAuth session (the lease gate does the same with its leases).
+  // Like the lease Gate: an audit that cannot be written ends every session before the error surfaces.
+  audit(event) { try { this.auditSink(event); } catch { this.close(); throw new Error('audit_failed'); } }
+  // The Dispatcher calls close() when the journal fails or the transport was lost mid-send: fail
+  // closed by ending every OAuth session (the lease gate does the same with its leases). A typed
+  // answer from T3 leaves the operation uncertain but does not close: the transport is healthy.
   close() { this.onClose(); this.authority.revokeAll('write_path_failure'); }
 }
 
@@ -232,7 +234,7 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
       authorizeRecord(principal, c, record.action);
       try { gate.audit({ event: 'reconciled', operationId: redact(operationId), sid: redact(principal.sid), action: record.action }); } catch { gate.close(); fail('journal_failed'); }
       authorizeRecord(principal, c, record.action);
-      return { environment: env, operationId, state: record.state, observation, ...(!record.target ? { sent: false } : {}) };
+      return { environment: env, operationId, state: record.state, observation, ...(!record.target ? { sent: false } : {}), ...(record.error ? { error: record.error } : {}) };
     }
     const local = rejectedBeforeSend(principal, c, operationId);
     if (local) return { environment: env, ...local };
@@ -272,10 +274,13 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
 
   const error = e => {
     // A native refusal keeps its native code and message (OrchestratorMcpFailure code or T3 error tag).
-    if (e?.native) return { isError: true, content: [{ type: 'text', text: `${e.native.code}: ${e.native.message}` }] };
+    // A native wrapper's typed refusal is T3's own code and message; a connector code that carries a
+    // typed T3 answer (reconciliation_required) appends it, so the model knows why T3 answered so.
+    if (e?.native && (e.message === 't3_error' || e.message === e.native.code)) return { isError: true, content: [{ type: 'text', text: `${e.native.code}: ${e.native.message}` }] };
+    const t3 = e?.native ? ` T3 answered ${e.native.code}: ${e.native.message}` : '';
     const c = /^[a-z_]+$/.test(e.message) ? code(e.message) : 'write_rejected';
     const extra = c === 'environment_unknown' ? ` (configured: ${registros.map(r => r.alias).join(', ')})` : '';
-    return { isError: true, content: [{ type: 'text', text: MESSAGES[c] ? `${c}: ${MESSAGES[c]}${extra}` : c }] };
+    return { isError: true, content: [{ type: 'text', text: (MESSAGES[c] ? `${c}: ${MESSAGES[c]}${extra}` : c) + t3 }] };
   };
   const result = async op => { try { return { content: [{ type: 'text', text: JSON.stringify(await op()) }] }; } catch (e) { return error(e); } };
 
