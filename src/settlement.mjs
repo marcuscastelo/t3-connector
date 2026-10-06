@@ -23,7 +23,7 @@
 
 import { createHash } from 'node:crypto';
 import { estadoDaThread, pedidosPendentes, runAtivoDaShell } from './estado.mjs';
-import { derivarExecucao, seguraAThread } from './execucao.mjs';
+import { compararShell, derivarExecucao, seguraAThread } from './execucao.mjs';
 
 export const SETTLEMENT_CONTRACT_VERSION = 1;
 // v2: bloqueios projetados de `execution.continuation.blockers` (mesmos códigos), fundo
@@ -57,12 +57,17 @@ function prs(thread) {
   }));
 }
 
-/** Campos da thread na shell que, se mudarem entre duas leituras, invalidam a combinação. */
+/**
+ * Campos da thread na shell que, se mudarem entre duas leituras, invalidam a combinação:
+ * versão da thread (updatedAt), binding (projeto, worktree, branch), atividade, lifecycle,
+ * mensagem visível (ID e atualização), plano e roster.
+ */
 function marcaDaShell(t) {
   return JSON.stringify([
+    instante(t.updatedAt), ou(t.projectId), ou(t.worktreePath), ou(t.branch),
     t.status, t.latestRunId, ou(t.activeRunId), ou(t.activityRunStatus), ou(t.pendingRuntimeRequest?.id),
     ou(t.settledAt), ou(t.settledOverride), ou(t.unsettledAt), ou(t.pinnedAt), ou(t.archivedAt),
-    ou(t.latestVisibleMessage?.id), Boolean(t.hasActionableProposedPlan),
+    ou(t.latestVisibleMessage?.id), instante(t.latestVisibleMessage?.updatedAt), Boolean(t.hasActionableProposedPlan),
     (t.pendingBackgroundTasks ?? []).map((x) => ou(x.taskId)),
   ]);
 }
@@ -70,7 +75,7 @@ function marcaDaShell(t) {
 // Lifecycle que a shell e projection.thread (snapshot completo) trazem os dois. Compara só
 // os campos presentes no snapshot: a shell pode vir de cache dentro de uma chamada (OAuth
 // all), então esta é a checagem que ainda liga as duas leituras ao mesmo estado.
-const LIFECYCLE = ['settledAt', 'settledOverride', 'unsettledAt', 'pinnedAt', 'archivedAt', 'snoozedUntil'];
+const LIFECYCLE = ['settledAt', 'settledOverride', 'unsettledAt', 'pinnedAt', 'archivedAt', 'snoozedUntil', 'projectId', 'worktreePath', 'branch'];
 // Instantes comparados por valor: as duas fontes podem formatar o mesmo instante de outro jeito.
 const instante = (v) => (typeof v === 'string' && /^\d{4}-\d\d-\d\dT/.test(v) && !Number.isNaN(Date.parse(v)) ? Date.parse(v) : ou(v));
 function lifecycleConfere(shellThread, appThread) {
@@ -315,7 +320,12 @@ export async function lerObservacaoComDados({ environmentId, threadId, lerShell,
     const snapshot = await lerCompleto(threadId);
     ultimoSnapshot = snapshot;
     const depois = achar(await lerShell());
-    if (depois && marcaDaShell(antes) === marcaDaShell(depois) && lifecycleConfere(depois, snapshot?.projection?.thread)) {
+    // Coerência exigida, não só observada: a shell igual nas duas leituras, o lifecycle e o
+    // binding do snapshot iguais aos da shell, e a shell descrevendo a MESMA versão da projeção
+    // (updatedAt, último run, run ativo, pedido pendente). Shell atrasada repete; nunca vira
+    // observação completa (revisão 334a1840, P1).
+    if (depois && marcaDaShell(antes) === marcaDaShell(depois) && lifecycleConfere(depois, snapshot?.projection?.thread)
+        && snapshot?.projection && compararShell(depois, snapshot.projection).motivos.length === 0) {
       const { observacao, execucao } = observar({ environmentId, thread: depois, snapshot, attempts: i + 1, version });
       return observacao.complete
         ? { observacao, thread: depois, snapshot, execucao, ultimoSnapshot, tentativas: i + 1 }

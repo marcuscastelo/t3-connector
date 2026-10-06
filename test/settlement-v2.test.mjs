@@ -93,6 +93,23 @@ test('v2: obs2_ muda com texto editado, tipo do fundo e workspace; obs1_ não v�
   assert.notEqual(obs(2, { branch: 'outra' }).observationId, base.observationId);
 });
 
+test('aquisição exige coerência: versão, binding e mensagem da shell iguais à projeção (revisão 334a1840 P1)', async () => {
+  const ler = (shellDe, projecao) => lerObservacao({ environmentId: 'env-local', threadId: 'thread-1', version: 2, lerShell: async () => ({ threads: [shellDe()] }), lerCompleto: async () => ({ snapshotSequence: 9, projection: projecao }) });
+  const proj = (thread = {}) => ({ ...snap().projection, updatedAt: '2026-10-03T10:05:00.000Z', thread: { id: 'thread-1', activeProviderThreadId: 'pt-1', ...thread } });
+  const t = (campos = {}) => () => thread({ updatedAt: '2026-10-03T10:05:00.000Z', ...campos });
+  assert.equal((await ler(t(), proj())).complete, true);
+  // Shell numa versão anterior à da projeção (shell_lagging): nunca completa.
+  const atrasada = await ler(t({ updatedAt: '2026-10-03T10:04:00.000Z' }), proj());
+  assert.equal(atrasada.complete, false);
+  assert.equal(avaliarGuard({ version: 2, expectedRunId: 'run-1', expectedObservationId: 'x', acceptance: { accepted: true, evidenceRef: 'r' } }, atrasada), 'settle_observation_incomplete');
+  // Workspace da shell (/repo/B) diferente do snapshot (/repo/A).
+  assert.equal((await ler(t({ worktreePath: '/repo/B' }), proj({ worktreePath: '/repo/A' }))).complete, false);
+  // Mensagem visível atualizada entre as duas leituras da shell, sem ID novo.
+  let n = 0;
+  const editando = () => thread({ updatedAt: '2026-10-03T10:05:00.000Z', latestVisibleMessage: { id: 'm-1', updatedAt: `2026-10-03T10:05:0${n++}.000Z` } });
+  assert.equal((await ler(editando, proj())).complete, false);
+});
+
 test('guard: versão tem de bater com a observação; obs1 num guard v2 nunca confere; código novo não libera', () => {
   const v1 = obs(1);
   const v2 = obs(2);

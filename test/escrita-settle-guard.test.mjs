@@ -90,7 +90,11 @@ test('completed não é aceite: accepted=false é recusado e nada é enviado', a
 test('pedido pendente bloqueia o settle; o código sobrevive ao replay', async () => {
   const { settle, adapter, observar, guard, st } = await preparar();
   const o = await observar();
+  // Só a projeção mudou (shell atrasada): incoerente, nada é enviado.
   st.proj = { ...st.proj, runtimeRequests: [pedido({ id: 'req-1', kind: 'user_input' })] };
+  await assert.rejects(settle('atrasada', guard(o)), /settle_observation_incomplete/);
+  // Shell e projeção coerentes, com o pedido pendente nas duas.
+  st.thread = { ...st.thread, pendingRuntimeRequest: { id: 'req-1', kind: 'user_input', createdAt: '2026-10-03T10:04:00.000Z' } };
   await assert.rejects(settle('pedido', guard(o)), /settle_pending_request/);
   assert.equal(adapter.calls.length, 0);
   const replay = await settle('pedido', guard(o));
@@ -141,7 +145,10 @@ test('pós-check: reabertura após o ACK é mismatch e leitura falha/atrasada é
     const { settle, adapter, observar, guard, st, s, lease } = await preparar();
     const o = await observar();
     st.aposSettle = (x) => {
-      if (caso === 'reaberta') x.proj = { ...x.proj, runs: [...x.proj.runs, { id: 'run-2', ordinal: 2, status: 'running' }] };
+      if (caso === 'reaberta') {
+        x.proj = { ...x.proj, runs: [...x.proj.runs, { id: 'run-2', ordinal: 2, status: 'running' }] };
+        x.thread = { ...x.thread, status: 'running', latestRunId: 'run-2', activeRunId: 'run-2', activityRunStatus: 'running' };
+      }
       if (caso === 'falha') x.lerFalha = true;
       if (caso === 'atrasada') x.atraso = 5;
     };
