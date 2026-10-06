@@ -1,6 +1,6 @@
 {
   "name": "t3-connector",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "private": true,
   "type": "module",
   "description": "MCP connectors between external clients (e.g. ChatGPT via Secure MCP Tunnel) and the T3 Code Orchestrator V2: read-only access without a lease, and writes behind a passkey-approved lease, with explicit environments.",

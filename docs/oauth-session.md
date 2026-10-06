@@ -206,7 +206,7 @@ and is never resent, the record and the reply carry T3's code and message
 them too, and **no session or lease ends**: the transport is healthy and the connector is in sync
 with T3. Ending every OAuth session is reserved to a lost transport mid-send (untyped failure,
 malformed frame, timeout, closed socket) and to a failed journal or audit. Native wrappers keep
-their 0.11.0 contract (a typed answer is `failed`). Before 0.11.3 a typed answer to a canonical
+their 0.11.0 contract (a typed answer is `failed`). Before 0.12.1 a typed answer to a canonical
 action (e.g. `thread.send` to a thread that still needs attention) was treated as a lost transport,
 which cost a manual Reconnect and a passkey (4 of the 6 reconnects observed on 05-06/10/2026).
 A reservation error before any durable commit leaves no record and has sent nothing; another

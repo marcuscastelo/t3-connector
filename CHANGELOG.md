@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.1
+
 - Writes: a typed answer from T3 to a sent canonical action (`OrchestrationV2DispatchCommandError`,
   `OrchestrationV2ThreadLaunchError`, `EnvironmentAuthorizationError`) no longer ends every OAuth
   session (or lease). The operation is journaled `uncertain` with T3's code and message, the tool
