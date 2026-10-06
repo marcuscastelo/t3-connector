@@ -8,8 +8,14 @@
 import { Cancelada, ErroT3 } from './t3.mjs';
 import { assinar } from './ws.mjs';
 import { motivoDoPedido, runAtivoDaShell, ultimaResposta } from './estado.mjs';
+import { aplicarItens, derivarExecucao } from './execucao.mjs';
+import { EntradaInvalida } from './busca-threads.mjs';
 
 export const TETO_MS = 5000;
+// Modo execution_idle: a thread precisa ficar parada este tempo antes de ser declarada
+// ociosa, para um wake run que o provider abre logo depois de uma task em segundo plano
+// terminar não ser confundido com fim do trabalho.
+export const QUIETO_MS = 1500;
 const TERMINAIS = new Set(['completed', 'failed', 'cancelled', 'interrupted', 'rolled_back']);
 const CANCELADA = new Set(['cancelled', 'interrupted', 'rolled_back']);
 const ATIVIDADE = new Set(['preparing', 'starting', 'running', 'waiting']);
@@ -50,7 +56,12 @@ export async function aguardarThread(ambientes, entrada, opcoes = {}) {
   }
 }
 
-async function aguardar(ambientes, entrada, { signal, agora = Date.now, assinarImpl = assinar }, timeoutMs, prazo) {
+async function aguardar(ambientes, entrada, opcoes, timeoutMs, prazo) {
+  if (entrada.until === 'execution_idle') return aguardarExecucao(ambientes, entrada, opcoes, timeoutMs, prazo);
+  return aguardarRun(ambientes, entrada, opcoes, timeoutMs, prazo);
+}
+
+async function aguardarRun(ambientes, entrada, { signal, agora = Date.now, assinarImpl = assinar }, timeoutMs, prazo) {
   const { threadId, runId: runPedido = null, includeLatestResponse: incluirUltimaResposta = false, maxCharacters: maxCaracteres = 800 } = entrada;
   const inicio = agora();
   const sinal = signal ? AbortSignal.any([signal, prazo]) : prazo;
@@ -194,3 +205,134 @@ async function aguardar(ambientes, entrada, { signal, agora = Date.now, assinarI
   }
 }
 
+
+/**
+ * Espera pelo fim do trabalho real da thread, não só do run: nenhum run ativo ou na fila,
+ * nenhum pedido pendente e nenhum trabalho em segundo plano que segure a thread, estável
+ * por QUIETO_MS. A projeção vem do snapshot da subscription e é mantida pelos eventos em
+ * ordem de sequence (aplicarItens), então cada avaliação é coerente por construção.
+ * Também registra as tasks que saíram do roster durante a espera (o roster do Claude não
+ * guarda hora de término).
+ */
+async function aguardarExecucao(ambientes, entrada, { signal, agora = Date.now, assinarImpl = assinar }, timeoutMs, prazo) {
+  const { threadId, includeLatestResponse: incluirUltimaResposta = false, maxCharacters: maxCaracteres = 800 } = entrada;
+  if (entrada.runId) throw new EntradaInvalida('runId only applies to until=run_terminal; execution_idle follows the whole thread');
+  const inicio = agora();
+  const sinal = signal ? AbortSignal.any([signal, prazo]) : prazo;
+  const r = ambientes.resolver(entrada.environment);
+  let threadShell = null;
+  let cliente;
+  try {
+    ({ cliente } = await ambientes.conectar(r, { signal: sinal }));
+    const shell = await cliente.shell({ signal: sinal });
+    threadShell = r.escopo.exigirThread(shell, threadId);
+  } catch (e) {
+    ambientes.falhou(r, e);
+    if (signal?.aborted) throw new Cancelada();
+    if (prazo.aborted) throw new ErroT3(`environment ${r.alias} did not respond within ${timeoutMs} ms; no state observed`, { codigo: 'indisponivel' });
+    throw e;
+  }
+
+  const estado = { projecao: null, sequencia: null, historicoCompleto: false };
+  const vistas = new Map();
+  const encerradas = [];
+  let execucao = null;
+  let observadoEm = new Date(agora()).toISOString();
+
+  const derivar = () => derivarExecucao({
+    projecao: estado.projecao,
+    fonte: { kind: 'thread_subscription', threadSequence: estado.sequencia, historyComplete: estado.historicoCompleto, observedAt: observadoEm },
+    limitRecovery: threadShell.limitRecovery ?? null,
+  });
+  const resultado = (motivoRetorno, timedOut) => {
+    const runs = execucao?.runs;
+    const run = runs ? (runs.active ?? runs.latestExecuted ?? runs.latest) : null;
+    const pedido = execucao?.pendingRequests?.[0] ?? null;
+    const status = run?.status ?? (execucao ? 'idle' : threadShell.status);
+    const res = {
+      environment: ambientes.identidade(r),
+      projectId: threadShell.projectId,
+      threadId,
+      title: threadShell.title,
+      until: 'execution_idle',
+      runId: run?.runId ?? (execucao ? null : threadShell.latestRunId ?? null),
+      statusRun: status,
+      state: execucao?.signals.pendingIntervention && !pedido ? 'needs_intervention' : estadoDoRun(status, pedido),
+      terminal: TERMINAIS.has(status),
+      executionIdle: execucao?.signals.operationallyIdle ?? null,
+      timedOut,
+      returnReason: motivoRetorno,
+      pendingRequest: pedido ? { runtimeRequestId: pedido.requestId, kind: pedido.kind, reason: motivoDoPedido(pedido.kind), since: pedido.createdAt } : null,
+      observedAt: observadoEm,
+      elapsedMs: agora() - inicio,
+      timeoutMs,
+      backgroundClearedDuringWait: encerradas,
+      execution: execucao,
+    };
+    if (incluirUltimaResposta) {
+      res.latestResponse = estado.projecao ? ultimaResposta({ messages: (estado.projecao.messages ?? []).filter((m) => !res.runId || m.runId === res.runId) }, maxCaracteres) : null;
+    }
+    return res;
+  };
+
+  let concluir;
+  const decidido = new Promise((resolve) => { concluir = resolve; });
+  let quieto = null;
+  const avaliar = () => {
+    clearTimeout(quieto);
+    execucao = derivar();
+    const pendentes = new Map(execucao.background.pending.map((t) => [t.taskId, t]));
+    for (const [taskId, t] of vistas) {
+      if (!pendentes.has(taskId)) {
+        encerradas.push({ taskId, kind: t.kind, description: t.description, source: t.source, observedClearedAt: observadoEm, threadSequence: estado.sequencia });
+        vistas.delete(taskId);
+      }
+    }
+    for (const [taskId, t] of pendentes) vistas.set(taskId, t);
+    if (execucao.signals.pendingIntervention) return concluir('needs_intervention');
+    if (!execucao.signals.operationallyIdle) return;
+    // Ocioso: só conta depois de QUIETO_MS sem mudança da thread.
+    const desde = Date.parse(execucao.source.projectionUpdatedAt ?? '');
+    const falta = Number.isNaN(desde) ? 0 : desde + QUIETO_MS - agora();
+    if (falta <= 0) return concluir('execution_idle');
+    quieto = setTimeout(() => concluir('execution_idle'), falta);
+  };
+  const aoReceber = (itens) => {
+    aplicarItens(estado, itens);
+    observadoEm = new Date(agora()).toISOString();
+    if (itens.some((i) => i.kind === 'event' && i.event?.type === 'thread.deleted')) return concluir('thread_deleted');
+    if (estado.projecao) avaliar();
+  };
+
+  let sub = null;
+  try {
+    const ticket = await cliente.ticketWs({ signal: sinal });
+    sub = await assinarImpl({
+      baseUrl: cliente.base,
+      ticket,
+      tag: 'orchestration.subscribeThread',
+      // Projeção completa: com a janela do bounded, a ausência de turn items antigos ainda
+      // ativos não pode ser provada e a thread nunca seria declarada ociosa.
+      payload: { threadId, requestCompletionMarker: true },
+      aoReceber,
+      signal: sinal,
+    });
+    const motivo = await new Promise((resolve, reject) => {
+      if (sinal.aborted) return resolve(signal?.aborted ? 'cancelada' : 'prazo');
+      sinal.addEventListener('abort', () => resolve(signal?.aborted ? 'cancelada' : 'prazo'), { once: true });
+      decidido.then(resolve);
+      sub.fim.then(() => resolve('subscription_closed'), reject);
+    });
+    if (motivo === 'cancelada') throw new Cancelada();
+    if (motivo === 'prazo') return resultado('timeout', true);
+    return resultado(motivo, false);
+  } catch (e) {
+    if (e instanceof Cancelada) throw e;
+    ambientes.falhou(r, e);
+    if (prazo.aborted) return resultado('timeout', true);
+    throw e;
+  } finally {
+    clearTimeout(quieto);
+    sub?.encerrar();
+  }
+}

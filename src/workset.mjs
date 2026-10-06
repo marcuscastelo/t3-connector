@@ -11,6 +11,11 @@
 // `completed` é desfecho de run, não aceite: completed_unsettled é exatamente o que ainda
 // precisa de uma decisão (absorver, continuar, liquidar).
 //
+// Trabalho de fundo vem só do roster da shell (uma leitura por environment, sem projeção por
+// thread): `background_pending` usa a regra canônica de `execution` (segura a thread tudo
+// menos comando) e a lista não prova ausência; para decidir uma thread, leia `t3_thread`
+// (`execution`).
+//
 // Fila ativa: `actionable` (decisão agora) e `inFlight` (em execução) já vêm prontos, para o
 // host não refiltrar a cada rodada. Settled ociosa, snoozed com wake no futuro e arquivada
 // nunca entram neles; snoozed fica no grupo `snoozed` só para inspeção. Pedido pendente,
@@ -23,6 +28,7 @@
 import { Cancelada } from './t3.mjs';
 import { correrComSinal, falhaSanitizada } from './busca-threads.mjs';
 import { resumoModelo } from './estado.mjs';
+import { seguraAThread } from './execucao.mjs';
 import { comparador } from './paginacao.mjs';
 
 export const GRUPOS = Object.freeze([
@@ -39,7 +45,7 @@ export const LIMITE_PADRAO = 25;
 function grupoDa(item, agora) {
   if (item.state === 'needs_intervention') return 'needs_intervention';
   if (item.state === 'running') return 'running';
-  if (item.backgroundTaskCount) return 'background_pending';
+  if (item.backgroundHoldsThread) return 'background_pending';
   if (item.state === 'unknown') return 'unknown';
   if (item.settled) return null;
   if (item.snoozedUntil && Date.parse(item.snoozedUntil) > agora) return 'snoozed';
@@ -76,7 +82,11 @@ function itemCompacto(t, resumo, ambiente, projeto) {
     pinned: 'pinnedAt' in t ? Boolean(t.pinnedAt) : null,
     ...(linha.parentThreadId ? { parentThreadId: linha.parentThreadId, relationshipToParent: linha.relationshipToParent ?? null } : {}),
     ...(pr ? { linkedPullRequest: { number: pr.number ?? null, url: pr.url ?? null, state: pr.state ?? null } } : {}),
-    ...(t.pendingBackgroundTasks?.length ? { backgroundTaskCount: t.pendingBackgroundTasks.length } : {}),
+    ...(t.pendingBackgroundTasks?.length ? {
+      backgroundTaskCount: t.pendingBackgroundTasks.length,
+      // Mesma regra de `execution.background` (src/execucao.mjs): comando não segura a thread.
+      backgroundHoldsThread: t.pendingBackgroundTasks.some((x) => seguraAThread(x.kind ?? 'background_task')),
+    } : {}),
   };
 }
 

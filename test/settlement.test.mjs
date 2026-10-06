@@ -50,8 +50,29 @@ test('fila retida, limite de uso, plano proposto e trabalho de fundo bloqueiam',
   const plano = observar({ hasActionableProposedPlan: true });
   assert.equal(plano.blockers[0].kind, 'proposed_plan');
   const fundo = observar({ pendingBackgroundTasks: [{ kind: 'shell', taskId: 'bg-1' }] });
-  assert.deepEqual(fundo.blockers, [{ code: 'unresolved_work', kind: 'background_task', taskId: 'bg-1' }]);
+  assert.deepEqual(fundo.blockers, [{ code: 'unresolved_work', kind: 'background_task', taskId: 'bg-1', backgroundKind: 'shell', source: 'shell_roster' }]);
   assert.equal(avaliarGuard(guard(fundo), fundo), 'settle_unresolved_work');
+});
+
+// Composição com execution (src/execucao.mjs): o fundo vem da projeção completa, que a shell
+// esconde durante um run ativo e publica só com o último run assentado.
+test('settle: trabalho de fundo só na projeção completa bloqueia; comando em segundo plano não', () => {
+  const roster = (tasks) => snap({ thread: { id: 'thread-1', activeProviderThreadId: 'pt-1' }, providerThreads: [{ id: 'pt-1', pendingBackgroundTasks: tasks }] });
+  const monitor = observar({}, roster([{ taskId: 'mon-1', kind: 'monitor', description: 'observer' }]));
+  assert.deepEqual(monitor.blockers, [{ code: 'unresolved_work', kind: 'background_task', taskId: 'mon-1', backgroundKind: 'monitor', source: 'provider_roster' }]);
+  assert.equal(avaliarGuard(guard(monitor), monitor), 'settle_unresolved_work');
+  const devServer = observar({}, roster([{ taskId: 'cmd-1', kind: 'command', description: 'npm run dev' }]));
+  assert.deepEqual(devServer.blockers, []);
+  assert.equal(devServer.eligibleMechanically, true);
+  assert.equal(devServer.warnings.some((w) => w.code === 'background_work_unknown'), false);
+  // O roster entra no observationId: a mesma thread com o monitor encerrado é outra observação.
+  const vazio = observar({}, roster([]));
+  assert.notEqual(vazio.observationId, monitor.observationId);
+  assert.equal(avaliarGuard(guard(monitor), vazio), 'settle_observation_changed');
+});
+
+test('settle: servidor sem roster não prova ausência de fundo e diz isso', () => {
+  assert.deepEqual(observar().warnings.filter((w) => w.code === 'background_work_unknown'), [{ code: 'background_work_unknown', knowledge: 'unknown' }]);
 });
 
 test('observationId muda com atividade e lifecycle, não com updatedAt', () => {
@@ -64,7 +85,7 @@ test('observationId muda com atividade e lifecycle, não com updatedAt', () => {
     assert.notEqual(o.observationId, base.observationId);
     assert.equal(avaliarGuard(guard(base), o), 'settle_observation_changed');
   }
-  assert.deepEqual(comPr.warnings, [{ code: 'linked_pr_merge_can_auto_settle' }]);
+  assert.deepEqual(comPr.warnings, [{ code: 'linked_pr_merge_can_auto_settle' }, { code: 'background_work_unknown', knowledge: 'unknown' }]);
   const novoRun = observar({ latestRunId: 'run-2' }, snap({ runs: [...runs1, { id: 'run-2', ordinal: 2, status: 'completed' }] }));
   assert.equal(avaliarGuard(guard(base), novoRun), 'settle_run_changed');
 });
@@ -84,7 +105,7 @@ test('campos opcionais ausentes ficam indisponíveis, não falsos', () => {
   assert.equal(o.fieldAvailability.pinnedAt, false);
   assert.equal(o.fieldAvailability.pullRequests, false);
   assert.equal(o.pinnedAt, null);
-  assert.deepEqual(o.warnings, [{ code: 'linked_pr_state_unavailable' }]);
+  assert.deepEqual(o.warnings, [{ code: 'linked_pr_state_unavailable' }, { code: 'background_work_unknown', knowledge: 'unknown' }]);
 });
 
 test('lerObservacao repete enquanto a thread muda na shell e desiste no limite', async () => {
@@ -113,6 +134,11 @@ test('t3_thread: sem settlementContractVersion a resposta não muda; com 1 traz 
   assert.equal(r.settlement.eligibleMechanically, true);
   assert.equal(r.settlement.settled, false);
   assert.ok(chamadas.includes('local:completo:t-comum'));
+  // execution vem da MESMA observação do settlement (snapshot completo), não do /bounded.
+  assert.equal(antes.execution.source.kind, 'thread_snapshot');
+  assert.equal(r.execution.source.kind, 'thread_full_snapshot');
+  assert.equal(r.execution.source.threadSequence, 77);
+  assert.equal(r.execution.source.history, 'complete');
   // Sem snapshot completo disponível, o opt-in falha como erro; nunca devolve settlement vazio.
   const semCompleto = await c.callTool({ name: 't3_thread', arguments: { threadId: 't-local', settlementContractVersion: 1 } });
   assert.equal(semCompleto.isError, true);

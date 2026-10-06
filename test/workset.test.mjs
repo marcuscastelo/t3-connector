@@ -129,6 +129,20 @@ test('review P2: thread liquidada com trabalho de fundo pendente não é ociosa'
   assert.equal(w.counts.settledIdle, 1);
 });
 
+test('workset: comando em segundo plano não segura a thread (mesma regra de execution)', async () => {
+  const d = dadosPadrao();
+  d.local.shell.threads = [
+    thread({ id: 'dev-server', projectId: LOCAL.projeto, status: 'completed', pendingBackgroundTasks: [{ kind: 'command', taskId: 'cmd-1' }] }),
+    thread({ id: 'monitor', projectId: LOCAL.projeto, status: 'completed', pendingBackgroundTasks: [{ kind: 'monitor', taskId: 'mon-1' }] }),
+  ];
+  const c = await conectarMcp(ambientesFalsos(d), undefined, undefined, opcoes);
+  const w = dados(await c.callTool({ name: 't3_workset', arguments: { environments: ['local'] } }));
+  assert.deepEqual(ids(w.groups.background_pending), ['local:monitor']);
+  assert.deepEqual(ids(w.groups.completed_unsettled), ['local:dev-server']);
+  assert.equal(w.groups.completed_unsettled[0].backgroundTaskCount, 1);
+  assert.equal(w.groups.completed_unsettled[0].backgroundHoldsThread, false);
+});
+
 // Fila ativa: o host consome `actionable`/`inFlight` sem refiltrar settled, snoozed ou arquivada.
 function dadosFila() {
   const d = dadosPadrao();

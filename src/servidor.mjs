@@ -21,6 +21,7 @@ import { Cancelada, ErroT3 } from './t3.mjs';
 import { resumirPedidosRuntime } from './pedidos-runtime.mjs';
 import { lerObservacaoComDados, SETTLEMENT_CONTRACT_VERSION } from './settlement.mjs';
 import { GRUPOS, LIMITE_PADRAO, montarWorkset, PRAZO_AMBIENTE_MS as PRAZO_WORKSET_AMBIENTE, PRAZO_TOTAL_MS as PRAZO_WORKSET_TOTAL } from './workset.mjs';
+import { compararShell, derivarExecucao } from './execucao.mjs';
 
 export const VERSAO = '0.11.2';
 const ESTADOS = ['running', 'needs_intervention', 'completed', 'failed', 'cancelled', 'no_run', 'unknown'];
@@ -35,6 +36,14 @@ const CONTRATO_ESTADO =
   '`stateSource` (pending_request, active_run, usage_limit, proposed_plan, latest_run, no_run) says which signal decided; `runId` and `statusRun` describe that same run. ' +
   '`latestRunId`/`latestRunStatus` appear only when the newest run is not the one `state` describes: they are informational, and a cancelled newest run (a queued message promoted to steer or a cancelled queued run) does not mean the thread stopped. ' +
   '`model` is the thread\'s configured model and is canonical.';
+
+// Contrato do bloco `execution` (src/execucao.mjs, docs/execution-snapshot.md).
+const CONTRATO_EXECUCAO =
+  'Execution contract: `execution` (contractVersion 1) is derived from ONE thread projection read and correlates runs, responses, requests, provider session and background work by ID; use it, not `state` alone, to decide whether to wait, continue or settle. ' +
+  'A finished run is not finished work: `execution.background.pending` lists provider work that outlives the run (subagent, monitor, command, background_task; `holdsThread` false only for commands), `signals.backgroundWorkActive`/`backgroundWorkHoldsThread` are null when the read cannot prove absence (`background.knowledge` partial/unknown). ' +
+  '`latestResponse.relation` says whether the latest assistant text belongs to the latest executed run (`signals.responseStale`); a run that ended without assistant text sets `signals.latestRunHasNoAssistantResponse`. Never treat an old response that says work is running as current state. ' +
+  '`continuation.canStartNow` is true only with no active or queued run, no pending request/plan/usage limit and no background work holding the thread; `continuation.reasons` lists deterministic facts that leave work to pick up (background_work_ended_after_latest_run, latest_run_without_assistant_response, latest_run_failed); the target is always the same thread, never a new one. ' +
+  '`coherence.status` shell_lagging means the top-level fields (from the shell) are older than `execution`; `execution` wins.';
 
 function projetosPorId(shell) {
   return new Map((shell.projects ?? []).map((p) => [p.id, p]));
@@ -72,6 +81,36 @@ export function resumoSessao(projecao, thread, modeloCanonico) {
     informational: true,
     ...(divergente ? { note: `provider session still reports ${sessao.model}; the thread uses ${modeloCanonico.model} (\`activeRun.model\` while a run is active, otherwise \`model\`)` } : {}),
   };
+}
+
+/**
+ * Shell e /bounded da mesma thread, relidos uma vez quando a shell não é da mesma versão
+ * da projeção (outra mudança entrou entre as duas leituras). A projeção é uma transação;
+ * a shell é só a primeira leitura, usada para autorização e para os campos do topo.
+ */
+export async function lerThreadCoerente({ r, cliente, signal, threadId, tentativas = 2 }) {
+  let leitura;
+  for (let tentativa = 1; tentativa <= tentativas; tentativa++) {
+    const shell = await cliente.shell({ signal });
+    const thread = r.escopo.exigirThread(shell, threadId);
+    const bounded = await cliente.thread(threadId, { signal });
+    leitura = { shell, thread, bounded, tentativa };
+    if (compararShell(thread, bounded.projection ?? {}).motivos.length === 0) break;
+  }
+  return leitura;
+}
+
+export function execucaoDaLeitura({ thread, bounded, tentativa }) {
+  return derivarExecucao({
+    projecao: bounded.projection ?? {},
+    shellThread: thread,
+    fonte: {
+      kind: 'thread_snapshot',
+      threadSequence: bounded.snapshotSequence ?? null,
+      historyComplete: !bounded.hasMoreHistory,
+      attempts: tentativa,
+    },
+  });
 }
 
 const resposta = jsonResult;
@@ -346,7 +385,8 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         '`activeRun` (present while a run is active) is that run with the model it executes; `latestRun` is the newest run and, when it differs from `activeRun`, is informational. ' +
         'Model precedence: `model` is what the thread runs next; `activeRun.model` is what the active run executes (fixed when the run was requested); `providerSession` (status, model) is the provider process as last reported and is informational only: it can keep the previous model after a model change and read `ready` while a run is active, so never use it to decide the model or the state. ' +
         'Message `streaming` flags do not decide the state either. ' +
-        'With `settlementContractVersion: 1` the whole answer (latestResponse, pendingRequests, activeRun, latestRun) is built from one validated observation of the full thread snapshot, and adds `settlement` from that same observation (when it cannot be observed coherently, `settlement.complete` is false with no observationId and the rest comes from the usual read): `blockers` (pending_request, active_run, queued_work, unresolved_work, observation_incomplete), `eligibleMechanically`, `observationId`, `expectedRunId`, lifecycle fields (settledAt, settledOverride, unsettledAt, snoozedUntil, pinnedAt, autoSettleDisabledAt, linkedPullRequests) with `fieldAvailability`, and `warnings` (e.g. linked_pr_merge_can_auto_settle). ' +
+        CONTRATO_EXECUCAO + ' ' +
+        'With `settlementContractVersion: 1` the whole answer (latestResponse, pendingRequests, activeRun, latestRun, execution) is built from one validated observation of the full thread snapshot, and adds `settlement` from that same observation (when it cannot be observed coherently, `settlement.complete` is false with no observationId and the rest comes from the usual read): `blockers` (pending_request, active_run, queued_work, unresolved_work, observation_incomplete; background work comes from that same `execution`), `eligibleMechanically`, `observationId`, `expectedRunId`, lifecycle fields (settledAt, settledOverride, unsettledAt, snoozedUntil, pinnedAt, autoSettleDisabledAt, linkedPullRequests) with `fieldAvailability`, and `warnings` (e.g. linked_pr_merge_can_auto_settle). ' +
         '`eligibleMechanically: true` only means nothing objective blocks a settle; it is never acceptance of the delivered scope, which is your decision. To settle with protection pass expectedRunId and observationId in thread.settle `settleGuard`. Read-only.',
       shape: {
         environment: campoAmbiente,
@@ -358,13 +398,15 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       annotations: SO_LEITURA,
     },
     noAmbiente(async ({ r, cliente, signal, threadId, maxCharacters: maxCaracteres = 1500, settlementContractVersion }) => {
-      const shell = await cliente.shell({ signal });
-      let thread = r.escopo.exigirThread(shell, threadId);
-      const projeto = projetosPorId(shell).get(thread.projectId);
       let settlement = null;
-      let projecao = null;
-      let history = null;
+      let shell;
+      let thread;
+      let projecao;
+      let history;
+      let execution;
       if (settlementContractVersion) {
+        shell = await cliente.shell({ signal });
+        r.escopo.exigirThread(shell, threadId);
         const lido = await lerObservacaoComDados({
           environmentId: r.environmentId,
           threadId,
@@ -377,19 +419,24 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         });
         settlement = lido.observacao;
         if (lido.thread) {
-          // O pacote inteiro (resposta, pedidos, runs, settlement) vem da mesma observação
-          // validada: expectedRunId nunca descreve um run cuja entrega não foi mostrada.
+          // O pacote inteiro (resposta, pedidos, runs, execution, settlement) vem da mesma
+          // observação validada: expectedRunId nunca descreve um run cuja entrega não foi
+          // mostrada, e os bloqueios de fundo do settlement são os de `execution`.
           thread = lido.thread;
           projecao = lido.snapshot.projection;
           history = { complete: true, payloadBudgetExceeded: false, source: 'full_snapshot' };
+          execution = lido.execucao;
         }
       }
       if (!projecao) {
         // Sem opt-in, ou observação incompleta (settlement sem observationId: não serve de guard).
-        const bounded = await cliente.thread(threadId, { signal });
-        projecao = bounded.projection;
-        history = { complete: !bounded.hasMoreHistory, payloadBudgetExceeded: Boolean(bounded.payloadBudgetExceeded) };
+        const leitura = await lerThreadCoerente({ r, cliente, signal, threadId });
+        ({ shell, thread } = leitura);
+        projecao = leitura.bounded.projection;
+        history = { complete: !leitura.bounded.hasMoreHistory, payloadBudgetExceeded: Boolean(leitura.bounded.payloadBudgetExceeded) };
+        execution = execucaoDaLeitura(leitura);
       }
+      const projeto = projetosPorId(shell).get(thread.projectId);
       const pendentes = pedidosPendentes(projecao);
       const resumo = resumoDaThread(thread, projeto, pendentes);
       const ativo = runAtivoDaShell(thread);
@@ -412,6 +459,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         latestRun: thread.latestRunId ? { runId: thread.latestRunId, ordinal: runDoUltimo?.ordinal ?? null, status: thread.status } : null,
         latestResponse: ultimaResposta(projecao, maxCaracteres),
         history,
+        execution,
         ...(settlementContractVersion ? { settlement } : {}),
       };
     }),
@@ -459,12 +507,14 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         `Short wait (up to ${TETO_MS} ms) for the run of an authorized thread to finish or to request intervention, driven by T3 events, without polling. ` +
         'Without `runId` it follows the run the thread is executing (the active run), not a newer queued run that was cancelled or promoted to steer; `runId`, `statusRun` and `state` describe the followed run only. ' +
         'Returns immediately if the run already finished, if there is no run or if a request is pending. Reaching the deadline is not an error: it returns timedOut=true with the current state. ' +
+        'A finished run is not finished work: the provider can keep background work (subagent, monitor, background command) after the run ends. With until=execution_idle the wait follows that work too and returns `execution` (same contract as t3_thread.execution). ' +
         'To follow a long thread, call again later, between conversation turns; in voice use 1000-2000 ms. Never interrupts or changes the thread. Read-only.',
       shape: {
         environment: z.string().min(1).describe(`Environment where the thread lives (required): ${nomes}`),
         threadId: z.string().min(1),
         timeoutMs: z.number().int().min(1).max(TETO_MS).describe(`Total deadline for the call in ms, 1-${TETO_MS}; voice: 1000-2000`),
-        runId: z.string().min(1).optional().describe('Run to follow; default: the active run when the call starts, otherwise the latest run'),
+        runId: z.string().min(1).optional().describe('Run to follow; default: the active run when the call starts, otherwise the latest run. Only with until=run_terminal'),
+        until: z.enum(['run_terminal', 'execution_idle']).optional().describe('run_terminal (default): return when the followed run ends. execution_idle: return when the thread has no active or queued run, no pending intervention and no background work that holds it (subagent, monitor, unnamed task), stable for 1.5 s; the result carries `execution` and `backgroundClearedDuringWait`'),
         includeLatestResponse: z.boolean().optional().describe('Include the latest assistant response of that run; default false'),
         maxCharacters: z.number().int().min(100).max(4000).optional().describe('Maximum length of the latest response; default 800'),
       },

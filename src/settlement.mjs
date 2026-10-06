@@ -12,12 +12,18 @@
 // mudaram entre as duas leituras, ou o lifecycle da shell difere do snapshot completo,
 // repete (limite fixo) e depois declara complete=false.
 //
+// Trabalho de fundo: vem do snapshot de execução (src/execucao.mjs) derivado do MESMO
+// snapshot completo, fonte canônica de trabalho em curso. O roster da shell só aparece com o
+// último run assentado; a projeção traz roster do provider, turn items e subagents sem esse
+// gate. Bloqueia o que segura a thread (`holdsThread`); comando em segundo plano não segura.
+//
 // Limites: é observação do connector, não compare-and-set no T3. Entre a última leitura e
 // o comando ainda há janela para outro cliente, e o backend pode liquidar ou reabrir a
 // thread depois (merge de PR vinculado, pin, atividade nova).
 
 import { createHash } from 'node:crypto';
 import { estadoDaThread, pedidosPendentes, runAtivoDaShell } from './estado.mjs';
+import { derivarExecucao, seguraAThread } from './execucao.mjs';
 
 export const SETTLEMENT_CONTRACT_VERSION = 1;
 export const SETTLE_GUARD_VERSIONS = Object.freeze([1]);
@@ -54,6 +60,7 @@ function marcaDaShell(t) {
     t.status, t.latestRunId, ou(t.activeRunId), ou(t.activityRunStatus), ou(t.pendingRuntimeRequest?.id),
     ou(t.settledAt), ou(t.settledOverride), ou(t.unsettledAt), ou(t.pinnedAt), ou(t.archivedAt),
     ou(t.latestVisibleMessage?.id), Boolean(t.hasActionableProposedPlan),
+    (t.pendingBackgroundTasks ?? []).map((x) => ou(x.taskId)),
   ]);
 }
 
@@ -81,12 +88,26 @@ function incompleta(motivos) {
   };
 }
 
+/** Snapshot de execução de um snapshot completo validado (histórico inteiro, uma transação). */
+export function execucaoDoSnapshot({ thread, snapshot, attempts = 1 }) {
+  return derivarExecucao({
+    projecao: snapshot.projection,
+    shellThread: thread,
+    fonte: { kind: 'thread_full_snapshot', threadSequence: snapshot.snapshotSequence ?? null, historyComplete: true, attempts },
+  });
+}
+
 /**
  * Observação pura a partir de uma thread da shell e de um snapshot completo
  * `{snapshotSequence, projection}` da mesma thread. Nunca lança: entrada inconsistente
  * vira complete=false com bloqueio `observation_incomplete`.
  */
-export function observarSettlement({ environmentId, thread, snapshot }) {
+export function observarSettlement(args) {
+  return observar(args).observacao;
+}
+
+/** Observação e o snapshot de execução que decidiu seus bloqueios de fundo (null se incompleta). */
+function observar({ environmentId, thread, snapshot, attempts = 1 }) {
   const p = snapshot?.projection;
   const problemas = [];
   if (!thread) problemas.push('thread_missing_from_shell');
@@ -101,7 +122,8 @@ export function observarSettlement({ environmentId, thread, snapshot }) {
   if (thread?.latestRunId && Array.isArray(p?.runs) && !p.runs.some((r) => r.id === thread.latestRunId)) {
     problemas.push('latest_run_missing_from_snapshot');
   }
-  if (problemas.length) return incompleta(problemas);
+  if (problemas.length) return { observacao: incompleta(problemas), execucao: null };
+  const execution = execucaoDoSnapshot({ thread, snapshot, attempts });
 
   const pendentesProjecao = pedidosPendentes(p);
   const estado = estadoDaThread(thread, pendentesProjecao);
@@ -131,8 +153,16 @@ export function observarSettlement({ environmentId, thread, snapshot }) {
     bloqueios.push({ code: 'unresolved_work', kind: 'usage_limit', runId: thread.limitRecovery.runId ?? null });
   }
   if (thread.hasActionableProposedPlan) bloqueios.push({ code: 'unresolved_work', kind: 'proposed_plan', runId: thread.latestRunId });
+  // Fundo: `execution` (projeção completa, sem o gate da shell) e, por cima, o roster da
+  // shell. A shell pode estar atrás da projeção, então só acrescenta bloqueio, nunca remove.
+  const fundo = new Map();
+  for (const t of execution.background.pending) if (t.holdsThread) fundo.set(t.taskId, t);
   for (const t of thread.pendingBackgroundTasks ?? []) {
-    bloqueios.push({ code: 'unresolved_work', kind: 'background_task', taskId: t.taskId ?? null });
+    const kind = t.kind ?? 'background_task';
+    if (seguraAThread(kind) && !fundo.has(t.taskId ?? null)) fundo.set(t.taskId ?? null, { taskId: t.taskId ?? null, kind, source: 'shell_roster' });
+  }
+  for (const t of fundo.values()) {
+    bloqueios.push({ code: 'unresolved_work', kind: 'background_task', taskId: t.taskId, backgroundKind: t.kind, source: t.source });
   }
   if (estado.state === 'unknown') bloqueios.push({ code: 'unresolved_work', kind: 'unknown_state', status: thread.status });
 
@@ -149,6 +179,9 @@ export function observarSettlement({ environmentId, thread, snapshot }) {
   else if (!disponibilidade.pullRequests) avisos.push({ code: 'linked_pr_state_unavailable' });
   if (thread.settledAt) avisos.push({ code: 'already_settled', settledOverride: ou(thread.settledOverride) });
   if (thread.settledAt && disponibilidade.pinnedAt) avisos.push({ code: 'pin_can_clear_settlement' });
+  // Sem roster no servidor a ausência de trabalho de fundo não é provada; não bloqueia (mesma
+  // regra do preflight de thread.send), mas fica dito.
+  if (execution.background.knowledge !== 'complete') avisos.push({ code: 'background_work_unknown', knowledge: execution.background.knowledge });
 
   // Digest determinístico do que invalida um aceite: atividade, pedidos, mensagens (IDs e
   // timestamps, sem texto), lifecycle e PRs. Sem updatedAt nem sequence global, para não
@@ -166,10 +199,10 @@ export function observarSettlement({ environmentId, thread, snapshot }) {
     links.map((l) => [l.number, l.url, l.state, l.link]),
     Boolean(thread.hasActionableProposedPlan),
     thread.limitRecovery ? [ou(thread.limitRecovery.runId), Boolean(thread.limitRecovery.autoResume)] : null,
-    (thread.pendingBackgroundTasks ?? []).map((t) => ou(t.taskId)),
+    [...new Set([...execution.background.pending.map((t) => t.taskId), ...(thread.pendingBackgroundTasks ?? []).map((t) => ou(t.taskId))])].map(String).sort(),
   ];
 
-  return {
+  const observacao = {
     contractVersion: SETTLEMENT_CONTRACT_VERSION,
     guardVersions: SETTLE_GUARD_VERSIONS,
     guarantee: 'connector_preflight_and_observation',
@@ -193,6 +226,7 @@ export function observarSettlement({ environmentId, thread, snapshot }) {
     blockers: bloqueios,
     warnings: avisos,
   };
+  return { observacao, execucao: execution };
 }
 
 /**
@@ -213,15 +247,15 @@ export async function lerObservacaoComDados({ environmentId, threadId, lerShell,
   const achar = (shell) => (shell?.threads ?? []).find((t) => t.id === threadId && !t.deletedAt);
   for (let i = 0; i < tentativas; i++) {
     const antes = achar(await lerShell());
-    if (!antes) return { observacao: observarSettlement({ environmentId, thread: null, snapshot: null }), thread: null, snapshot: null };
+    if (!antes) return { observacao: observarSettlement({ environmentId, thread: null, snapshot: null }), thread: null, snapshot: null, execucao: null };
     const snapshot = await lerCompleto(threadId);
     const depois = achar(await lerShell());
     if (depois && marcaDaShell(antes) === marcaDaShell(depois) && lifecycleConfere(depois, snapshot?.projection?.thread)) {
-      const observacao = observarSettlement({ environmentId, thread: depois, snapshot });
-      return observacao.complete ? { observacao, thread: depois, snapshot } : { observacao, thread: null, snapshot: null };
+      const { observacao, execucao } = observar({ environmentId, thread: depois, snapshot, attempts: i + 1 });
+      return observacao.complete ? { observacao, thread: depois, snapshot, execucao } : { observacao, thread: null, snapshot: null, execucao: null };
     }
   }
-  return { observacao: incompleta(['thread_changed_during_observation']), thread: null, snapshot: null };
+  return { observacao: incompleta(['thread_changed_during_observation']), thread: null, snapshot: null, execucao: null };
 }
 
 const RECUSA_DO_BLOQUEIO = {

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Composition of the orchestration slice with `execution`: `execution` is the single source of
+  in-flight work. `settlement` (opt-in on `t3_thread`) and the `settleGuard` take background
+  blockers from `execution`, derived from the same full snapshot, so a monitor or subagent
+  hidden by the shell's post-turn gate now blocks a guarded settle; a background command (dev
+  server) no longer does. The shell's roster can only add a blocker. A server without a roster
+  adds the warning `background_work_unknown`. `t3_workset` puts a thread in
+  `background_pending` only when its background work holds the thread
+  (`backgroundHoldsThread`).
 - Read tool `t3_workset`: one call returns every thread that still needs a decision across
   all configured environments (or `environments`), in disjoint groups (needs_intervention,
   running, background_pending, unknown, snoozed, failed_unsettled, completed_unsettled,
@@ -25,6 +33,25 @@
   mismatch; unavailable), kept for replays; a replay before it is recorded returns the receipt
   with `postCheck: pending`. The guard is never forwarded to T3.
   Without it, settle is unchanged. See `docs/orchestration-bfs.md`.
+- Read tools: `t3_thread` adds `execution` (contract version 1), derived from one thread
+  projection read. It correlates the latest, active, latest-executed and queued runs; the
+  latest response and its `relation` to those runs; pending requests; the provider session;
+  and provider background work (`background.pending` with `holdsThread`, and
+  `background.endedSinceLatestRun`). It adds safe signals (`responseStale`,
+  `backgroundWorkActive`, `backgroundWorkHoldsThread`, `backgroundWorkEndedUnconsumed`,
+  `latestRunHasNoAssistantResponse`, `operationallyIdle`) and `continuation` (`canStartNow`,
+  `blockers`, `reasons`, `recommended`, target `same_thread`). Background work is read without
+  the shell's post-turn gate, which hides it while a run is active. `coherence` compares the
+  shell with the projection (version, latest run, active run, pending request) and reads them
+  again once when they differ. See `docs/execution-snapshot.md`.
+- `t3_aguardar_thread` accepts `until: "execution_idle"`, which waits until no run is active or
+  queued, nothing is pending and no background work holds the thread, stable for 1.5 s. It
+  returns `execution` and `backgroundClearedDuringWait`.
+- `thread.send` with `start_immediately` now refuses before sending while provider background
+  work holds the thread. It returns `state: "rejected"`, `sent: false`,
+  `refusal.code: "background_work_active"` and the `execution` snapshot. `onBackgroundWork:
+  "send"` skips the check. A failed preflight read refuses with
+  `execution_snapshot_unavailable`.
 
 ## 0.11.2
 

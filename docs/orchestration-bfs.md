@@ -21,9 +21,14 @@ each visible thread in exactly one group:
 
 `needs_intervention > running > background_pending > unknown > snoozed > failed_unsettled > completed_unsettled > cancelled_unsettled`
 
-- `needs_intervention`, `running`, `background_pending` (background tasks still pending; they
-  can outlive a settle) and `unknown` include settled and snoozed threads. The other groups only
+- `needs_intervention`, `running`, `background_pending` (background work that holds the thread
+  is still pending; it can outlive a settle) and `unknown` include settled and snoozed threads. The other groups only
   hold unsettled threads.
+- Background work comes from the shell's roster only (one shell read per environment). The
+  group follows the rule of [`execution`](execution-snapshot.md): a background command (a dev
+  server) does not hold the thread, so a thread with only that lands in its state group with
+  `backgroundTaskCount` and `backgroundHoldsThread: false`. The shell publishes the roster only
+  after the latest run settled, so the list cannot prove absence; read `t3_thread` to decide.
 - `snoozed` holds unsettled threads whose `snoozedUntil` is still in the future. A past
   `snoozedUntil` falls back to its state group.
 - `completed_unsettled` is the main "forgotten work" list. A completed run is not an accepted
@@ -81,6 +86,14 @@ the observation incomplete:
   request, and even when a newer run was cancelled by a steer), `queued_work` (including a
   held queue), `unresolved_work` (usage limit, proposed plan, background task, unknown
   state), `observation_incomplete`.
+- Background tasks come from `execution`, derived from the same full snapshot (provider
+  roster, turn items and subagents, without the shell's post-turn gate). The shell's roster can
+  only add a blocker, never remove one. Only work that holds the thread blocks: a background
+  command does not. When the server sends no roster, absence is not proven and `warnings`
+  carries `background_work_unknown`; it does not block, like the `thread.send` preflight.
+- With the opt-in, `t3_thread.execution` comes from that same observation
+  (`execution.source.kind: "thread_full_snapshot"`), so settlement and execution never describe
+  two different reads.
 - `eligibleMechanically: true` only means nothing objective blocks a settle. It is never
   acceptance. Whether the delivered scope is acceptable is your call (or the user's).
 - `observationId` is a digest of what would invalidate your decision: runs, requests, latest
