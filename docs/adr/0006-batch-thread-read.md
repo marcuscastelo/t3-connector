@@ -1,4 +1,4 @@
-# ADR 0005: batch thread read with per-item failure
+# ADR 0006: batch thread read with per-item failure
 
 Date: 2026-10-06. Status: accepted.
 

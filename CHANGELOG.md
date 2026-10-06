@@ -34,7 +34,7 @@
   not hide the others; `allSucceeded` and `complete` summarize. One shell observation per
   environment per call; a repeated target is read once. Available on the read server and the
   OAuth profile, not in the write plugin's lease reads. `t3_thread` output is unchanged. See
-  ADR 0005.
+  ADR 0006.
 - New read tool `t3_control_plane`: a control plane snapshot in one call across every
   configured environment (or only `environment`), each with its own ACL. It returns
   `needsIntervention`, `running` and `ready` lists (ready = latest run completed, failed or
