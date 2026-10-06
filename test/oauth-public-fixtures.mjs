@@ -18,13 +18,17 @@ import { ACTIONS } from '../src/escrita/adapters.mjs';
 
 // HTTP loopback models the ingress transport; the configured browser origin/RP remains exact
 // HTTPS. No TLS exception is added to production code, and no real browser or backend is used.
-export async function publicFixture(t, { config = {}, tools, fetch, limits, enroll = true, backend = false, stateDir } = {}) {
-  const [publicPort, localPort] = [await freePort(), await freePort()];
+export async function publicFixture(t, { config = {}, tools, fetch, limits, enroll = true, backend = false, stateDir, firstPorts } = {}) {
+  // freePort() releases the port before the connector binds it: a parallel test file can take it
+  // first. Then listen() fails with EADDRINUSE after the public listener is already bound, which
+  // kept the test process alive forever. Close the partial connector and retry on fresh ports.
+  let [publicPort, localPort] = firstPorts ?? [await freePort(), await freePort()];
   let mono = 0, wallMs = Date.now(), localCounter = 1, publicCounter = 1;
   const clock = () => mono, wall = () => wallMs;
   const state = stateDir ?? mkdtempSync(join(tmpdir(), 't3c-public-'));
   const keys = clientKeys(), cfg = { ...DEFAULTS, issuer: 'https://issuer.example.test', publicPort, localPort, stateDir: state, clients: [CLIENT], loginMode: 'public', ...config };
-  const issuer = cfg.issuer, local = `http://localhost:${localPort}`;
+  const issuer = cfg.issuer;
+  let local = `http://localhost:${localPort}`;
   const doc = { client_id: CLIENT, client_name: '<img src=x onerror=alert(1)>', redirect_uris: ['https://client.example/cb'], token_endpoint_auth_method: 'private_key_jwt', jwks: { keys: [keys.jwk] } };
   const localAuth = authenticator({ rpID: 'localhost' }), publicAuth = authenticator({ rpID: new URL(issuer).hostname });
   const data = dadosPadrao(), reads = ambientesFalsos(data), journal = { ...memoryJournal(), audit() {} };
@@ -34,13 +38,21 @@ export async function publicFixture(t, { config = {}, tools, fetch, limits, enro
   });
   const factory = tools ?? (backend ? t3Tools({ ambientes: reads, conexoes: connections, journal, projectPolicy: 'all' }) : () => ({ sources: [perRequestSource(rehearsalTools())], grantProvider: Object.assign(async () => ({ grants: consentAll(reads.registros), unavailable: [] }), { projectPolicy: 'all' }) }));
   let c;
-  const open = async () => {
-    c = createOAuthConnector({ config: cfg, tools: factory, fetch: fetch ?? cimdFetch({ [CLIENT]: doc }), publicLimits: limits, clock, wall }); await c.listen(); return c;
-  };
-  await open(); t.after(async () => { await c.close(); rmSync(state, { recursive: true, force: true }); });
+  const create = () => createOAuthConnector({ config: cfg, tools: factory, fetch: fetch ?? cimdFetch({ [CLIENT]: doc }), publicLimits: limits, clock, wall });
+  // Reopen keeps the ports (restart semantics); a failed listen still closes what it bound.
+  const open = async () => { c = create(); try { await c.listen(); } catch (e) { await c.close(); throw e; } return c; };
+  t.after(async () => { await c?.close(); rmSync(state, { recursive: true, force: true }); });
+  for (let attempt = 1; ; attempt++) {
+    try { await open(); break; } catch (e) {
+      if (e.code !== 'EADDRINUSE' || attempt === 5) throw e;
+      [publicPort, localPort] = [await freePort(), await freePort()];
+      Object.assign(cfg, { publicPort, localPort });
+      local = `http://localhost:${localPort}`;
+    }
+  }
   const request = (path, { method = 'GET', headers = {}, body, data } = {}) => http(method, `http://localhost:${publicPort}${path}`, { host: new URL(issuer).host, headers: Object.fromEntries(Object.entries({ connection: 'close', ...headers }).filter(([, v]) => v !== undefined)), body: data === undefined ? body : JSON.stringify(data), timeoutMs: 15_000 });
   const post = (path, data, cookie, headers = {}) => request(path, { method: 'POST', data, headers: { origin: issuer, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin', ...(cookie ? { cookie } : {}), ...headers } });
-  const localPost = (path, data, headers = {}) => http('POST', `${local}${path}`, { headers: { connection: 'close', origin: local, 'content-type': 'application/json', ...headers }, body: JSON.stringify(data) });
+  const localPost = (path, data, headers = {}) => http('POST', `${local}${path}`, { headers: { connection: 'close', origin: local, 'content-type': 'application/json', ...headers }, body: JSON.stringify(data), timeoutMs: 15_000 });
   const cookieOf = r => r.headers['set-cookie']?.[0]?.split(';')[0];
   if (enroll) {
     const ticket = c.enrollment.issue(), options = await localPost('/api/enroll/options', { ticket });
@@ -99,7 +111,7 @@ export async function publicFixture(t, { config = {}, tools, fetch, limits, enro
   const mcp = (access, method, params) => request('/mcp', { method: 'POST', headers: { authorization: `Bearer ${access}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, data: { jsonrpc: '2.0', id: 1, method, ...(params ? { params } : {}) } });
   const call = (access, name, args) => mcp(access, 'tools/call', { name, arguments: args });
   const addProject = alias => { const id = `late-${alias}`, d = data[alias]; d.shell.projects.push({ id, title: id, workspaceRoot: `/${alias}/late` }); d.shell.threads.push(thread({ id: `t-${id}`, projectId: id, title: id, latestRunId: null })); d.bounded[`t-${id}`] = { projection: projecao({ mensagens: [mensagem({ text: `message-${id}` })] }), hasMoreHistory: false }; return id; };
-  return { get c() { return c; }, cfg, issuer, local, state, localAuth, publicAuth, request, post, localPost, cookieOf, admin, beginEnrollment, enrollPublic, begin, authenticate, approve, resume, signIn, localSignIn, token, mcp, call, addProject, connections, data, journal,
+  return { get c() { return c; }, cfg, issuer, get local() { return local; }, state, localAuth, publicAuth, request, post, localPost, cookieOf, admin, beginEnrollment, enrollPublic, begin, authenticate, approve, resume, signIn, localSignIn, token, mcp, call, addProject, connections, data, journal,
     advance(ms) { mono += ms; wallMs += ms; }, localAssertion(challenge) { return localAuth.assertion(challenge, { origin: local, counter: localCounter++ }); },
     publicAssertion(challenge, extra = {}) { return publicAuth.assertion(challenge, { origin: issuer, counter: publicCounter++, ...extra }); },
     async reopen(changes = {}) { await c.close(); Object.assign(cfg, changes); return open(); },
