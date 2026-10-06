@@ -1,3 +1,7 @@
+// Test fixture: the conditional send engine as released in the 0.13 integration at 1708a32
+// (identical to 96200be), kept verbatim except for import paths. It writes manifests in the
+// previous on-disk format (negative final answers without a durable refusal of the steps),
+// so replay of those manifests by the current engine is tested against real records.
 // Conditional send: "when run R has ended, apply this model selection, then send this
 // instruction", as one write with explicit preconditions.
 //
@@ -22,9 +26,9 @@
 //   completed             every step completed; `delivery` says whether T3 started the run or
 //                         queued it (a run that appeared after the last check), with the run's model.
 import { z } from 'zod';
-import { digest } from './gate.mjs';
-import { chaveOperacao, parseAction } from './adapters.mjs';
-import { runAtivoDaShell } from '../estado.mjs';
+import { digest } from '../../src/escrita/gate.mjs';
+import { chaveOperacao, parseAction } from '../../src/escrita/adapters.mjs';
+import { runAtivoDaShell } from '../../src/estado.mjs';
 
 export const CONDITIONAL_SEND = 'thread.conditional-send';
 export const CONDITIONAL_TOOL = 't3_escrever_thread_conditional_send';
@@ -42,7 +46,7 @@ const modelSelection = z.object({
   options: z.array(z.object({ id: str, value: z.union([z.string(), z.boolean()]) }).strict()).optional()
     .describe('Model options as listed by t3_providers optionDescriptors, e.g. fast mode.'),
 }).strict();
-export const CONDITIONAL_DESCRIPTION = 'Conditional send: once the run `afterRunId` has ended and no other run started, optionally applies `modelSelection` to the thread (thread.model-selection.set) and then sends `text` as a new run (thread.send start_immediately), as one request with one clientRequestId. The precondition is checked before the first step and again right before the send; if any run became active in between nothing is sent, so T3 never turns it into a queued message silently. Each step is journaled under `<clientRequestId>:model-selection` and `<clientRequestId>:send` and can be reconciled with t3_reconciliar_escrita. Retrying with the same clientRequestId and input never sends twice: step states are re-read from the write journal, precondition_pending and uncertain are evaluated again, final results are replayed. "Not sent" is stated only after the operationId of the step is durably reserved as refused, so no later write can send under it. Results: precondition_pending, precondition_failed, failed (a step was refused before sending; earlier steps remain applied and are listed), uncertain (the step in failedOperationId may have been or may still be sent: never resend under another id; reconcile it or retry the same clientRequestId), completed (with `delivery`). No fallback to queue_after_active, steer or another provider.';
+export const CONDITIONAL_DESCRIPTION = 'Conditional send: once the run `afterRunId` has ended and no other run started, optionally applies `modelSelection` to the thread (thread.model-selection.set) and then sends `text` as a new run (thread.send start_immediately), as one request with one clientRequestId. The precondition is checked before the first step and again right before the send; if any run became active in between nothing is sent, so T3 never turns it into a queued message silently. Each step is journaled under `<clientRequestId>:model-selection` and `<clientRequestId>:send` and can be reconciled with t3_reconciliar_escrita. Retrying with the same clientRequestId and input never sends twice: step states are re-read from the write journal, precondition_pending and uncertain are evaluated again, final results are replayed. Results: precondition_pending, precondition_failed, failed (a step was refused before sending; earlier steps remain applied and are listed), uncertain (the step in failedOperationId may have been or may still be sent: never resend under another id; reconcile it or retry the same clientRequestId), completed (with `delivery`). No fallback to queue_after_active, steer or another provider.';
 export const conditionalSchema = z.object({
   threadId: str,
   clientRequestId: str.describe('Idempotency key of the whole conditional send; must equal operationId.'),
@@ -116,21 +120,17 @@ async function run(host, key, input, hash, { sleep, now }) {
   // A step's state is what the Dispatcher journal holds for its operationId, never what this
   // manifest or a thrown error says: the Dispatcher commits before the manifest, and another
   // executor (another process, or a plain write under the same operationId) may own the step.
-  const stepKey = i => chaveOperacao({ ...host.environment, caller: host.caller, operationId: i.operationId });
-  const stepHash = i => digest([i.action, parseAction(i.action, i.stepInput).input]);
-  const durable = i => {
-    const d = store('get', stepKey(i));
+  const durable = ({ action, operationId, stepInput }) => {
+    const d = store('get', chaveOperacao({ ...host.environment, caller: host.caller, operationId }));
     if (!d) return null;
     // Same rule as the Dispatcher: an operationId used for another input is a conflict.
-    if (d.hash !== stepHash(i)) throw new Error('operation_conflict');
-    return stepFromDispatcher(d, i.operationId, at());
+    if (d.hash !== digest([action, parseAction(action, stepInput).input])) throw new Error('operation_conflict');
+    return stepFromDispatcher(d, operationId, at());
   };
   // Journal truth over the recorded steps; a recorded refusal keeps its error code and detail.
   const reread = steps => inputs.flatMap(i => {
     const d = durable(i), recorded = steps.find(x => x.operationId === i.operationId);
-    // A refusal is only what the journal holds: a recorded one without a record (older manifests)
-    // is dropped, so it is closed atomically or rebuilt, never repeated as proof.
-    if (!d) return recorded && recorded.state !== 'rejected' ? [recorded] : [];
+    if (!d) return recorded ? [recorded] : [];
     return [recorded && recorded.state === d.state ? { ...recorded, ...(d.receipt ? { receipt: d.receipt } : {}) } : d];
   });
   const sameStates = (a, b) => JSON.stringify(a.map(x => [x.operationId, x.state])) === JSON.stringify(b.map(x => [x.operationId, x.state]));
@@ -143,10 +143,16 @@ async function run(host, key, input, hash, { sleep, now }) {
     // session must still cover that thread's project, as the Dispatcher's replay re-checks its target.
     if (old.projectId !== undefined) host.authorize(requiredActions(input), old.projectId);
     else if (old.observations.length || old.steps.length) old.projectId = (await host.observe(input.threadId)).projectId;
-    record = old; // final: replayed below; pending, uncertain or interrupted: continued from the journal
+    if (FINAL.has(old.state)) {
+      // A final answer is replayed only while the journal still agrees with its steps; a step
+      // written under its operationId afterwards makes the old answer unsafe to repeat.
+      const steps = reread(old.steps);
+      if (sameStates(steps, old.steps)) return view(old, true);
+      return view({ ...old, steps, state: 'uncertain', reason: 'step_changed_after_result' }, true);
+    }
+    record = old; // pending, uncertain or interrupted mid-way: continued from the journal below
   }
-  const replaying = FINAL.has(record.state);
-  if (!replaying) record.attempts++;
+  record.attempts++;
   const save = () => store('put', key, record);
   const finish = (state, extra = {}) => {
     for (const k of ['reason', 'failedStep', 'failedOperationId', 'detail', 'sent']) delete record[k];
@@ -164,78 +170,19 @@ async function run(host, key, input, hash, { sleep, now }) {
     record.steps = steps;
     save();
   };
-  // "Not sent" is said of a step only when its write-journal record is a refusal: the Dispatcher's
-  // own (permanent: it never sends under a rejected record) or one this request reserves here.
-  // The reservation is the journal's atomic INSERT OR IGNORE, the same one the Dispatcher uses to
-  // own an operationId, so it excludes every other writer, in this process or another: if it wins,
-  // no later write can send under that operationId; if it loses, another writer holds the step
-  // and its state is read, never assumed.
-  const closeStep = (i, reason) => {
-    const refusal = { hash: stepHash(i), state: 'rejected', action: i.action, operationId: i.operationId, ...host.environment, closedBy: CONDITIONAL_SEND, reason };
-    return store('reserve', stepKey(i), refusal)
-      ? { action: i.action, operationId: i.operationId, state: 'rejected', error: reason, closed: true, finishedAt: at() }
-      : durable(i) ?? { action: i.action, operationId: i.operationId, state: 'uncertain', reason: 'reconciliation_required', finishedAt: at() };
-  };
-  const close = (i, reason) => {
-    const known = record.steps.find(x => x.operationId === i.operationId);
-    if (known) return known;
-    const entry = closeStep(i, reason);
-    record.steps = [...record.steps, entry];
-    return entry;
-  };
-  // Replay of a final answer, written by this engine or an earlier one. Its steps are re-read from
-  // the journal (a refusal held only by the manifest is dropped); a negative answer is repeated
-  // only after every step it did not complete is closed with the same atomic reservation as a
-  // fresh conclusion. Any step whose state differs from the recorded answer, over the union of the
-  // recorded and current steps, rebuilds the answer from the current steps alone.
-  const replayFinal = () => {
-    const recorded = new Map(record.steps.map(x => [x.operationId, x.state]));
-    const steps = reread(record.steps), closedNow = new Set();
-    if (record.state !== 'completed') for (const i of inputs) {
-      if (steps.some(x => x.operationId === i.operationId)) continue;
-      const entry = closeStep(i, record.reason ?? record.state);
-      if (entry.closed) closedNow.add(i.operationId);
-      steps.push(entry);
-    }
-    const current = new Map(steps.map(x => [x.operationId, x.state]));
-    const changed = [...new Set([...recorded.keys(), ...current.keys()])].filter(op => !closedNow.has(op) && recorded.get(op) !== current.get(op));
-    const send = current.get(ids.send);
-    const holds = !changed.length && !steps.some(x => x.state === 'uncertain') && (record.state === 'completed' ? send === 'completed' : send === 'rejected' || (send === 'completed' && record.sent === true));
-    if (holds) {
-      if (closedNow.size) {
-        record.steps = inputs.map(i => steps.find(x => x.operationId === i.operationId)).filter(Boolean);
-        save();
-        host.audit({ event: 'conditional_send_closed', operationId: input.clientRequestId, threadId: input.threadId, steps: [...closedNow] });
-      }
-      return view(record, true);
-    }
-    const { kind, operationId, threadId, afterRunId, projectId, attempts, observations } = record;
-    const failedOperationId = changed[0] ?? steps.find(x => x.state === 'uncertain')?.operationId ?? ids.send;
-    return view({ kind, operationId, threadId, afterRunId, projectId, attempts, observations, steps, state: 'uncertain', reason: 'step_changed_after_result', failedOperationId }, true);
-  };
-  // Every answer is built from the current steps. A negative one (`state`/`extra`) is given only
-  // when the send step is durably refused and nothing is unsettled.
-  const answer = async (state, extra) => {
-    const unsettled = record.steps.find(x => x.state === 'uncertain');
-    if (unsettled) return finish('uncertain', { failedStep: unsettled.action, failedOperationId: unsettled.operationId, reason: unsettled.reason ?? 'reconciliation_required' });
-    const send = record.steps.find(x => x.operationId === ids.send);
-    if (send?.state === 'completed') {
-      const refused = record.steps.find(x => x.state === 'rejected');
-      if (!refused) return finish('completed', { delivery: await postCheck(host, input, ids.send) });
-      return finish('failed', { failedStep: refused.action, failedOperationId: refused.operationId, reason: refused.error ?? 'step_rejected', sent: true });
-    }
-    if (send?.state !== 'rejected') throw new Error('conditional_send_invariant');
+  // The outcome of a step that is not completed. Only a refusal the journal proves (or one before
+  // any reservation) says "not sent"; preparing/uncertain stay uncertain and are re-read next call.
+  const stopAt = s => s.state === 'uncertain'
+    ? finish('uncertain', { failedStep: s.action, failedOperationId: s.operationId, reason: s.reason ?? 'reconciliation_required' })
+    : finish('failed', { failedStep: s.action, failedOperationId: s.operationId, reason: s.error ?? 'step_rejected', ...(s.detail ? { detail: s.detail } : {}), sent: false });
+  // Before answering "nothing (more) sent": no step may have appeared in the journal meanwhile.
+  const notSent = async (state, extra) => {
+    await refresh();
+    const unsettled = record.steps.find(s => s.state !== 'completed');
+    if (unsettled) return stopAt(unsettled);
+    if (record.steps.some(s => s.operationId === ids.send)) return finish('completed', { delivery: await postCheck(host, input, ids.send) });
     return finish(state, extra);
   };
-  // Conclude that nothing (more) is sent: close every step not yet held, then answer from the steps.
-  const conclude = async (state, extra, reason = extra.reason) => {
-    await refresh();
-    for (const i of inputs) close(i, reason);
-    save();
-    return answer(state, extra);
-  };
-  const stopAt = x => x.state === 'uncertain' ? answer()
-    : conclude('failed', { failedStep: x.action, failedOperationId: x.operationId, reason: x.error ?? 'step_rejected', ...(x.detail ? { detail: x.detail } : {}), sent: false }, 'previous_step_refused');
   const observe = async phase => {
     const thread = await host.observe(input.threadId);
     record.projectId ??= thread.projectId;
@@ -254,11 +201,10 @@ async function run(host, key, input, hash, { sleep, now }) {
     try { result = await host.dispatch(i.action, i.operationId, i.stepInput); } catch (e) { error = e; }
     const d = durable(i);
     if (d) Object.assign(entry, d, { startedAt: entry.startedAt });
-    // A refusal that left no journal record (lease, scope, conflict, journal) refuses this call; it
-    // proves nothing about the step, which another writer may still own. Nothing is concluded.
-    else if (error) throw error;
-    // No journal record but an answer: its own state, and never "not sent" without a record.
-    else Object.assign(entry, { state: result?.state === 'completed' ? 'completed' : 'uncertain' }, result?.receipt ? { receipt: result.receipt } : {});
+    // No journal record and a refusal: refused before the Dispatcher reserved anything, nothing sent.
+    else if (error) entry.state = 'rejected';
+    // No journal record but an answer: only its own state, and never "not sent" unless it says so.
+    else Object.assign(entry, { state: result?.state === 'completed' ? 'completed' : result?.state === 'rejected' ? 'rejected' : 'uncertain' }, result?.receipt ? { receipt: result.receipt } : {});
     if (error && entry.state === 'rejected') {
       entry.error = /^[a-z_]+$/.test(error.message) ? error.message : 'dispatch_rejected';
       // A typed refusal (e.g. an unsupported modelSelection) keeps its exact message.
@@ -270,7 +216,6 @@ async function run(host, key, input, hash, { sleep, now }) {
     return entry;
   };
 
-  if (replaying) return replayFinal();
   await refresh();
   // 1. Precondition, waiting up to waitMs for R to end. Nothing is sent while it is not met.
   if (!record.steps.length) {
@@ -288,7 +233,8 @@ async function run(host, key, input, hash, { sleep, now }) {
         return view(record, false);
       }
     } else if (o.evaluation.verdict === 'failed') {
-      return conclude('precondition_failed', { reason: o.evaluation.reason });
+      const r = await notSent('precondition_failed', { reason: o.evaluation.reason });
+      if (r) return r;
     }
   }
   record.state = 'executing';
@@ -309,8 +255,8 @@ async function run(host, key, input, hash, { sleep, now }) {
       await sleep(POLL_MS / 2);
       o = await observe('before_send');
     }
-    if (o.evaluation.verdict !== 'met') return conclude('failed', { failedStep: 'thread.send', failedOperationId: ids.send, reason: `precondition_${o.evaluation.reason}`, sent: false });
-    if (input.modelSelection && !sameModel(o.thread.modelSelection, input.modelSelection)) return conclude('failed', { failedStep: 'thread.send', failedOperationId: ids.send, reason: 'model_selection_not_applied', sent: false });
+    if (o.evaluation.verdict !== 'met') return notSent('failed', { failedStep: 'thread.send', failedOperationId: ids.send, reason: `precondition_${o.evaluation.reason}`, sent: false });
+    if (input.modelSelection && !sameModel(o.thread.modelSelection, input.modelSelection)) return notSent('failed', { failedStep: 'thread.send', failedOperationId: ids.send, reason: 'model_selection_not_applied', sent: false });
   }
 
   // 4. The send, as start_immediately: never queue_after_active, steer or restart.
@@ -331,7 +277,6 @@ const stepInputs = (input, ids) => [
 function stepFromDispatcher(durable, operationId, at) {
   const base = { action: durable.action, operationId, finishedAt: at };
   if (durable.state === 'completed') return { ...base, state: 'completed', ...(durable.receipt ? { receipt: durable.receipt } : {}) };
-  if (durable.state === 'rejected' && durable.closedBy === CONDITIONAL_SEND) return { ...base, state: 'rejected', error: durable.reason ?? 'closed_not_sent', closed: true };
   if (durable.state === 'rejected' || durable.state === 'failed') return { ...base, state: 'rejected', error: 'dispatch_rejected' };
   if (durable.state === 'preparing') return { ...base, state: 'uncertain', reason: 'step_in_progress' };
   return { ...base, state: 'uncertain', reason: 'reconciliation_required' };
@@ -359,7 +304,7 @@ function view(record, replayed) {
   const { hash, ...rest } = record;
   const op = record.failedOperationId ? ` ${record.failedOperationId}` : '';
   const nextAction = {
-    precondition_pending: 'afterRunId is still active: wait (t3_aguardar_thread) and retry with the same clientRequestId',
+    precondition_pending: 'afterRunId is still active and nothing was sent: wait (t3_aguardar_thread) and retry with the same clientRequestId',
     precondition_failed: 'nothing was sent: read t3_thread and decide again with a new clientRequestId',
     failed: 'the failed step was not sent; steps listed as completed remain applied',
     uncertain: record.reason === 'step_in_progress'

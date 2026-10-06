@@ -9,7 +9,8 @@ import {InMemoryTransport} from '@modelcontextprotocol/sdk/inMemory.js';
 import {controller} from '../src/escrita/controller.mjs';
 import {FileJournal} from '../src/escrita/journal.mjs';
 import {Dispatcher} from '../src/escrita/adapters.mjs';
-import {identidadeCanal,exigirIdentidade} from '../src/escrita/identidade.mjs';
+import {identidadeCanal,identidadeSessaoOAuth,exigirIdentidade} from '../src/escrita/identidade.mjs';
+import {conditionalSend as legacySend} from './conditional/legacy-1708a32.mjs';
 import {criarPonteEscrita} from '../src/escrita/ponte-mcp.mjs';
 import {conditionalSend,evaluatePrecondition,sameModel,manifestKey,CONDITIONAL_TOOL,conditionalSchema} from '../src/escrita/conditional.mjs';
 const conditionalSchemaParse=i=>conditionalSchema.parse(i);
@@ -422,6 +423,84 @@ test('a refusal recorded only in an older manifest is not proof: the step is clo
  const later=await ordinarySend(h,input);
  if(r.sent===false)assert.equal(later.state,'rejected');
  assert.ok(t3.calls.filter(x=>x==='message.dispatch').length<=1);
+});
+
+// Manifests written by the previous engine (1708a32) carry negative final answers with no durable
+// refusal of their steps. Replaying one closes the steps atomically before repeating "not sent",
+// or rebuilds from whoever holds them; it never repeats the old conclusion on absence alone.
+function standaloneHost(journal,{latestRunId='r2'}={}) {
+ const identity=identidadeCanal({organization:'org',tunnelId:'tunnel_fixture'}),caller=exigirIdentidade(identity),environment={environmentId:'e',destination:'t3://e'};
+ const grant={...environment,actions:['thread.send','thread.model-selection.set'],projects:[{id:'app',directory:'/w/app'}]};
+ const counts={send:0};
+ const gate={status:()=>({active:true,scope:{caller,environments:[grant]}}),check(){},close(){},audit(){},dispatch:async(_i,_l,_t,f)=>f()};
+ const dispatcher=new Dispatcher({gate,adapter:{projectForThread:async()=>'app',invoke:async()=>{counts.send++;return {sequence:1};},receipt:r=>r},journal,...environment});
+ const host={caller,environment,journal,authorize(){},audit(){},failClosed(){},observe:async()=>({projectId:'app',latestRunId,status:'completed',activeRunId:null}),
+  dispatch:(action,operationId,input)=>dispatcher.dispatch(identity,'lease',{action,operationId,input})};
+ const ordinary=id=>dispatcher.dispatch(identity,'lease',{action:'thread.send',operationId:`${id}:send`,input:{threadId:'thread',clientRequestId:`${id}:send`,text:'once',delivery:'start_immediately'}});
+ return {host,counts,ordinary,sendKey:id=>chaveOperacao({...environment,caller,operationId:`${id}:send`})};
+}
+for(const kind of ['memory','file'])test(`legacy final precondition_failed (${kind}): the replay closes the send before repeating "nothing was sent"`,async()=>{
+ const journal=kind==='file'?new FileJournal(join(mkdtempSync(join(tmpdir(),'t3-conditional-')),'journal.sqlite')):durableJournal(),s=standaloneHost(journal);
+ const id=`legacy-${kind}`,input={threadId:'thread',clientRequestId:id,afterRunId:'r1',text:'once'};
+ const old=await legacySend(s.host,id,input);
+ assert.equal(old.state,'precondition_failed');assert.deepEqual(old.steps,[]);assert.equal(journal.get(s.sendKey(id)),undefined);
+ const replay=await conditionalSend(s.host,id,input);
+ assert.equal(replay.state,'precondition_failed');assert.equal(replay.replayed,true);
+ assert.equal(journal.get(s.sendKey(id)).state,'rejected');
+ assert.equal((await s.ordinary(id)).state,'rejected');assert.equal(s.counts.send,0);
+ journal.close?.();
+});
+
+test('legacy final failed/model_selection_not_applied: the replay closes the send; a later write never sends',async()=>{
+ const t3=fakeT3(),j=durableJournal(),h=await leaseHarness(t3,{journal:j});t3.hooks.ignoreModel=true;
+ const input=req({clientRequestId:'legacy-model'}),caller=exigirIdentidade(h.c.identity),environment={environmentId:'env-p',destination:'t3://env-p'};
+ const legacyHost={caller,environment,journal:j,authorize(){},audit(){},failClosed(){},observe:async()=>structuredClone(t3.thread),
+  dispatch:(action,operationId,stepInput)=>h.c.relay(h.c.capability,{op:'dispatch',ambiente:'local',leaseId:h.lease.leaseId,action,operationId,input:stepInput})};
+ let time=0;const old=await legacySend(legacyHost,'legacy-model',input,{now:()=>time,sleep:async ms=>{time+=ms;}});
+ assert.equal(old.reason,'model_selection_not_applied');assert.equal(old.sent,false);assert.deepEqual(old.steps.map(x=>x.state),['completed']);
+ const replay=await h.call(input);
+ assert.equal(replay.state,'failed');assert.equal(replay.sent,false);assert.equal(replay.replayed,true);
+ assert.deepEqual(replay.steps.map(x=>[x.action,x.state]),[['thread.model-selection.set','completed'],['thread.send','rejected']]);
+ assert.equal((await ordinarySend(h,input)).state,'rejected');
+ assert.equal(t3.calls.filter(x=>x==='message.dispatch').length,0);
+});
+
+for(const policy of ['all','restricted'])test(`OAuth ${policy}: legacy final precondition_failed is closed before it is repeated`,async()=>{
+ const t3=fakeT3(),authority=new SessionAuthority(),j=durableJournal(),r={alias:'local',environmentId:'env-p',destination:'t3://env-p',acoes:ACTIONS};
+ const issuer='https://as.example',sub='local:testSubject001';
+ const grants=policy==='all'?consentAll([r]):escopoDosGrants([grantFromInventory({...r,label:'local',actions:['thread.send','thread.model-selection.set'],projects:[{id:'app',name:'app',directory:'/w/app'}]})]);
+ const sid=authority.create({sub,clientId:'c',credentialId:'k',scope:'connector:write',resource:'r',grants});
+ const w=sessionWrites({conexoes:[{registro:r,cliente:t3.cliente,adapter:t3.adapter}],journal:{...j,audit(){}},authority,issuer,projectPolicy:policy});
+ const id=`oauth-${policy}`,input=req({clientRequestId:id,modelSelection:undefined});t3.thread.latestRunId='r2';
+ const legacyHost={caller:exigirIdentidade(identidadeSessaoOAuth({issuer,subject:sub})),environment:{environmentId:'env-p',destination:'t3://env-p'},journal:j,authorize(){},audit(){},failClosed(){},observe:async()=>structuredClone(t3.thread),dispatch:async()=>assert.fail('unexpected')};
+ assert.equal((await legacySend(legacyHost,id,input)).state,'precondition_failed');
+ assert.equal((await w.conditional({sid,sub},{environment:'local',operationId:id,input})).state,'precondition_failed');
+ const later=await w.dispatch({sid,sub},{environment:'local',operationId:`${id}:send`,action:'thread.send',input:{threadId:'thread',clientRequestId:`${id}:send`,text:input.text,delivery:'start_immediately'}});
+ assert.equal(later.state,'rejected');assert.equal(t3.calls.filter(x=>x==='message.dispatch').length,0);
+});
+
+test('legacy final refusal recorded only in the manifest: replay closes it atomically (no TypeError) and a later write never sends',async()=>{
+ const j=durableJournal(),s=standaloneHost(j,{latestRunId:'r1'}),id='legacy-rejected',input={threadId:'thread',clientRequestId:id,afterRunId:'r1',text:'once'};
+ const dispatch=s.host.dispatch;s.host.dispatch=async()=>{throw new Error('lease_closed');};
+ const old=await legacySend(s.host,id,input);
+ assert.equal(old.state,'failed');assert.equal(old.sent,false);assert.deepEqual(old.steps.map(x=>x.state),['rejected']);assert.equal(j.get(s.sendKey(id)),undefined);
+ s.host.dispatch=dispatch;
+ const replay=await conditionalSend(s.host,id,input);
+ assert.equal(replay.state,'failed');assert.equal(replay.sent,false);assert.equal(replay.replayed,true);
+ assert.equal(j.get(s.sendKey(id)).state,'rejected');
+ assert.equal((await s.ordinary(id)).state,'rejected');assert.equal(s.counts.send,0);
+ assert.equal((await conditionalSend(s.host,id,input)).state,'failed');
+});
+
+for(const legacy of ['precondition_failed','refusal'])test(`legacy final ${legacy} whose step another write took first: rebuilt from the winner, never "not sent"`,async()=>{
+ const j=durableJournal(),s=standaloneHost(j,{latestRunId:legacy==='refusal'?'r1':'r2'}),id=`legacy-taken-${legacy}`,input={threadId:'thread',clientRequestId:id,afterRunId:'r1',text:'once'};
+ const dispatch=s.host.dispatch;if(legacy==='refusal')s.host.dispatch=async()=>{throw new Error('lease_closed');};
+ await legacySend(s.host,id,input);s.host.dispatch=dispatch;
+ assert.equal((await s.ordinary(id)).state,'completed');
+ const replay=await conditionalSend(s.host,id,input);
+ assert.equal(replay.state,'uncertain');assert.equal(replay.reason,'step_changed_after_result');assert.equal(replay.failedOperationId,`${id}:send`);
+ for(const k of ['sent','detail','failedStep'])assert.ok(!(k in replay),k);
+ assert.equal(s.counts.send,1);
 });
 
 // Engine-level cases with a controlled clock and host.
