@@ -9,8 +9,8 @@ several T3 environments.
   messages and the latest response, lists the provider instances of each environment, and waits a few seconds for a run to finish. It never
   creates, sends, approves, interrupts or changes threads, and only accepts tokens scoped
   to exactly `orchestration:read`.
-- **Write** (`t3-connector-write gate|bridge`): 42 thread actions, each with a mandatory
-  `environment`. Nothing is dispatched without a 60-minute lease approved with a
+- **Write** (`t3-connector-write gate|bridge`): 42 thread actions and a conditional send
+  built on them, each with a mandatory `environment`. Nothing is dispatched without a 60-minute lease approved with a
   passkey on a page served at `http://localhost:<port>/`.
 
 Both work with several T3 environments (for example this machine and a server reached over
@@ -490,6 +490,31 @@ MCP SDK with error `-32602` before anything reaches the gate.
 
 A correction of the current work uses `steer_active`; it is never deferred until after the
 work it is meant to correct. Refused steer/restart requests never fall back to a queue.
+
+### Conditional send (`t3_escrever_thread_conditional_send`)
+
+"When run R ends, switch the model (for example to Fast Mode), then send this instruction" in
+one call, with one `clientRequestId` (equal to `operationId`). Input: `threadId`,
+`afterRunId` (the active run read from `t3_thread`), optional `modelSelection`, `text` and
+optional `waitMs` (0–10000) to wait for R to end inside the call.
+
+- Precondition: R is terminal, is still the thread's latest run and no run is active. It is
+  checked before the first step and again right before the send, so a run started by anyone
+  in between refuses the send instead of letting T3 queue it.
+- Steps are the existing writes, journaled under `<clientRequestId>:model-selection`
+  (`thread.model-selection.set`) and `<clientRequestId>:send` (`thread.send`
+  `start_immediately`); each can be reconciled with `t3_reconciliar_escrita`. The lease (or
+  OAuth consent) must include those actions; no new action is consented.
+- Retrying the same request replays the recorded result and never sends twice; only
+  `precondition_pending` (nothing sent) is evaluated again. Concurrent duplicates share one
+  execution.
+- `state`: `precondition_pending` (R still active), `precondition_failed` (`reason`
+  `other_run_active`, `run_superseded`, `run_unknown`; terminal, nothing sent), `failed`
+  (`failedStep` refused before sending; earlier steps stay applied and are listed),
+  `uncertain` (reconcile `failedStep`; do not retry) or `completed`. The result keeps every
+  observation and step; `delivery` reports the run T3 created for the message
+  (`deliveredAs: started | queued_behind_active`, `runModelMatches`): T3 can still queue it
+  if a run started after the last check, and that is reported, not hidden.
 
 ## OAuth session profile (experimental)
 

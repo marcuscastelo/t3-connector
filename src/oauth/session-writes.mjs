@@ -8,6 +8,7 @@ import { consentAll, consented } from './project-policy.mjs';
 import { redact } from './http.mjs';
 import { PROJECT_ACTIONS } from '../escrita/project-admin.mjs';
 import { NATIVE_WRITES, NATIVE_WRITE_ACTIONS, NATIVE_READS, ENV_SCOPED } from '../escrita/native.mjs';
+import { conditionalSend, conditionalSchema, CONDITIONAL_TOOL, CONDITIONAL_DESCRIPTION } from '../escrita/conditional.mjs';
 
 // T3 writes authorized by an OAuth session instead of a passkey lease. The existing Dispatcher
 // (journal reservation, target/workspace preflight, uncertainty handling, final synchronous check
@@ -68,6 +69,8 @@ const MESSAGES = {
   thread_not_found: 'thread not found in this environment',
   lease_closed: 'the OAuth session expired or was revoked; reconnect the connector (passkey sign-in)',
   dispatch_rejected: 'rejected while the connector prepared the request, before sending it to T3; no mutation was sent',
+  request_id_mismatch: 'operationId must equal input.clientRequestId',
+  operation_conflict: 'this operationId was already used with a different input; use a new operationId',
   reconciliation_required: 'the connector tried to send to T3 but could not confirm the result. Do not retry; call t3_reconciliar_escrita with the same environment and operationId',
   target_run_id_required: 'targetRunId required: read t3_thread in the same environment and pass the active run for steer_active or restart_active',
   queue_explicit_intent_required: 'queue_after_active requires an explicit request to defer and deferUntilActiveCompletes=true',
@@ -192,6 +195,40 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     });
     return { environment: { alias: c.registro.alias, environmentId: c.registro.environmentId }, ...await d.dispatch(identity(principal), principal.sid, { operationId, action, input }) };
   }
+  // Conditional send (conditional.mjs): each step is this session's own dispatch above, so the
+  // OAuth checks (live shell, consent, final synchronous check) run per step unchanged. The shell
+  // reads for the precondition use the same authority as a dispatch of the same environment.
+  async function conditional(principal, { environment, operationId, input }) {
+    const c = resolve(environment);
+    const env = { alias: c.registro.alias, environmentId: c.registro.environmentId };
+    const sessionGrant = () => {
+      const status = gate.status(principal.sid);
+      if (!status.active || status.scope.caller !== exigirIdentidade(identity(principal))) fail('lease_closed');
+      const grant = grantDoAmbiente(status.scope, { environmentId: c.registro.environmentId, destination: c.registro.destination });
+      if (!grant) fail('ambiente_fora_da_lease');
+      return grant;
+    };
+    const readShell = async () => all ? liveShell(principal, c) : (await c.cliente()).shell();
+    const host = {
+      caller: exigirIdentidade(identity(principal)),
+      environment: { environmentId: c.registro.environmentId, destination: c.registro.destination },
+      journal, audit: e => gate.audit(e), failClosed: () => gate.close(),
+      authorize: actions => { for (const a of actions) all ? authorizeRecord(principal, c, a) : (!sessionGrant().actions.includes(a) && fail('scope_denied')); },
+      observe: async threadId => {
+        const thread = (await readShell()).threads?.find(t => t.id === threadId && !t.deletedAt);
+        if (!thread) fail('thread_not_found');
+        if (!all && !sessionGrant().projects.some(p => p.id === thread.projectId)) fail('scope_denied');
+        return thread;
+      },
+      readThread: async threadId => { await host.observe(threadId); return (await c.cliente()).threadCompleto(threadId); },
+      dispatch: async (action, stepOperationId, stepInput) => {
+        const { environment: _, ...r } = await dispatch(principal, { environment, action, operationId: stepOperationId, input: stepInput });
+        return r;
+      },
+    };
+    return { environment: env, ...await conditionalSend(host, operationId, input) };
+  }
+
   // A write refused before sending (e.g. thread_not_found, workspace_scope_denied) is journaled
   // `rejected` without a target, and Dispatcher.reconcile cannot answer for it
   // (reconciliation_target_unknown). For that case only, answer locally that nothing was sent,
@@ -309,6 +346,13 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
       inputSchema: z.strictObject({ environment, operationId: z.string(), input: schemaForAction(action) }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     }, ({ environment: env, operationId, input }) => result(() => dispatch(principal, { environment: env, action, operationId, input })));
+    let conditionalGranted = false;
+    try { conditionalGranted = authority.check(principal.sid).grants?.environments?.some(e => e.actions.includes('thread.send')); } catch {}
+    if (conditionalGranted) server.registerTool(CONDITIONAL_TOOL, {
+      description: `${CONDITIONAL_DESCRIPTION} Chosen environment only; needs thread.send (and thread.model-selection.set when modelSelection is given) in the session's consent. operationId must equal input.clientRequestId.`,
+      inputSchema: z.strictObject({ environment, operationId: z.string(), input: conditionalSchema }),
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    }, ({ environment: env, operationId, input }) => result(() => conditional(principal, { environment: env, operationId, input })));
     server.registerTool('t3_reconciliar_escrita', {
       description: 'Looks up the receipt of a write operation in the same environment; never repeats the mutation.',
       inputSchema: z.strictObject({ environment, operationId: z.string() }),
@@ -321,5 +365,5 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     }, ({ environment: env, projectId }) => result(() => countThreads(principal, { environment: env, projectId })));
   }
 
-  return { gate, inventory, dispatch, reconcile, registerTools, close() { for (const c of conexoes) c.fechar?.(); } };
+  return { gate, inventory, dispatch, conditional, reconcile, registerTools, close() { for (const c of conexoes) c.fechar?.(); } };
 }

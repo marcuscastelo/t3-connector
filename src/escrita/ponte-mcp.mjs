@@ -4,6 +4,7 @@ import {McpServer} from '@modelcontextprotocol/sdk/server/mcp.js';
 import {z} from 'zod';
 import {ACTIONS,schemaForAction,SEND_DESCRIPTION,LAUNCH_DESCRIPTION} from './adapters.mjs';
 import {LEITURAS} from './read-guarded.mjs';
+import {CONDITIONAL_TOOL,CONDITIONAL_DESCRIPTION,conditionalSchema} from './conditional.mjs';
 
 export const VERSAO_ESCRITA='0.12.1';
 
@@ -19,6 +20,8 @@ const MENSAGENS={
  lease_closed:'lease missing, expired or revoked; request approval (t3_pedir_aprovacao)',
  gate_unavailable:'the approval gate on the local machine is not running',
  dispatch_rejected:'rejected while the connector prepared the request, before sending it to T3; no mutation was sent. It does not mean the model is blocked or the provider is invalid',
+ request_id_mismatch:'operationId must equal input.clientRequestId',
+ operation_conflict:'this operationId was already used with a different input; use a new operationId',
  reconciliation_required:'the connector tried to send to T3 but could not confirm the result (RPC, transport or acknowledgement failure); this does not prove the thread was not created nor that the model is invalid. Do not retry and do not create with another provider as a fallback; call t3_reconciliar_escrita with the same environment and operationId',
 };
 
@@ -59,6 +62,9 @@ export function criarPonteEscrita({relay,aliases=[],approvalOrigin}) {
   :action;
  for(const action of ACTIONS)registrar(`t3_escrever_${action.replaceAll('.','_').replaceAll('-','_')}`,{description:`${descricaoAcao(action)} in the chosen environment; requires a 60-min passkey-approved lease that includes this environment; authorization permits full-access; actions exposing runtimeMode accept an explicit T3 execution mode (default full-access).`,forma:{leaseId:z.string(),environment,operationId:z.string(),input:schemaForAction(action)},annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:false}},
   ({leaseId,environment:amb,operationId,input})=>resultado(async()=>comAmbiente(await relay({op:'dispatch',action,leaseId,ambiente:amb,operationId,input}))));
+
+ registrar(CONDITIONAL_TOOL,{description:`${CONDITIONAL_DESCRIPTION} Chosen environment only; requires a lease that includes thread.send (and thread.model-selection.set when modelSelection is given). operationId must equal input.clientRequestId.`,forma:{leaseId:z.string(),environment,operationId:z.string(),input:conditionalSchema},annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:true}},
+  ({leaseId,environment:amb,operationId,input})=>resultado(async()=>comAmbiente(await relay({op:'conditional-send',leaseId,ambiente:amb,operationId,input}))));
 
  const cursor=z.string().min(1).optional();
  const leituras={t3_projetos:{search:z.string().min(1).optional(),limit:z.number().int().min(1).optional(),cursor},t3_atencao:{},

@@ -15,6 +15,17 @@
   `model_option_value_unsupported`, `model_capabilities_unknown`,
   `model_capabilities_unavailable`) and a message naming the offered values, on both the
   lease and OAuth paths. Valid selections are sent unchanged, with no default added.
+- New write tool `t3_escrever_thread_conditional_send` (lease bridge and OAuth): "after run
+  `afterRunId` ends, optionally apply `modelSelection`, then send `text`" as one request with one
+  `clientRequestId`. The precondition (run terminal, still the latest, nothing active) is checked
+  before the first step and again right before the send; a run started in between refuses the
+  send instead of letting T3 queue it. Steps reuse `thread.model-selection.set` and `thread.send`
+  `start_immediately` through the existing dispatch (journal, scope, stable commandId, fail-closed
+  uncertainty) under `<clientRequestId>:model-selection` and `<clientRequestId>:send`. A manifest in
+  the same journal records every observation and step: retries replay it (only
+  `precondition_pending` is re-evaluated), concurrent duplicates share one execution, and the
+  result states `precondition_pending | precondition_failed | failed | uncertain | completed`, with
+  `delivery.deliveredAs` from the run T3 created. No new consented action; existing tools unchanged.
 
 ## 0.12.1
 

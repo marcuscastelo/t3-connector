@@ -13,10 +13,10 @@ async function ponte(relay) {
  const c=new Client({name:'t',version:'0'});await c.connect(a);return c;
 }
 
-test('catálogo: 42 escritas, aprovação, 5 leituras e reconcile; environment obrigatório em todas as que tocam dados',async()=>{
+test('catálogo: 42 escritas, envio condicional, aprovação, 5 leituras e reconcile; environment obrigatório em todas as que tocam dados',async()=>{
  const c=await ponte(async()=>({}));
  const {tools}=await c.listTools();
- assert.equal(tools.length,ACTIONS.length+7);
+ assert.equal(tools.length,ACTIONS.length+8);
  for(const t of tools.filter(t=>t.name!=='t3_pedir_aprovacao')){assert.ok(t.inputSchema.required.includes('environment'),t.name);assert.equal('ambiente' in t.inputSchema.properties,false,t.name);}
  assert.ok(!tools.some(t=>/dispatchCommand|rpc/.test(t.name)));
 });
