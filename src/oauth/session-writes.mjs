@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Dispatcher, ACTIONS, schemaForAction, parseAction, chaveOperacao, SEND_DESCRIPTION } from '../escrita/adapters.mjs';
+import { Dispatcher, ACTIONS, schemaForAction, parseAction, chaveOperacao, SEND_DESCRIPTION, LAUNCH_DESCRIPTION } from '../escrita/adapters.mjs';
 import { grantDoAmbiente } from '../escrita/gate.mjs';
 import { grantFromInventory, escopoDosGrants } from '../escrita/scope.mjs';
 import { identidadeSessaoOAuth, exigirIdentidade } from '../escrita/identidade.mjs';
@@ -83,6 +83,7 @@ const PROJECT_DESCRIPTIONS = {
   'project.delete-force': 'Deletes a project AND all its threads (active and archived), cancelling their pending work. Only on an explicit request to delete the project with its threads: requires force=true, confirmProjectId equal to projectId and expectedThreadCount from t3_contar_threads_projeto; refused if the count changed or a thread has an active run. The workspace directory on disk is kept.',
 };
 const describe = action => PROJECT_DESCRIPTIONS[action] ?? (action === 'thread.send' ? SEND_DESCRIPTION
+  : action === 'thread.launch' ? LAUNCH_DESCRIPTION
   : action === 'runtime-request.answer' ? 'Answers a pending user_input runtime request using requestId and answers keyed by question ID from t3_thread.pedidosPendentes; thread.send does NOT answer it.'
   : action === 'runtime-request.approve' ? 'Responds to a pending approval runtime request using requestId and decision from t3_thread.pedidosPendentes; user_input requires runtime-request.answer instead.'
   : action);

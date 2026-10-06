@@ -241,6 +241,11 @@ provider support; the connector forwards the selected mode without upgrading it.
 `full-access` is the authorization ceiling, not a requirement to use that execution mode.
 Interaction mode behavior is unchanged.
 
+A thread on a new branch and worktree is opened by `thread.launch` alone:
+`workspaceStrategy: {type: 'worktree', baseRef, branch?, startFromOrigin?}` makes T3 create the
+branch, the worktree and the thread in one call. There is no separate branch or worktree creation
+tool; `t3_worktree_status` and `t3_worktree_list` only read.
+
 #### Native T3 tools (opt-in)
 
 `T3_CONNECTOR_OAUTH_NATIVE_TOOLS=1` (only with `T3_CONNECTOR_OAUTH_PROJECTS=all`) adds thin

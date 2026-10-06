@@ -40,6 +40,8 @@ const workspace=z.discriminatedUnion('type',[
  z.object({type:z.literal('root'),branch:str.optional()}).strict(),
  z.object({type:z.literal('existing_worktree'),worktreePath:str,branch:str.optional()}).strict(),
  z.object({type:z.literal('worktree'),baseRef:str,branch:str.optional(),startFromOrigin:z.boolean().optional()}).strict()]);
+// Canonical path for a new branch + worktree: agents must not go looking for a separate creation tool.
+export const LAUNCH_DESCRIPTION='Launches a new thread in projectId. This is the canonical way to open an implementation thread on a NEW branch and worktree: workspaceStrategy {type:\'worktree\', baseRef, branch?, startFromOrigin?} makes T3 create the branch from baseRef and its worktree and bind the thread to it in this one call. There is no separate branch or worktree creation tool; do not look for one. {type:\'existing_worktree\', worktreePath} reuses an approved worktree; {type:\'root\'} uses the project checkout. text is the first message.';
 specs.set('thread.launch',{method:'orchestration.launchThread',refs:[],schema:z.object({projectId:id,title:str,modelSelection:model,workspaceStrategy:workspace,runtimeMode,text:z.string().max(100000).optional()}).strict(),encode:p=>{const {text,...rest}=p;return {...rest,commandId:randomUUID(),threadId:randomUUID(),interactionMode:'default',...(text!==undefined?{initialMessage:{messageId:randomUUID(),text,attachments:[]}}:{})};}});
 // One branch per mode: tools/list carries conditional requirements, not just runtime refinements.
 export const SEND_DESCRIPTIONS=Object.freeze({

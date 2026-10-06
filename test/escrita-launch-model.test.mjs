@@ -78,3 +78,10 @@ test('upstream RPC failure remains uncertain, never leaks details or retries lau
  const result=await client.callTool({name:'t3_escrever_thread_launch',arguments:{leaseId:'fake',environment:'isolated',operationId:'pre-send',input:{projectId:'app',title:'isolated',modelSelection:selection,workspaceStrategy:{type:'root'}}}});
  assert.equal(result.isError,true);assert.match(result.content[0].text,/^dispatch_rejected:.*before sending it to T3.*does not mean the model is blocked/);
  });
+
+test('tools/list names thread.launch as the canonical path to a new branch and worktree',async t=>{
+ const p=await isolated(t);const {tools}=await p.client.listTools();
+ const d=tools.find(t=>t.name==='t3_escrever_thread_launch').description;
+ assert.match(d,/canonical way to open an implementation thread on a NEW branch and worktree/);
+ assert.match(d,/type:'worktree', baseRef/);assert.match(d,/no separate branch or worktree creation tool/);
+});
