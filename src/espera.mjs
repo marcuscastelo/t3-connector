@@ -9,6 +9,7 @@ import { msIso } from './instante.mjs';
 import { Cancelada, ErroT3 } from './t3.mjs';
 import { assinar } from './ws.mjs';
 import { motivoDoPedido, runAtivoDaShell, ultimaResposta } from './estado.mjs';
+import { problemasDaLinha } from './validacao.mjs';
 import { aplicarItens, derivarExecucao } from './execucao.mjs';
 import { EntradaInvalida, lerShellFresca } from './busca-threads.mjs';
 
@@ -116,12 +117,14 @@ async function aguardarRun(ambientes, entrada, { signal, agora = Date.now, assin
 
   const latest = obs.thread.latestRunId;
   const ativo = runAtivoDaShell(obs.thread);
+  // Atalho pela shell só com a linha no contrato; fora dele, a subscription decide (revisão R8).
+  const linhaValida = problemasDaLinha(obs.thread).length === 0;
   // Run seguido; null quando o ativo existe mas a shell não diz qual é (waiting atrás de outro).
   const alvo = runPedido ?? (ativo ? ativo.runId : latest);
   if (!alvo && !ativo) return resultado('no_run', false);
   // Status do run seguido segundo a shell; null quando ela não o descreve.
   const statusDaShell = !alvo ? null : alvo === ativo?.runId ? ativo.status : alvo === latest ? obs.thread.status : null;
-  const runDaShell = statusDaShell !== null;
+  const runDaShell = linhaValida && statusDaShell !== null;
   if (runDaShell && TERMINAIS.has(statusDaShell) && !incluirUltimaResposta) {
     obs.run = { id: alvo, status: statusDaShell };
     return resultado('terminal', false);
@@ -254,6 +257,8 @@ async function aguardarExecucao(ambientes, entrada, { signal, agora = Date.now, 
   // terminou depois de um evento novo.
   let versao = 0;
   let ociosaConfirmada = false;
+  // Fim da espera: uma confirmação em voo não reagenda nada depois do retorno (revisão R8, P2).
+  let encerrada = false;
   const resultado = (motivoRetorno, timedOut) => {
     const runs = execucao?.runs;
     const run = runs ? (runs.active ?? runs.latestExecuted ?? runs.latest) : null;
@@ -316,6 +321,7 @@ async function aguardarExecucao(ambientes, entrada, { signal, agora = Date.now, 
   // ociosidade só é afirmada com a linha da shell lida agora, na mesma versão da projeção
   // (revisão R7, P1). Shell atrasada, ilegível ou que bloqueia: volta a esperar e confere de novo.
   const confirmarOciosa = async () => {
+    if (encerrada) return;
     const minha = versao;
     let linha = null;
     try {
@@ -323,14 +329,14 @@ async function aguardarExecucao(ambientes, entrada, { signal, agora = Date.now, 
     } catch {
       linha = null;
     }
-    if (minha !== versao || sinal.aborted) return;
+    if (encerrada || minha !== versao || sinal.aborted) return;
     if (linha) {
       const confirmada = derivar(linha);
       execucao = confirmada;
       if (confirmada.signals.pendingIntervention) return concluir('needs_intervention');
       if (confirmada.signals.operationallyIdle && confirmada.coherence.status === 'coherent') { threadShell = linha; ociosaConfirmada = true; return concluir('execution_idle'); }
     }
-    quieto = setTimeout(() => { if (minha === versao) confirmarOciosa(); }, QUIETO_MS);
+    quieto = setTimeout(() => { if (!encerrada && minha === versao) confirmarOciosa(); }, QUIETO_MS);
   };
   const aoReceber = (itens) => {
     versao++;
@@ -369,6 +375,7 @@ async function aguardarExecucao(ambientes, entrada, { signal, agora = Date.now, 
     if (prazo.aborted) return resultado('timeout', true);
     throw e;
   } finally {
+    encerrada = true;
     clearTimeout(quieto);
     sub?.encerrar();
   }

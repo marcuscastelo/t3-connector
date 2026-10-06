@@ -47,7 +47,10 @@
   `hasActionableProposedPlan`, `pendingRuntimeRequest` and `activeRunId`), so the wait, the
   fallback, settlement and `t3_thread` cannot skip a check; a `null` roster is invalid, not
   empty. `execution_idle` is returned only after a fresh shell row of the same version confirms
-  it (plan and usage limit come from the shell); `executionIdle` is `null` while unconfirmed.
+  it (plan and usage limit come from the shell); `executionIdle` is `null` while unconfirmed. A
+  confirmation still in flight when the wait returns stops there (it no longer re-reads the
+  shell for the life of the process), and `until: "run_terminal"` only answers from the shell
+  when the shell row follows the contract.
 - Control-plane v1, live validation fixes: an absent or empty `supportedRuntimeModes` now counts
   as every mode supported, which is T3's own runtime rule (codex and claudeAgent instances do
   not declare the list); a declared list without the mode is still refused. On the write side
