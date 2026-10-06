@@ -1,11 +1,16 @@
 import test from 'node:test';
+import {fork} from 'node:child_process';
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import assert from 'node:assert/strict';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {InMemoryTransport} from '@modelcontextprotocol/sdk/inMemory.js';
 import {controller} from '../src/escrita/controller.mjs';
 import {criarPonteEscrita} from '../src/escrita/ponte-mcp.mjs';
 import {conditionalSend,evaluatePrecondition,sameModel,manifestKey,CONDITIONAL_TOOL} from '../src/escrita/conditional.mjs';
-import {ACTIONS} from '../src/escrita/adapters.mjs';
+import {ACTIONS,chaveOperacao,parseAction} from '../src/escrita/adapters.mjs';
+import {digest} from '../src/escrita/gate.mjs';
 import {sessionWrites} from '../src/oauth/session-writes.mjs';
 import {SessionAuthority} from '../src/oauth/session-authority.mjs';
 import {consentAll} from '../src/oauth/project-policy.mjs';
@@ -172,7 +177,7 @@ test('scope: a thread outside the lease projects is refused before any step',asy
  assert.deepEqual(t3.calls,[]);
 });
 
-test('uncertain send: fails closed, never resent; retry under a new lease replays uncertain',async()=>{
+test('uncertain send: fails closed, never resent; retry under a new lease re-reads it as uncertain',async()=>{
  const t3=fakeT3(),h=await leaseHarness(t3);
  t3.hooks.invoke=p=>{if(p.type==='message.dispatch')throw new Error('socket closed');};
  const r=await h.call(req());
@@ -183,7 +188,8 @@ test('uncertain send: fails closed, never resent; retry under a new lease replay
  delete t3.hooks.invoke;
  const lease=await h.aprovar();
  const replay=await h.call(req(),{leaseId:lease.leaseId});
- assert.equal(replay.state,'uncertain');assert.equal(replay.replayed,true);
+ // uncertain is not final: the retry re-reads the step's journal (still uncertain) and never resends.
+ assert.equal(replay.state,'uncertain');assert.equal(replay.failedOperationId,'cs-1:send');assert.match(replay.nextAction,/reconcile cs-1:send/);
  assert.deepEqual(t3.calls,['thread.model-selection.set','message.dispatch']);
 });
 
@@ -277,11 +283,71 @@ test('race: a joined call whose session no longer covers the project gets scope_
  assert.equal((await a).state,'completed');await assert.rejects(b,/scope_denied/);
 });
 
+// A step's state comes from the Dispatcher journal: `preparing` (an executor may still send) and
+// `uncertain` are never reported as "not sent", and a replay re-reads them instead of freezing.
+test('a step another write holds in preparing is uncertain, not failed/sent:false; the replay follows the journal',async()=>{
+ const t3=fakeT3(),h=await leaseHarness(t3,{journal:durableJournal()});
+ let release,ready;const paused=new Promise(r=>{release=r;}),preparing=new Promise(r=>{ready=r;});
+ t3.hooks.prepare=async()=>{ready();await paused;};
+ const input=req({modelSelection:undefined});
+ const ordinary=h.c.relay(h.c.capability,{op:'dispatch',ambiente:'local',leaseId:h.lease.leaseId,action:'thread.send',operationId:'cs-1:send',input:{threadId:'thread',clientRequestId:'cs-1:send',text:input.text,delivery:'start_immediately'}});
+ await preparing;
+ const during=await h.call(input);
+ assert.equal(during.state,'uncertain');assert.equal(during.reason,'step_in_progress');assert.equal(during.failedOperationId,'cs-1:send');
+ assert.ok(!('sent' in during));assert.doesNotMatch(during.nextAction,/not sent|nothing was sent/);
+ release();assert.equal((await ordinary).state,'completed');
+ const after=await h.call(input);
+ assert.equal(after.state,'completed');assert.equal(after.steps.find(x=>x.action==='thread.send').state,'completed');
+ assert.equal(t3.calls.filter(x=>x==='message.dispatch').length,1);
+});
+
+test('cross-process: a second executor never answers failed/sent:false while the first can still send',{timeout:20000},async t=>{
+ const db=join(mkdtempSync(join(tmpdir(),'t3-conditional-')),'journal.sqlite'),sends=[],children=[];
+ t.after(()=>{for(const c of children)c.kill();});
+ const launch=role=>{const c=fork(new URL('./conditional/second-executor.mjs',import.meta.url),[db,role],{stdio:['ignore','ignore','inherit','ipc']});children.push(c);c.on('message',m=>{if(m.event==='sent')sends.push(role);});return c;};
+ const event=(c,name)=>new Promise(r=>{const f=m=>{if(m.event===name){c.off('message',f);r(m);}};c.on('message',f);});
+ const first=launch('first');await event(first,'preparing');
+ const second=launch('second'),secondResult=(await event(second,'result')).result;
+ assert.equal(secondResult.state,'uncertain');assert.equal(secondResult.reason,'step_in_progress');assert.ok(!('sent' in secondResult));
+ const firstDone=event(first,'result');first.send('continue');assert.equal((await firstDone).result.state,'completed');
+ const replay=event(second,'replay');second.send('replay');
+ assert.equal((await replay).result.state,'completed');
+ assert.deepEqual(sends,['first']);
+});
+
+test('a result recorded before the step appeared in the journal is not replayed as final',async()=>{
+ const t3=fakeT3({active:'r1'}),h=await leaseHarness(t3,{journal:durableJournal()});
+ t3.endRun();t3.startRun('r2');
+ const input=req({modelSelection:undefined}),first=await h.call(input);
+ assert.equal(first.state,'precondition_failed');
+ t3.endRun();
+ await h.c.relay(h.c.capability,{op:'dispatch',ambiente:'local',leaseId:h.lease.leaseId,action:'thread.send',operationId:'cs-1:send',input:{threadId:'thread',clientRequestId:'cs-1:send',text:input.text,delivery:'start_immediately'}});
+ const replay=await h.call(input);
+ assert.equal(replay.state,'uncertain');assert.equal(replay.reason,'step_changed_after_result');assert.match(replay.nextAction,/reconcile/);
+ assert.equal(t3.calls.filter(x=>x==='message.dispatch').length,1);
+});
+
+test('a send that reached T3 but whose completion could not be journaled is uncertain, not "not sent"',async()=>{
+ const t3=fakeT3(),mem=durableJournal();
+ const journal={...mem,put(k,v){if(v.action==='thread.send'&&v.state==='completed')throw new Error('disk');return mem.put(k,v);}};
+ const h=await leaseHarness(t3,{journal});
+ const r=await h.call(req({modelSelection:undefined}));
+ assert.equal(r.state,'uncertain');assert.equal(r.failedOperationId,'cs-1:send');assert.ok(!('sent' in r));
+ assert.equal(t3.calls.filter(x=>x==='message.dispatch').length,1);
+});
+
 // Engine-level cases with a controlled clock and host.
 function engineHost(t3,{journal=memoryJournal(),dispatchLog=[]}={}) {
  return {caller:'caller',environment:{environmentId:'e',destination:'t3://e'},journal,audit(){},failClosed(){},authorize(){},
   observe:async()=>structuredClone((await t3.shell()).threads[0]),readThread:async()=>({runs:t3.runs}),
-  dispatch:async(action,operationId,input)=>{dispatchLog.push(operationId);await t3.adapter.invoke('x',action==='thread.send'?{type:'message.dispatch',messageId:operationId,dispatchMode:{type:input.delivery}}:{type:action,modelSelection:input.modelSelection});return {state:'completed',receipt:{sequence:1}};}};
+  // Same contract as the Dispatcher: a completed step is journaled under its operationId.
+  dispatch:async(action,operationId,input)=>{
+   dispatchLog.push(operationId);
+   await t3.adapter.invoke('x',action==='thread.send'?{type:'message.dispatch',messageId:operationId,dispatchMode:{type:input.delivery}}:{type:action,modelSelection:input.modelSelection});
+   const key=chaveOperacao({environmentId:'e',destination:'t3://e',caller:'caller',operationId}),record={hash:digest([action,parseAction(action,input).input]),action,state:'completed',receipt:{sequence:1},payloadIds:{messageId:operationId}};
+   if(!journal.reserve(key,record))journal.put(key,record);
+   return {state:'completed',receipt:{sequence:1}};
+  }};
 }
 const clock=()=>{let t=0;return {now:()=>t,sleep:async ms=>{t+=ms;}};};
 
