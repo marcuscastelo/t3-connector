@@ -9,7 +9,7 @@ import {ACTIONS} from '../src/escrita/adapters.mjs';
 import {sessionWrites} from '../src/oauth/session-writes.mjs';
 import {SessionAuthority} from '../src/oauth/session-authority.mjs';
 import {consentAll} from '../src/oauth/project-policy.mjs';
-import {setup,memoryJournal,ORIGIN} from './escrita-fixtures.mjs';
+import {setup,memoryJournal,ORIGIN,providersFor} from './escrita-fixtures.mjs';
 
 const OPUS={instanceId:'claudeAgent',model:'claude-opus-5-5'};
 const FAST={instanceId:'claudeAgent',model:'claude-opus-5-5',options:[{id:'fastMode',value:true}]};
@@ -30,6 +30,7 @@ function fakeT3({status='completed',active=null,model=OPUS}={}) {
  t3.shell=async()=>{t3.shellReads++;await t3.hooks.shell?.(t3.shellReads);return structuredClone({projects:[{id:'app',title:'app',workspaceRoot:'/w/app'},{id:'other',title:'other',workspaceRoot:'/w/other'}],threads:[t3.thread,{id:'foreign',projectId:'other',latestRunId:'x',status:'completed',activeRunId:null}]});};
  t3.adapter={
   prepare:async()=>{await t3.hooks.prepare?.();},
+  providers:async()=>providersFor(FAST),
   projectForThread:async id=>({thread:'app',foreign:'other'})[id],
   invoke:async(method,payload)=>{
    t3.calls.push(payload.type);
@@ -142,6 +143,14 @@ test('race inside T3: a run that appears after the last check is reported as que
  const r=await h.call(req());
  assert.equal(r.state,'completed');assert.equal(r.delivery.deliveredAs,'queued_behind_active');assert.equal(r.delivery.runStatus,'queued');
  assert.equal(r.delivery.messageId,t3.runs.at(-1).userMessageId);
+});
+
+test('unsupported model option: refused at the model step with the exact reason, nothing sent',async()=>{
+ const t3=fakeT3(),h=await leaseHarness(t3);
+ const r=await h.call(req({modelSelection:{...OPUS,options:[{id:'reasoningEffort',value:'high'}]}}));
+ assert.equal(r.state,'failed');assert.equal(r.failedStep,'thread.model-selection.set');assert.equal(r.reason,'model_option_unsupported');
+ assert.match(r.detail,/option "reasoningEffort" is not offered.*Offered options: "fastMode" \(boolean\)/);
+ assert.deepEqual(t3.calls,[]);assert.equal(h.c.gate.status(h.lease.leaseId).active,true);
 });
 
 test('step refused before sending: failed at that step, lease intact, later steps not sent',async()=>{

@@ -138,6 +138,8 @@ async function run(host, key, input, { sleep, now }) {
     } catch (error) {
       entry.state = error.message === 'reconciliation_required' ? 'uncertain' : 'rejected';
       entry.error = /^[a-z_]+$/.test(error.message) ? error.message : 'dispatch_rejected';
+      // A typed refusal (e.g. an unsupported modelSelection) keeps its exact message.
+      if (error.native?.code === entry.error && typeof error.native.message === 'string') entry.detail = error.native.message;
     }
     entry.finishedAt = at();
     record.steps = [...record.steps.filter(s => s.operationId !== operationId), entry];
@@ -167,7 +169,7 @@ async function run(host, key, input, { sleep, now }) {
   if (input.modelSelection) {
     const s = await step('thread.model-selection.set', ids.model, { threadId: input.threadId, modelSelection: input.modelSelection });
     if (s.state === 'uncertain') return finish('uncertain', { failedStep: s.action, reason: 'reconciliation_required' });
-    if (s.state !== 'completed') return finish('failed', { failedStep: s.action, reason: s.error ?? 'step_rejected' });
+    if (s.state !== 'completed') return finish('failed', { failedStep: s.action, reason: s.error ?? 'step_rejected', ...(s.detail ? { detail: s.detail } : {}) });
   }
 
   // 3. Last check before the send: the run must still be the ended one, nothing active, and the
@@ -187,7 +189,7 @@ async function run(host, key, input, { sleep, now }) {
   // 4. The send, as start_immediately: never queue_after_active, steer or restart.
   const s = await step('thread.send', ids.send, { threadId: input.threadId, clientRequestId: ids.send, text: input.text, delivery: 'start_immediately' });
   if (s.state === 'uncertain') return finish('uncertain', { failedStep: s.action, reason: 'reconciliation_required' });
-  if (s.state !== 'completed') return finish('failed', { failedStep: s.action, reason: s.error ?? 'step_rejected', sent: false });
+  if (s.state !== 'completed') return finish('failed', { failedStep: s.action, reason: s.error ?? 'step_rejected', ...(s.detail ? { detail: s.detail } : {}), sent: false });
   return finish('completed', { delivery: await postCheck(host, input, ids.send) });
 }
 
