@@ -55,6 +55,8 @@ export function pedido(campos = {}) {
 export function projecao({ pedidos = [], mensagens = [], turnItems = [], runs = [] } = {}) {
   return {
     thread: {},
+    // Mesma versão do thread() padrão: shell e projeção coerentes por omissão.
+    updatedAt: '2026-10-03T10:05:00.000Z',
     runs,
     runtimeRequests: pedidos,
     turnItems,

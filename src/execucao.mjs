@@ -288,8 +288,14 @@ export function compararShell(shellThread, projecao) {
   const runs = projecao.runs ?? [];
   const porId = new Map(runs.map((r) => [r.id, r]));
   const atualizadaEm = projecao.updatedAt ?? projecao.thread?.updatedAt ?? null;
-  const mesmaVersao = Boolean(atualizadaEm && shellThread.updatedAt && ms(shellThread.updatedAt) === ms(atualizadaEm));
-  if (atualizadaEm && shellThread.updatedAt && !mesmaVersao) {
+  // Mesma versão só com prova positiva: os dois instantes presentes, válidos e iguais. Ausente ou
+  // inválido não "confere" (dois inválidos virariam null === null), é versão não comprovada.
+  const msShell = ms(shellThread.updatedAt);
+  const msProjecao = ms(atualizadaEm);
+  const mesmaVersao = msShell !== null && msProjecao !== null && msShell === msProjecao;
+  if (msShell === null || msProjecao === null) {
+    motivos.push({ code: 'thread_version_unproven', shellUpdatedAt: shellThread.updatedAt ?? null, projectionUpdatedAt: atualizadaEm });
+  } else if (!mesmaVersao) {
     motivos.push({ code: 'thread_version_differs', shellUpdatedAt: shellThread.updatedAt, projectionUpdatedAt: atualizadaEm });
   }
   if (shellThread.latestRunId) {

@@ -94,6 +94,31 @@ test('linha ativa sem projectId (ou malformada) torna a população incompleta, 
   assert.equal(legado.results[0].complete, true);
 });
 
+test('título ausente ou nulo (ativa ou arquivada) não prova ausência; ativa e arquivada divergentes também não (revisão a8d1170 P2)', async () => {
+  const sel = { key: 'x', selector: { title: { value: 'Front X' } } };
+  for (const semTitulo of [{ ...thread({ id: 'hidden', projectId: LOCAL.projeto }), title: undefined }, thread({ id: 'hidden', projectId: LOCAL.projeto, title: null })]) {
+    const ativa = comSequencia(dadosPadrao());
+    ativa.local.shell.threads.push(semTitulo);
+    const r1 = (await lote({ ...V, population: 'all', queries: [sel] }, { d: ativa, lerArquivadas: arquivadas({}) })).results[0];
+    assert.equal(r1.launchDisposition, 'inconclusive');
+    assert.equal(r1.coverage.selectorEvidenceComplete, false);
+    const r2 = (await lote({ ...V, population: 'all', queries: [sel] }, { d: comSequencia(dadosPadrao()), lerArquivadas: arquivadas({ local: [{ ...semTitulo, archivedAt: '2026-10-01T00:00:00.000Z' }] }) })).results[0];
+    assert.equal(r2.launchDisposition, 'inconclusive');
+  }
+  // Mesma thread ativa ("Other") e arquivada ("Front X"): conflito, nunca candidate_new.
+  const d = comSequencia(dadosPadrao());
+  d.local.shell.threads.push(thread({ id: 'dupla', projectId: LOCAL.projeto, title: 'Other' }));
+  const conflito = (await lote({ ...V, population: 'all', queries: [sel] }, { d, lerArquivadas: arquivadas({ local: [thread({ id: 'dupla', projectId: LOCAL.projeto, title: 'Front X', archivedAt: '2026-10-01T00:00:00.000Z' })] }) })).results[0];
+  assert.equal(conflito.launchDisposition, 'inconclusive');
+  assert.ok(conflito.reasons.some((x) => x.code === 'population_conflict'));
+  // Mesma thread nas duas fontes, concordando: conta uma vez, sem conflito.
+  const d2 = comSequencia(dadosPadrao());
+  d2.local.shell.threads.push(thread({ id: 'igual', projectId: LOCAL.projeto, title: 'Front X' }));
+  const igual = (await lote({ ...V, population: 'all', queries: [sel] }, { d: d2, lerArquivadas: arquivadas({ local: [thread({ id: 'igual', projectId: LOCAL.projeto, title: 'Front X', archivedAt: '2026-10-01T00:00:00.000Z' })] }) })).results[0];
+  assert.equal(igual.launchDisposition, 'continue_existing');
+  assert.equal(igual.total, 1);
+});
+
 test('campo do seletor ausente na shell não prova nada: selector_evidence_unavailable', async () => {
   const d = comSequencia(dadosPadrao());
   for (const amb of ['local', 'remoto']) d[amb].shell.threads = d[amb].shell.threads.map(({ branch, ...t }) => t);

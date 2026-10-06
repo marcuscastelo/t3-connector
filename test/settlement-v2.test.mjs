@@ -68,10 +68,12 @@ test('v2: fundo que segura a thread bloqueia com a fonte; comando não; fila e p
 
 test('v2: a shell só acrescenta (pedido, run ativo, roster que a projeção não traz)', () => {
   const o = obs(2, { pendingRuntimeRequest: { id: 'req-shell', kind: 'command' }, pendingBackgroundTasks: [{ kind: 'subagent', taskId: 'sub-1' }] });
-  assert.deepEqual(o.blockers, [
+  // Ordem: o que execution já traz (o roster da shell da mesma versão) vem antes do que só a shell acrescenta.
+  const ordenar = (l) => l.map((b) => JSON.stringify(b)).sort();
+  assert.deepEqual(ordenar(o.blockers), ordenar([
     { code: 'pending_request', requestId: 'req-shell', kind: 'command', source: 'shell' },
     { code: 'background_work_active', taskId: 'sub-1', backgroundKind: 'subagent', source: 'shell_roster' },
-  ]);
+  ]));
   const ativo = obs(2, { status: 'running', activeRunId: 'run-1', activityRunStatus: 'running' });
   assert.deepEqual(ativo.blockers.filter((b) => b.code === 'active_run'), [{ code: 'active_run', runId: 'run-1', status: 'running', source: 'shell' }]);
   assert.equal(avaliarGuard(guard(ativo), ativo), 'settle_active_run');
@@ -104,6 +106,13 @@ test('aquisição exige coerência: versão, binding e mensagem da shell iguais 
   assert.equal(avaliarGuard({ version: 2, expectedRunId: 'run-1', expectedObservationId: 'x', acceptance: { accepted: true, evidenceRef: 'r' } }, atrasada), 'settle_observation_incomplete');
   // Workspace da shell (/repo/B) diferente do snapshot (/repo/A).
   assert.equal((await ler(t({ worktreePath: '/repo/B' }), proj({ worktreePath: '/repo/A' }))).complete, false);
+  // Versão não comprovada: instante ausente ou inválido em qualquer lado (revisão a8d1170, P1).
+  for (const [shellAt, projAt] of [[undefined, '2026-10-03T10:05:00.000Z'], ['2026-10-03T10:05:00.000Z', undefined], ['invalid-a', 'invalid-b'], ['invalid', 'invalid']]) {
+    const p = { ...proj(), updatedAt: projAt };
+    const o = await ler(() => thread({ updatedAt: shellAt }), p);
+    assert.equal(o.complete, false, `${shellAt} / ${projAt}`);
+    assert.equal(avaliarGuard({ version: 2, expectedRunId: 'run-1', expectedObservationId: 'x', acceptance: { accepted: true, evidenceRef: 'r' } }, o), 'settle_observation_incomplete');
+  }
   // Mensagem visível atualizada entre as duas leituras da shell, sem ID novo.
   let n = 0;
   const editando = () => thread({ updatedAt: '2026-10-03T10:05:00.000Z', latestVisibleMessage: { id: 'm-1', updatedAt: `2026-10-03T10:05:0${n++}.000Z` } });

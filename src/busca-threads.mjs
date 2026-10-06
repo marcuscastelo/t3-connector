@@ -137,9 +137,16 @@ async function consultarAmbientes(ambientes, selecionados, { signal, prazoAmbien
         populacaoFinal = { population: estadoPopulacao.population, complete: false, reason: 'active_source_invalid' };
       }
       const visiveis = (Array.isArray(shell.threads) ? shell.threads : []).filter((t) => t && r.escopo.projetoPermitido(t.projectId) && !t.deletedAt);
-      // Arquivadas da mesma sequence, mesma ACL; uma thread vista nas duas leituras conta uma vez.
+      // Arquivadas da mesma sequence, mesma ACL; uma thread vista nas duas leituras conta uma vez,
+      // mas só se as duas linhas concordam no que a busca lê. Divergência (projeto, título,
+      // binding, PRs) não é resolvida escolhendo uma: a população fica incompleta (revisão
+      // a8d1170, P2), como a contagem de projeto faz com projeto divergente.
+      const ativasPorId = new Map((Array.isArray(shell.threads) ? shell.threads : []).filter(Boolean).map((t) => [t.id, t]));
       const ids = new Set(visiveis.map((t) => t.id));
+      const evidencia = (t) => JSON.stringify([t.projectId, t.title ?? null, t.branch ?? null, t.worktreePath ?? null, t.linkedPullRequest ?? null, t.pullRequests ?? null, Boolean(t.deletedAt)]);
       for (const t of arquivadas) {
+        const ativa = ativasPorId.get(t.id);
+        if (ativa && evidencia(ativa) !== evidencia(t)) populacaoFinal = { population: estadoPopulacao.population, complete: false, reason: 'population_conflict' };
         if (!ids.has(t.id) && r.escopo.projetoPermitido(t.projectId) && !t.deletedAt) { ids.add(t.id); visiveis.push({ ...t, _arquivada: true }); }
       }
       resultados.set(r.environmentId, { ok: true, ambiente, projetos, visiveis, populacao: populacaoFinal });
@@ -380,9 +387,13 @@ export function casarSeletor(t, sel, environmentId, projetosAlvo) {
   let desconhecido = false;
   if (sel.threadId !== undefined && t.id !== sel.threadId) return 'no';
   if (sel.title !== undefined) {
-    const alvo = normalizar(sel.title.value);
-    const titulo = normalizar(t.title);
-    if ((sel.title.match ?? 'exact') === 'exact' ? titulo !== alvo : !titulo.includes(alvo)) return 'no';
+    // Título ausente ou não textual não prova nem exclui (revisão a8d1170, P2).
+    if (typeof t.title !== 'string') desconhecido = true;
+    else {
+      const alvo = normalizar(sel.title.value);
+      const titulo = normalizar(t.title);
+      if ((sel.title.match ?? 'exact') === 'exact' ? titulo !== alvo : !titulo.includes(alvo)) return 'no';
+    }
   }
   if (projetosAlvo && !projetosAlvo.has(`${environmentId}\u0000${t.projectId}`)) return 'no';
   for (const campo of ['branch', 'worktreePath']) {

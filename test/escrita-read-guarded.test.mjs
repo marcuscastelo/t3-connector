@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {leituraProtegida,clienteFiltrado} from '../src/escrita/read-guarded.mjs';
 
-const cliente={shell:async()=>({projects:[{id:'one',title:'one',workspaceRoot:'/one'},{id:'two',title:'two',workspaceRoot:'/two'},{id:'future',title:'f',workspaceRoot:'/f'}],threads:[{id:'t',projectId:'one',title:'t',status:'completed',latestRunId:'r'},{id:'hidden',projectId:'future',title:'h',status:'completed',latestRunId:'r'}]}),thread:async()=>({projection:{messages:[],runs:[]}})};
+const cliente={shell:async()=>({projects:[{id:'one',title:'one',workspaceRoot:'/one'},{id:'two',title:'two',workspaceRoot:'/two'},{id:'future',title:'f',workspaceRoot:'/f'}],threads:[{id:'t',projectId:'one',title:'t',status:'completed',latestRunId:'r',updatedAt:'2026-10-03T10:05:00.000Z'},{id:'hidden',projectId:'future',title:'h',status:'completed',latestRunId:'r'}]}),thread:async()=>({projection:{messages:[],runs:[]}})};
 const ambiente={alias:'remoto',environmentId:'env-s'};
 const grant={readProjectIds:['one','two']};
 
@@ -25,7 +25,7 @@ test('cliente filtrado não lê thread de projeto fora do grant',async()=>{
 });
 
 test('leitura sob lease: t3_thread com settlementContractVersion lê o snapshot completo com a mesma ACL',async()=>{
- const projection={thread:{id:'t'},runs:[{id:'r',ordinal:1,status:'completed'}],runtimeRequests:[],messages:[],turnItems:[],providerSessions:[]};
+ const projection={thread:{id:'t'},updatedAt:'2026-10-03T10:05:00.000Z',runs:[{id:'r',ordinal:1,status:'completed'}],runtimeRequests:[],messages:[],turnItems:[],providerSessions:[]};
  const completo={...cliente,thread:async()=>({projection,hasMoreHistory:false}),threadCompleto:async id=>{if(id!=='t')throw new Error('unexpected');return {snapshotSequence:3,projection};}};
  const f=clienteFiltrado(completo,new Set(['one']));
  await assert.rejects(f.threadCompleto('hidden'),/thread_not_found/);
