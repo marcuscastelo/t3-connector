@@ -129,7 +129,7 @@ test('aguardar execution_idle: wake run logo após o fim do observador não é c
   const snap = { kind: 'snapshot', snapshotSequence: 10, projection: projecao({ runs: [run(1, 'completed')], roster: [MONITOR], updatedAt: T(11) }) };
   const wake = { ...run(2, 'running'), requestedAt: iso(300), startedAt: iso(300) };
   const lotes = [
-    [5, [snap]],
+    [5, [snap, { kind: 'synchronized' }]],
     [20, [evento(11, 'provider-thread.updated', { id: PT, pendingBackgroundTasks: [], updatedAt: iso(20) }, iso(20))]],
     [300, [evento(12, 'run.created', wake, iso(300))]],
   ];
@@ -139,6 +139,29 @@ test('aguardar execution_idle: wake run logo após o fim do observador não é c
   assert.equal(r.executionIdle, false);
   assert.equal(r.execution.signals.foregroundActive, true);
   assert.deepEqual(r.execution.continuation.blockers, ['active_run']);
+});
+
+test('aguardar execution_idle: nada decide antes de synchronized (snapshot ocioso + run.created no catch-up)', async () => {
+  // Revisão 334a1840 (P1): snapshot antigo e ocioso, run ativo só no lote seguinte do catch-up.
+  const agora = Date.now();
+  const iso = (ms) => new Date(agora + ms).toISOString();
+  const ocioso = { kind: 'snapshot', snapshotSequence: 10, projection: projecao({ runs: [run(1, 'completed')], roster: [], updatedAt: T(1) }) };
+  const ativo = { ...run(2, 'running'), requestedAt: iso(10), startedAt: iso(10) };
+  const lotes = [
+    [5, [ocioso]],
+    [40, [evento(11, 'run.created', ativo, iso(40)), { kind: 'synchronized' }]],
+  ];
+  const inicio = Date.now();
+  const r = await aguardarThread(ambientesFalsos(shellDoIncidente()), { environment: 'local', threadId: 't-comum', timeoutMs: 700, until: 'execution_idle' }, { assinarImpl: assinaturaFalsa(lotes) });
+  assert.ok(Date.now() - inicio >= 600, `decidiu cedo demais (${Date.now() - inicio} ms)`);
+  assert.equal(r.returnReason, 'timeout');
+  assert.equal(r.executionIdle, false);
+  assert.deepEqual(r.execution.continuation.blockers, ['active_run']);
+  // Sem marcador nenhum: também não declara ociosa (falha fechada no prazo).
+  const sem = await aguardarThread(ambientesFalsos(shellDoIncidente()), { environment: 'local', threadId: 't-comum', timeoutMs: 300, until: 'execution_idle' }, { assinarImpl: assinaturaFalsa([[5, [ocioso]]]) });
+  assert.equal(sem.returnReason, 'timeout');
+  assert.equal(sem.executionIdle, null, 'sem synchronized a ociosidade não é afirmada');
+  assert.equal(sem.synchronized, false);
 });
 
 test('aguardar execution_idle: runId é recusado (segue a thread inteira)', async () => {

@@ -238,6 +238,10 @@ async function aguardarExecucao(ambientes, entrada, { signal, agora = Date.now, 
   const encerradas = [];
   let execucao = null;
   let observadoEm = new Date(agora()).toISOString();
+  // Catch-up: o snapshot e os eventos antes do marcador `synchronized` (pedido com
+  // requestCompletionMarker) ainda não são o estado atual. Nada é decidido antes dele: um
+  // snapshot ocioso seguido de run.created no próximo lote não pode virar execution_idle.
+  let sincronizado = false;
 
   const derivar = () => derivarExecucao({
     projecao: estado.projecao,
@@ -259,7 +263,9 @@ async function aguardarExecucao(ambientes, entrada, { signal, agora = Date.now, 
       statusRun: status,
       state: execucao?.signals.pendingIntervention && !pedido ? 'needs_intervention' : estadoDoRun(status, pedido),
       terminal: TERMINAIS.has(status),
-      executionIdle: execucao?.signals.operationallyIdle ?? null,
+      // Sem `synchronized` a projeção ainda é do catch-up: ociosidade não é afirmada.
+      executionIdle: sincronizado ? (execucao?.signals.operationallyIdle ?? null) : null,
+      synchronized: sincronizado,
       timedOut,
       returnReason: motivoRetorno,
       pendingRequest: pedido ? { runtimeRequestId: pedido.requestId, kind: pedido.kind, reason: motivoDoPedido(pedido.kind), since: pedido.createdAt } : null,
@@ -289,6 +295,7 @@ async function aguardarExecucao(ambientes, entrada, { signal, agora = Date.now, 
       }
     }
     for (const [taskId, t] of pendentes) vistas.set(taskId, t);
+    if (!sincronizado) return;
     if (execucao.signals.pendingIntervention) return concluir('needs_intervention');
     if (!execucao.signals.operationallyIdle) return;
     // Ocioso: só conta depois de QUIETO_MS sem mudança da thread.
@@ -300,6 +307,7 @@ async function aguardarExecucao(ambientes, entrada, { signal, agora = Date.now, 
   const aoReceber = (itens) => {
     aplicarItens(estado, itens);
     observadoEm = new Date(agora()).toISOString();
+    if (itens.some((i) => i.kind === 'synchronized')) sincronizado = true;
     if (itens.some((i) => i.kind === 'event' && i.event?.type === 'thread.deleted')) return concluir('thread_deleted');
     if (estado.projecao) avaliar();
   };
