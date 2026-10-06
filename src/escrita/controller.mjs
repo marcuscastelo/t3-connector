@@ -4,7 +4,7 @@ import {Dispatcher} from './adapters.mjs';
 import {grantFromInventory,escopoDosGrants} from './scope.mjs';
 import {identidadeCanal,exigirIdentidade} from './identidade.mjs';
 import {resolverAmbiente} from './config.mjs';
-import {leituraProtegida} from './read-guarded.mjs';
+import {leituraProtegida,leituraProtegidaMulti} from './read-guarded.mjs';
 import {fontesEscrita,preflightDespacho} from '../despacho.mjs';
 // Private relay only. Its fixed binding is provisioned by the operator bootstrap,
 // never selected by a tool argument/sessionId/callId. No generic RPC forwarding.
@@ -51,6 +51,25 @@ export function controller({conexoes,passkeys,journal,organization,tunnelId,inve
    const current=gate.statusFor(identity);if(current.active)return resumoLease(current);
    const {scope,indisponiveis}=await montarEscopo();
    return {...gate.request(identity,scope),indisponiveis};
+  }
+  // Lease ativa deste canal; nunca renova.
+  const leaseAtiva=()=>{const s=gate.status(request.leaseId);if(!s.active||s.scope.caller!==exigirIdentidade(identity))throw new Error('lease_closed');return s;};
+  if(request.op==='readMulti')return leituraProtegidaMulti({verificarTodos:()=>leaseAtiva().scope.environments,conexoes,operation:request.operation,input:request.input??{}});
+  if(request.op==='preflight'){
+   // Mesmo cálculo e mesma ACL do dispatchGuard no apply (grant da lease); candidatos de projetos
+   // sem leitura no grant saem só como contagem.
+   const s=leaseAtiva();
+   const leitura=new Map(s.scope.environments.map(e=>[e.environmentId,new Set(e.readProjectIds??[])]));
+   let r;
+   try {r=await preflightDespacho(request.input,fontesEscrita(conexoes,s.scope));}
+   catch(e){if(e?.codigo==='invalid_input')throw new Error('invalid_input');throw e;}
+   leaseAtiva();
+   const visivel=c=>leitura.get(c.environmentId)?.has(c.projectId);
+   const filtrar=l=>l.filter(visivel);
+   const ocultos=l=>l.filter(c=>!visivel(c)).length;
+   return {...r,
+    ...(r.duplicateCheck?{duplicateCheck:{...r.duplicateCheck,candidates:filtrar(r.duplicateCheck.candidates),hiddenCandidates:ocultos(r.duplicateCheck.candidates)}}:{}),
+    reasons:r.reasons.map(x=>x.candidates?{...x,candidates:filtrar(x.candidates),hiddenCandidates:ocultos(x.candidates)}:x)};
   }
   const c=resolver(request.ambiente),r=c.registro;
   if(request.op==='dispatch'){

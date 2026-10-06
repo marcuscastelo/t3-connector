@@ -138,7 +138,7 @@ const erro = toolErrorMapper({
   fallback: (e) => `failed to query T3: ${e?.message ?? e}`,
 });
 
-export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {}, opcoesWorkset = {} }) {
+export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {}, opcoesWorkset = {}, aoRegistrar = null }) {
   const servidor = new McpServer({ name: 't3-connector', version: VERSAO });
   const nomes = ambientes.registros.map((r) => r.alias).join(', ');
   const campoAmbiente = z.string().min(1).optional()
@@ -149,7 +149,9 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
    * nome antigo, como `ambiente`) é recusado pelo SDK, em vez de ser descartado e a
    * chamada cair no environment padrão. Ver docs/adr/0004.
    */
-  const registrar = strictRegistrar(servidor);
+  const registrarEstrito = strictRegistrar(servidor);
+  // `aoRegistrar` deixa a ponte com lease reaproveitar os mesmos schemas e descrições.
+  const registrar = (nome, def, fn) => { aoRegistrar?.(nome, def); return registrarEstrito(nome, def, fn); };
 
   /** Executa a ferramenta no environment escolhido, com o sinal de cancelamento do cliente. */
   const noAmbiente = (fn) => async (args, extra) => {
@@ -689,4 +691,15 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
   );
 
   return servidor;
+}
+
+/**
+ * Schemas e descrições das tools de leitura, para a ponte com lease expor exatamente os mesmos
+ * parâmetros (sem duplicar contratos). Monta o servidor sobre um registro sem conexão.
+ */
+export function definicoesDeLeitura(aliases, nomesTools) {
+  const capturadas = new Map();
+  const registros = (aliases.length ? aliases : ['local']).map((alias) => ({ alias, environmentId: alias }));
+  criarServidor({ ambientes: { padrao: registros[0].alias, registros }, aoRegistrar: (nome, def) => capturadas.set(nome, def) });
+  return Object.fromEntries(nomesTools.map((n) => [n, capturadas.get(n)]));
 }

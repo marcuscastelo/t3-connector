@@ -3,7 +3,8 @@
 import {McpServer} from '@modelcontextprotocol/sdk/server/mcp.js';
 import {z} from 'zod';
 import {ACTIONS,schemaForAction,SEND_DESCRIPTION,SETTLE_DESCRIPTION} from './adapters.mjs';
-import {LEITURAS} from './read-guarded.mjs';
+import {LEITURAS,LEITURAS_MULTI} from './read-guarded.mjs';
+import {definicoesDeLeitura} from '../servidor.mjs';
 import {MENSAGENS_GUARD} from '../settlement.mjs';
 
 export const VERSAO_ESCRITA='0.11.2';
@@ -65,8 +66,25 @@ export function criarPonteEscrita({relay,aliases=[],approvalOrigin}) {
   t3_threads:{projectId:z.string().optional(),state:z.enum(['running','needs_intervention','completed','failed','cancelled','no_run','unknown']).optional(),includeNoRun:z.boolean().optional(),search:z.string().min(1).optional(),limit:z.number().int().min(1).max(50).optional(),cursor},
   t3_thread:{threadId:z.string().min(1),maxCharacters:z.number().int().min(200).max(6000).optional(),settlementContractVersion:z.union([z.literal(1),z.literal(2)]).optional(),controlPlaneContractVersion:z.literal(1).optional(),review:z.boolean().optional()},
   t3_mensagens:{threadId:z.string().min(1),limit:z.number().int().min(1).max(20).optional(),maxCharacters:z.number().int().min(100).max(4000).optional()}};
- for(const name of LEITURAS)registrar(name,{description:`${name}: read of the projects approved in the lease, in the chosen environment; requires an active lease and never renews it.${name==='t3_thread'?' Pending runtime requests include full public content and nextAction; thread.send does NOT answer them. Use runtime-request.answer for user_input or runtime-request.approve for approval with the requestId; unavailable detail requires inspection in T3.':''}`,forma:{leaseId:z.string(),environment,...leituras[name]},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true}},
+ for(const name of Object.keys(leituras))registrar(name,{description:`${name}: read of the projects approved in the lease, in the chosen environment; requires an active lease and never renews it.${name==='t3_thread'?' Pending runtime requests include full public content and nextAction; thread.send does NOT answer them. Use runtime-request.answer for user_input or runtime-request.approve for approval with the requestId; unavailable detail requires inspection in T3.':''}`,forma:{leaseId:z.string(),environment,...leituras[name]},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true}},
   async({leaseId,environment:amb,...input})=>{try{return await relay({op:'read',operation:name,leaseId,ambiente:amb,input});}catch(e){return erro(e);}});
+ // Control-plane v1 (§1): as mesmas definições da ponte de leitura, sob lease e sem renová-la.
+ const lease=' Requires an active lease and never renews it; reads only the projects approved for reading in each environment of the lease.';
+ const defs=definicoesDeLeitura(aliases,['t3_providers','t3_aguardar_thread',...LEITURAS_MULTI,'t3_dispatch_preflight']);
+ const semAmbiente=({environment:_e,...shape})=>shape;
+ for(const name of ['t3_providers','t3_aguardar_thread']) {
+  const d=defs[name];
+  registrar(name,{title:d.title,description:d.description+lease,forma:{leaseId:z.string(),environment,...semAmbiente(d.shape)},annotations:d.annotations},
+   async({leaseId,environment:amb,...input})=>{try{return await relay({op:'read',operation:name,leaseId,ambiente:amb,input});}catch(e){return erro(e);}});
+ }
+ for(const name of LEITURAS_MULTI) {
+  const d=defs[name];
+  registrar(name,{title:d.title,description:d.description+lease,forma:{leaseId:z.string(),...d.shape},annotations:d.annotations},
+   async({leaseId,...input})=>{try{return await relay({op:'readMulti',operation:name,leaseId,input});}catch(e){return erro(e);}});
+ }
+ const pre=defs.t3_dispatch_preflight;
+ registrar('t3_dispatch_preflight',{title:pre.title,description:pre.description+' Computed with the lease grant, exactly as the dispatchGuard of the write; candidates in projects you cannot read are only counted (hiddenCandidates).'+lease,forma:{leaseId:z.string(),...pre.shape},annotations:pre.annotations},
+  ({leaseId,...input})=>resultado(()=>relay({op:'preflight',leaseId,input})));
 
  registrar('t3_reconciliar_escrita',{description:'Looks up the receipt of an operation in the same environment; never repeats the mutation; requires a lease.',forma:{leaseId:z.string(),environment,operationId:z.string()},annotations:{readOnlyHint:true,destructiveHint:false}},
   ({leaseId,environment:amb,operationId})=>resultado(async()=>comAmbiente(await relay({op:'reconcile',leaseId,ambiente:amb,operationId}))));

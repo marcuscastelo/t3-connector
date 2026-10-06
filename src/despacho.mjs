@@ -79,7 +79,7 @@ async function duplicatas(fontes, duplicateCheck) {
     populationComplete: q.coverage.populationComplete,
     environmentsComplete: q.coverage.environmentsComplete,
     domain,
-    candidates: q.candidates.map((c) => ({ environmentId: c.environment.environmentId, threadId: c.threadId, archived: c.archived })),
+    candidates: q.candidates.map((c) => ({ environmentId: c.environment.environmentId, threadId: c.threadId, projectId: c.project?.projectId ?? null, archived: c.archived })),
     reasons: q.reasons,
   };
 }

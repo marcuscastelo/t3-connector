@@ -119,7 +119,7 @@ test('leitura protegida usa o grant e o servidor do environment escolhido',async
  assert.equal(dados.environment.alias,'remoto');
  assert.ok(dados.projects.every(p=>p.directory.startsWith('/remoto/')));
  await assert.rejects(relay({op:'read',ambiente:'remoto',leaseId:'outra',operation:'t3_projetos',input:{}}),/lease_closed/);
- await assert.rejects(relay({op:'read',ambiente:'remoto',leaseId:l.leaseId,operation:'t3_aguardar_thread',input:{}}),/action_unavailable/);
+ await assert.rejects(relay({op:'read',ambiente:'remoto',leaseId:l.leaseId,operation:'t3_buscar_threads',input:{}}),/action_unavailable/);
 });
 
 test('reconcile fica no environment da operação',async()=>{

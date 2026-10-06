@@ -127,7 +127,11 @@ export function criarConexaoEscrita(registro, {
       return (shell.projects ?? []).filter((p) => !p.deletedAt).map((p) => ({ id: p.id, name: p.title, directory: p.workspaceRoot ?? p.cwd ?? p.directory }));
     },
     /** Cliente GET verificado, para leitura protegida sob lease (com repetição se o transporte caiu). */
-    cliente: async () => clienteLeitura,
+    cliente: async () => {
+      const e = await abrir().catch((erro) => { descartar(); throw erro; });
+      // WS de leitura (providers, espera, arquivadas): ticket de uso único do mesmo token.
+      return { ...clienteLeitura, base: e.base, ticketWs: (o) => lerComRetry((c) => c.ticketWs(o)) };
+    },
     adapter: {
       prepare: prepararSocket,
       invoke: (metodo, payload, opcoes) => {

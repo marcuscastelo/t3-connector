@@ -13,11 +13,14 @@ async function ponte(relay) {
  const c=new Client({name:'t',version:'0'});await c.connect(a);return c;
 }
 
-test('catálogo: 42 escritas, aprovação, 5 leituras e reconcile; environment obrigatório em todas as que tocam dados',async()=>{
+test('catálogo: 42 escritas, aprovação, 7 leituras de um environment, 3 multi, preflight e reconcile; environment obrigatório em todas as que tocam um environment',async()=>{
  const c=await ponte(async()=>({}));
  const {tools}=await c.listTools();
- assert.equal(tools.length,ACTIONS.length+7);
- for(const t of tools.filter(t=>t.name!=='t3_pedir_aprovacao')){assert.ok(t.inputSchema.required.includes('environment'),t.name);assert.equal('ambiente' in t.inputSchema.properties,false,t.name);}
+ assert.equal(tools.length,ACTIONS.length+13);
+ const multi=['t3_ambientes','t3_thread_find_batch','t3_workset'];
+ for(const t of tools.filter(t=>t.name!=='t3_pedir_aprovacao'&&!multi.includes(t.name))){assert.ok(t.inputSchema.required.includes('environment'),t.name);assert.equal('ambiente' in t.inputSchema.properties,false,t.name);}
+ // Multi-environment reads take `environments` (optional filter) and always the lease.
+ for(const name of multi){const t=tools.find(t=>t.name===name);assert.ok(t,name);assert.ok(t.inputSchema.required.includes('leaseId'),name);assert.equal('environment' in t.inputSchema.properties,false,name);}
  assert.ok(!tools.some(t=>/dispatchCommand|rpc/.test(t.name)));
 });
 

@@ -152,8 +152,13 @@ version), and refresh the tool list in the client.
 6. **Before choosing a provider or model**, call `t3_providers` in the target environment.
    See [Provider instances](#provider-instances-t3_providers).
 6. **When coordinating several threads** (or after losing context), start with `t3_workset`,
-   read each thread with `t3_thread` and `settlementContractVersion: 1` before deciding, and
-   settle with `settleGuard`. See [docs/orchestration-bfs.md](docs/orchestration-bfs.md).
+   read each thread with `t3_thread` and `settlementContractVersion: 2` before deciding, and
+   settle with `settleGuard` version 2. See [docs/orchestration-bfs.md](docs/orchestration-bfs.md).
+7. **For control-plane decisions** (where to start work, whether a front already exists, what
+   to review, whether a launch or send would be admitted), pass `controlPlaneContractVersion: 1`
+   to `t3_ambientes` (`route`), `t3_thread_find_batch` (`selector`, `population`),
+   `t3_workset` (`reviewQueue`) and `t3_thread` (`review`), and check writes with
+   `t3_dispatch_preflight`. See [docs/control-plane.md](docs/control-plane.md).
 
 ### Read tools
 
@@ -170,6 +175,7 @@ which put it on each thread.
 | `t3_thread_find_batch` | `queries` (1-50; each `{key, search, match?}` or `{key, threadId}`, with `limit?` (1-20, 5) and `cursor?`), `environments?` | `summary`, `complete`, `environmentFailures`; `results` in query order, each with `resolution`, `total`, `complete`, `environmentFailures` and `candidates` |
 | `t3_atencao` (attention) | `environment?` | threads that need intervention, or failed and were not settled |
 | `t3_workset` | `environments?` (omitted: every environment), `limitPerGroup?` (1-100, 25) | `observedAt`, `complete`, `queriedEnvironments`, `environmentFailures`, `counts`, `truncated?`, `actionable` and `inFlight` (the active queue: no settled idle, future-snoozed or archived threads), `groups` (needs_intervention, running, background_pending, unknown, snoozed, failed_unsettled, completed_unsettled, cancelled_unsettled), `archived` (listed apart; `available: false` until a validated source exists) |
+| `t3_dispatch_preflight` | `controlPlaneContractVersion` (1), **`environment`**, `action` (`thread.launch`, `thread.send`), `input`, `expected`, `duplicateCheck?` (launch) | `admissible`, `inputDigest`, `observationId`, `reasons`, `workspace`, `duplicateCheck` or `expectedRunId`/`execution`; nothing is sent (see [Control plane](docs/control-plane.md)) |
 | `t3_thread` | `environment?`, `threadId`, `maxCharacters?` (200-6000, 1500), `settlementContractVersion?` (1) | thread summary, `pendingRequests`, `providerSession` (informational), `activeRun?`, `latestRun`, `latestResponse`, `history`, `execution` (see [Execution snapshot](docs/execution-snapshot.md)); with `settlementContractVersion: 1` also `settlement` (blockers, observationId, lifecycle fields), built from the same full-snapshot observation as `execution` |
 | `t3_mensagens` (messages) | `environment?`, `threadId`, `limit?` (1-20, 6), `maxCharacters?` (100-4000, 800) | `messages` and `history.complete` |
 | `t3_providers` (provider instances) | `environment?`, `instanceId?` (exact, case-sensitive), `includeModels?` (include models, default false) | `source`, `total`, `providers` in T3 order, each with the T3 field names (see below) |
@@ -428,6 +434,12 @@ are refused at start-up with the new name in the message.
 - `passkey.rpName` and `passkey.userName` only label the registration of a new passkey.
   The `rpID` is always `localhost`; changing the labels does not invalidate existing
   passkeys.
+
+Protected writes (control-plane v1): `thread.launch` and `thread.send` accept `dispatchGuard`
+from an admissible `t3_dispatch_preflight`; the connector repeats the preflight right before
+sending and refuses with `dispatch_*` codes on any change. The lease bridge also offers
+`t3_ambientes`, `t3_thread_find_batch`, `t3_workset`, `t3_providers`, `t3_aguardar_thread` and
+`t3_dispatch_preflight` under the lease. See [docs/control-plane.md](docs/control-plane.md).
 
 ### How a client should write
 

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Control-plane v1, profile parity: the lease bridge offers `t3_ambientes`,
+  `t3_thread_find_batch`, `t3_workset` (over every environment of the lease, each with its own
+  read projects), `t3_providers`, `t3_aguardar_thread` and `t3_dispatch_preflight`, with the
+  exact parameters and descriptions of the read tools; the lease is checked before and after
+  and never renewed. The bridge's preflight is computed with the lease grant, exactly as the
+  `dispatchGuard`, and only counts candidates in projects that cannot be read. The bridge now
+  lists 55 tools (was 49). New guide: `docs/control-plane.md`.
 - Control-plane v1, protected dispatch: new read tool `t3_dispatch_preflight` checks a
   `thread.launch` or `thread.send` without sending or reserving anything (inputDigest,
   observationId, reasons; `writeAuthorization: not_checked`). Launch needs workspace `root` or an
