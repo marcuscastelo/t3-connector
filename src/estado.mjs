@@ -159,6 +159,66 @@ export function estadoDaThread(thread, pedidosPendentes = []) {
   return { state: 'unknown', stateSource: 'latest_run', ...base };
 }
 
+// Marcador Woke: a thread acordou de um snooze e o usuário ainda não reconheceu.
+//
+// Não há flag persistida: o T3 deriva o marcador no cliente a partir de campos duráveis da
+// shell (snoozedUntil, snoozedAt, lastVisitedAt, settledOverride, último run, pedido
+// pendente) e do relógio. Fonte: T3 Code nightly 3e6b4502 (0.0.46-nightly.20261005.2689),
+// igual ao main 9bd1d800:
+// - threadWokeAt / threadRaisedHandWhileSnoozed (packages/client-runtime/src/state/threadSettled.ts:103-211);
+// - tradução da shell (packages/client-runtime/src/state/models.ts:173-274);
+// - regra do indicador (apps/web/src/components/Sidebar.tsx:1239-1244) e watermark do
+//   servidor autoritativo (apps/web/src/components/Sidebar.logic.ts:756-765).
+// Prazo vencido não gera evento nem muda updatedAt: o marcador depende de `agora`.
+// Não confundir com `completionWake`, política de entrega de uma delegated task ao pai.
+
+function instante(texto) {
+  return texto == null ? NaN : Date.parse(texto);
+}
+
+/** Instante em que a thread acordou do snooze, ou null se nunca dormiu ou ainda dorme. */
+function acordouEm(thread, agoraMs) {
+  const prazo = instante(thread.snoozedUntil);
+  if (Number.isNaN(prazo)) return null;
+  const pedido = thread.pendingRuntimeRequest?.kind;
+  // auth_refresh não conta como aprovação nem como pergunta (models.ts:249-253).
+  const pedidoAcorda = pedido != null && pedido !== 'auth_refresh';
+  // Runtime da shell: activityRunStatus nunca é "failed", então só falha o último run sem
+  // atividade; sem run nem provider thread não há runtime.
+  const temRuntime = thread.latestRunId != null || thread.activeProviderThreadId != null;
+  const falhou = temRuntime && !thread.activityRunStatus && thread.status === 'failed';
+  const statusUltimo = thread.status === 'idle' ? 'completed' : thread.status;
+  const terminouEm = thread.latestRunCompletedAt === undefined
+    ? (statusUltimo === 'completed' || CANCELADA.has(statusUltimo) || statusUltimo === 'failed' ? thread.updatedAt : null)
+    : thread.latestRunCompletedAt;
+  const snoozeEm = instante(thread.snoozedAt);
+  const concluiuDepois = thread.latestRunId != null && statusUltimo === 'completed' && terminouEm != null
+    && instante(terminouEm) > snoozeEm;
+  // Só falha nova acorda: snooze feito sobre uma falha já vista continua valendo.
+  const falhaNova = falhou && (thread.snoozedAt == null || instante(thread.updatedAt) > snoozeEm);
+  if (pedidoAcorda || falhaNova || concluiuDepois) {
+    if (concluiuDepois) return terminouEm;
+    return (temRuntime ? thread.updatedAt : null) ?? thread.snoozedAt ?? null;
+  }
+  return prazo <= agoraMs ? thread.snoozedUntil : null;
+}
+
+/**
+ * `{woke, wokeAt}` de um item da shell. `woke` é true/false, ou null quando o servidor não
+ * traz os campos (anterior ao snooze ou ao watermark de visita compartilhado; o T3 recorre
+ * então à visita local do navegador, que o connector não vê). Ler não reconhece o marcador.
+ */
+export function marcadorWoke(thread, agora = new Date().toISOString()) {
+  if (thread.snoozedUntil === undefined) return { woke: null, wokeAt: null };
+  const wokeAt = acordouEm(thread, Date.parse(agora));
+  const acordouMs = instante(wokeAt);
+  if (Number.isNaN(acordouMs) || thread.settledOverride === 'settled') return { woke: false, wokeAt };
+  if (thread.lastVisitedAt === undefined) return { woke: null, wokeAt };
+  // Visita ilegível conta como nunca visitada (Sidebar.tsx:1237-1239).
+  const visitaMs = instante(thread.lastVisitedAt);
+  return { woke: Number.isNaN(visitaMs) || visitaMs < acordouMs, wokeAt };
+}
+
 /** Pedidos `pending` do snapshot /bounded, do mais antigo para o mais novo. */
 export function pedidosPendentes(projecao) {
   return (projecao.runtimeRequests ?? [])

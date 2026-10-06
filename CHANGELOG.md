@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Read tools: thread summaries add `woke` and `wokeAt`, the "Woke" marker of the T3 sidebar
+  (a thread that woke from a snooze and was not acknowledged yet), derived from the shell with
+  T3's own rule. `woke` is `null` when the server does not expose the snooze or shared visited
+  state. `t3_threads` (and its read under a write lease) accepts an optional `woke` filter.
+  Additive: existing fields, `state`, cursors without the filter and other tools' selection are
+  unchanged. Reading never acknowledges the marker. Unrelated to delegated task `completionWake`.
+
 ## 0.11.2
 
 - Read tools: one source-of-truth contract for thread state and model. `state` now gives an
