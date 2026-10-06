@@ -21,6 +21,7 @@ import { assinatura, casaBusca, comparador, CursorInvalido, normalizar, paginar 
 import { Cancelada, ErroT3 } from './t3.mjs';
 import { resumirPedidosRuntime } from './pedidos-runtime.mjs';
 import { lerThreadsEmLote, MAX_ALVOS, PRAZO_MAX_MS, PRAZO_PADRAO_MS } from './leitura-lote.mjs';
+import { LIMITE_MAXIMO, LIMITE_PADRAO, snapshotPlanoControle } from './plano-controle.mjs';
 
 export const VERSAO = '0.12.1';
 const ESTADOS = ['running', 'needs_intervention', 'completed', 'failed', 'cancelled', 'no_run', 'unknown'];
@@ -355,6 +356,31 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         .filter((t) => t.state === 'needs_intervention' || (t.state === 'failed' && !t.settled));
       return { total: itens.length, threads: itens };
     }),
+  );
+
+  registrar(
+    't3_control_plane',
+    {
+      title: 'Control plane snapshot across environments',
+      description:
+        'One call for what to act on next, across every configured environment (or only `environment`), each with its own ACL: threads `running`, threads in `needsIntervention`, and `ready` threads (latest run completed, failed or cancelled and not settled nor snoozed, or woke), each with `environment: {alias, environmentId, name}`, project, branch, directory, model, the canonical `state`, `activeRun`, a `pendingRequest` summary (requestId, kind, reason, since) and `next` (the t3_thread call that reads it). ' +
+        '`ready` is potentially actionable, not acceptance: `readyReasons` says why and `blockers: [background_work_pending]` (with `actionableNow: false`) marks background work the shell reports. ' +
+        `Each environment has ${PRAZO_AMBIENTE_MS} ms and the whole call ${PRAZO_TOTAL_MS} ms. Environments that fail or time out are listed in \`environmentFailures\` and \`complete\` is false: their threads are missing from every list and count, so the answer is NOT a global view; never conclude that nothing needs attention from an incomplete snapshot. ` +
+        'Each environment is one shell read (`snapshotSequence`, `readAt`, counts by state in `queriedEnvironments`); environments are not read at one instant. Each list is ordered by `updatedAt` (newest first) and cut at `limit` with `total` and `truncated`; for more use t3_threads with `state` in that environment. Request content and answers are read with t3_thread. ' +
+        CONTRATO_ESTADO + ' ' + CONTRATO_WOKE + ' Read-only.',
+      shape: {
+        environment: z.string().min(1).optional().describe(`Restrict the snapshot to one environment (alias or environmentId): ${nomes}. Omitted: every configured environment`),
+        limit: z.number().int().min(1).max(LIMITE_MAXIMO).optional().describe(`Maximum threads per list (needsIntervention, running, ready); default ${LIMITE_PADRAO}. \`total\` counts every match in the environments that answered`),
+      },
+      annotations: SO_LEITURA,
+    },
+    async (args, extra) => {
+      try {
+        return resposta(await snapshotPlanoControle(ambientes, args, { ...opcoesBusca, signal: extra?.signal, resumir: resumoDaThread }));
+      } catch (e) {
+        return erro(e);
+      }
+    },
   );
 
   registrar(

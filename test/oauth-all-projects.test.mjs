@@ -63,6 +63,23 @@ test('all: same sign-in reads every tool and writes projects created later in bo
   assert.deepEqual(f.c.connector.authority.check(f.c.connector.tokens.resolveAccess(at).sid).grants, grants);
 });
 
+test('all: t3_control_plane spans both environments with projects created after login and names a host that fails', async t => {
+  const f = await fixture(t); const at = (await f.c.signIn()).tokens.access_token;
+  const local = f.add('local'), remoto = f.add('remoto');
+  const x = body(await f.c.callTool(at, 't3_control_plane', {}));
+  assert.equal(x.complete, true);
+  assert.deepEqual(x.queriedEnvironments.map(e => e.alias), ['local', 'remoto']);
+  for (const [env, id] of [['local', local], ['remoto', remoto]]) {
+    const item = x.needsIntervention.threads.find(i => i.threadId === `t-${id}`);
+    assert.equal(item.environment.alias, env); assert.equal(item.pendingRequest.kind, 'user_input');
+  }
+  f.data.remoto.shell = () => Promise.reject(new Error('down'));
+  const y = body(await f.c.callTool(at, 't3_control_plane', {}));
+  assert.equal(y.complete, false);
+  assert.deepEqual(y.environmentFailures.map(e => e.alias), ['remoto']);
+  assert.ok(y.needsIntervention.threads.every(i => i.environment.alias === 'local'));
+});
+
 test('all: empty inventory and offline host at login recover within the same session', async t => {
   const f = await fixture(t, { empty: true }); f.connections[1].offline = true;
   const at = (await f.c.signIn()).tokens.access_token;
