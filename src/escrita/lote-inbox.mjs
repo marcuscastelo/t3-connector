@@ -97,17 +97,24 @@ const PARADAS = new Set(['uncertain_send', 'session_closed', 'journal_failed']);
  * - `observar(item)`: journal record of the item's operationId, or undefined;
  * - `erro(code)`: public `{code, message}` of an item error.
  */
+// Resultados por chave do item: a chave vem do cliente, então nunca indexa um objeto comum
+// (`__proto__` trocaria o protótipo e sumiria do JSON; `constructor` seria herdado). Em memória é
+// um Map; no manifesto, uma lista de pares [key, result]. Manifesto antigo em objeto: só as
+// próprias chaves (revisão 334a1840, P2).
+const gravadosDe = (results) => (Array.isArray(results) ? new Map(results) : new Map(Object.entries(results ?? {})));
+
 export async function executarLote(lote, { caller, store, autorizar, autorizarReplay, executar, observar, erro, prazoMs = PRAZO_LOTE_MS, signal }) {
   const key = chaveManifesto(caller, lote.batchId);
   autorizar();
-  const owned = store('reserve', key, { hash: lote.hash, action: lote.action, state: 'running', results: {} });
+  const owned = store('reserve', key, { hash: lote.hash, action: lote.action, state: 'running', results: [] });
   if (!owned) {
     const old = store('get', key);
     if (!old) throw new Error('journal_failed');
     if (old.hash !== lote.hash) throw new LoteInvalido('batch_conflict');
     autorizarReplay(lote.itens);
+    const gravados = gravadosDe(old.results);
     const itens = lote.itens.map((item) => {
-      const gravado = old.results[item.key];
+      const gravado = gravados.get(item.key);
       if (gravado) return { item, result: gravado.status === 'not_started' ? gravado : replay(gravado) };
       const record = observar(item);
       return { item, result: record ? itemDoJournal(record) : { status: 'not_started' } };
@@ -116,26 +123,26 @@ export async function executarLote(lote, { caller, store, autorizar, autorizarRe
   }
 
   const prazo = Date.now() + prazoMs;
-  const results = {};
+  const results = new Map();
   let stopped = null;
   for (const item of lote.itens) {
     if (stopped) {
-      results[item.key] = { status: 'not_started', error: erro('batch_stopped') };
+      results.set(item.key, { status: 'not_started', error: erro('batch_stopped') });
       continue;
     }
     if (signal?.aborted || Date.now() > prazo) {
       stopped = { reason: signal?.aborted ? 'cancelled' : 'deadline', key: item.key };
-      results[item.key] = { status: 'not_started', error: erro('batch_stopped') };
+      results.set(item.key, { status: 'not_started', error: erro('batch_stopped') });
       continue;
     }
     const { result, stop } = await executar(item);
-    results[item.key] = result;
+    results.set(item.key, result);
     if (stop && PARADAS.has(stop)) stopped = { reason: stop, key: item.key };
     // Each item is recorded before the next one is attempted: a crash leaves a partial manifest.
-    store('put', key, { hash: lote.hash, action: lote.action, state: 'running', results, ...(stopped ? { stopped } : {}) });
+    store('put', key, { hash: lote.hash, action: lote.action, state: 'running', results: [...results], ...(stopped ? { stopped } : {}) });
   }
-  store('put', key, { hash: lote.hash, action: lote.action, state: 'finished', results, ...(stopped ? { stopped } : {}) });
-  return envelope(lote, lote.itens.map((item) => ({ item, result: results[item.key] })), { replay: false, stopped });
+  store('put', key, { hash: lote.hash, action: lote.action, state: 'finished', results: [...results], ...(stopped ? { stopped } : {}) });
+  return envelope(lote, lote.itens.map((item) => ({ item, result: results.get(item.key) })), { replay: false, stopped });
 }
 
 function replay(gravado) {
