@@ -13,8 +13,10 @@
   or a `projectId` it does not authorize) is reported as `refused`. `environment` is now an
   optional filter: with it, only that environment is read and a failure there is still an
   error. `t3_thread` and `t3_mensagens` without `environment` locate the ID across every
-  environment and read it where it exists (`environmentDiscovery` in the response); they
-  refuse when it exists in more than one or in none. `t3_aguardar_thread` keeps requiring
+  environment and read it only when every environment answered and exactly one has it
+  (`environmentDiscovery` in the response); they refuse when it exists in more than one, when
+  every environment answered and none has it, and when any environment failed or timed out,
+  since the ID could also live there (the message never claims absence in that case). `t3_aguardar_thread` keeps requiring
   `environment`, and every write action still does. Pagination keys gain the environment as a
   tiebreaker and cursors are bound to the set of environments that answered; cursors issued by
   0.12.0 are rejected with the usual message. `t3_ambientes` no longer returns `default`

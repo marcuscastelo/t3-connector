@@ -143,10 +143,13 @@ version), and refresh the tool list in the client.
    never fall back to another environment: "thread not found" means it does not exist in
    *that* environment or is not in one of its authorized projects. Without `environment`
    the connector locates the ID across every environment (shell only, each environment's
-   ACL) and reads it where it exists; the response carries `environment` and
-   `environmentDiscovery`. It refuses when the ID exists in more than one environment
-   (ask the user, then pass `environment`) or when no environment that answered has it
-   (the message names the environments that did not answer).
+   ACL) and reads it only when every environment answered and exactly one has it; the
+   response carries `environment` and `environmentDiscovery`. It refuses when the ID
+   exists in more than one environment (ask the user, then pass `environment`), when
+   every environment answered and none has it (definitive absence), and when any
+   environment failed or timed out, even if one that answered has the ID: the ID could
+   also live in the one that did not answer, so the message names it and asks for
+   `environment` or a retry, without claiming absence.
    **To find a thread by title**, call `t3_buscar_threads` (find threads): each result
    carries the environment where the thread lives. When `total` is above 1, ask the user
    which one; never pick by order or recency.
@@ -343,7 +346,8 @@ This is connector regression coverage, not a live backend acceptance test.
 without `environment` read every configured environment (at most 4 at a time), apply
 each environment's ACL and merge the results; each item carries
 `environment: {alias, environmentId, name}`. `t3_thread` and `t3_mensagens` without
-`environment` locate the thread ID the same way (shell only) and read it where it exists
+`environment` locate the thread ID the same way (shell only) and read it only when every
+environment answered and exactly one has it
 ([ADR 0005](docs/adr/0005-reads-span-environments.md)).
 
 - **Deadlines:** 4 s per environment (connection, shell and retry) and 10 s for the

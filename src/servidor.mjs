@@ -105,7 +105,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
   const campoAmbiente = z.string().min(1).optional()
     .describe(`Restrict to one T3 environment (alias or environmentId): ${nomes}. Omitted: every configured environment is queried and each item says which one it came from. Project and thread IDs are only valid inside their own environment.`);
   const campoAmbienteDaThread = z.string().min(1).optional()
-    .describe(`Environment where the thread lives (alias or environmentId): ${nomes}. Omitted: the thread ID is located across every configured environment and read where it exists; refused when it exists in more than one (pass the environment) or when it was found nowhere.`);
+    .describe(`Environment where the thread lives (alias or environmentId): ${nomes}. Omitted: the thread ID is located across every configured environment and read only when every environment answered and exactly one has it; refused when it exists in more than one, when none has it, or when any environment failed or timed out (then the ID could still live there, so pass \`environment\` or retry).`);
 
   /**
    * Registra a ferramenta com schema estrito: um parâmetro desconhecido (por exemplo um
@@ -178,8 +178,11 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
 
   /**
    * Localiza um threadId em todos os environments, só pela shell e com a ACL de cada um.
-   * Um só: devolve o registro e o resumo da varredura. Nenhum ou mais de um: recusa, sem
-   * escolher. Threads arquivadas contam, como em `exigirThread`.
+   * Só resolve quando todos responderam e exatamente um tem a thread. Mais de um: recusa.
+   * Varredura incompleta (algum environment falhou ou não respondeu): recusa mesmo que um
+   * respondente a tenha, porque o ID pode existir também no que não respondeu e a
+   * ambiguidade não pode ser descartada. Nenhum a tem com todos respondendo: ausência
+   * definitiva. Threads arquivadas contam, como em `exigirThread`.
    */
   async function localizarThread(threadId, signal) {
     const varredura = await varrerAmbientes(ambientes, {
@@ -198,15 +201,18 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
     });
     const onde = varredura.sucesso.filter((x) => x.valor);
     const localizacao = resumoCobertura(varredura, (valor) => valor);
-    if (onde.length === 1) return { r: onde[0].r, localizacao };
     if (onde.length > 1) {
       throw new EntradaInvalida(`thread ${threadId} exists in more than one environment (${nomesDe(onde.map((x) => x.ambiente))}); pass \`environment\` to choose one`);
     }
-    const respondidos = varredura.sucesso.length ? `environments queried: ${nomesDe(varredura.sucesso.map((x) => x.ambiente))}` : 'no environment answered';
-    const pendentes = varredura.falhas.length
-      ? `; environments that did not answer: ${varredura.falhas.map((f) => `${f.alias} (${f.code})`).join(', ')}; the thread may live in one of them`
-      : '';
-    throw new ForaDoEscopo(`thread ${threadId} not found in the authorized projects of any environment (${respondidos}${pendentes})`);
+    if (varredura.falhas.length) {
+      const semResposta = varredura.falhas.map((f) => `${f.alias} (${f.code})`).join(', ');
+      const achado = onde.length
+        ? `it was found in environment ${onde[0].ambiente.alias}, but `
+        : varredura.sucesso.length ? `it was not found in ${nomesDe(varredura.sucesso.map((x) => x.ambiente))}, and ` : '';
+      throw new EntradaInvalida(`thread ${threadId} could not be resolved without \`environment\`: ${achado}${semResposta} did not answer, so the ID could also live there and the ambiguity cannot be ruled out; pass \`environment\`${onde.length ? ` (${onde[0].ambiente.alias} to read the one found)` : ''} or retry later`);
+    }
+    if (onde.length === 1) return { r: onde[0].r, localizacao };
+    throw new ForaDoEscopo(`thread ${threadId} not found in the authorized projects of any environment (every environment answered: ${nomesDe(varredura.sucesso.map((x) => x.ambiente))})`);
   }
 
   /**
@@ -478,7 +484,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
     {
       title: 'Thread state and latest response',
       description:
-        'Detailed state of an authorized thread, latest response and pending runtime requests. pendingRequests includes requestId, responseCapability, nextAction and content: user_input questions with IDs/options/field constraints, or approval prompt/options. Follow nextAction: answer questions with runtime-request.answer (answers keyed by question ID); approvals use runtime-request.approve (decision). thread.send does NOT answer a pending runtime request and can remain queued behind the blocked run. If contentAvailable is false, do not infer an answer: inspect the request in T3. Pass the thread environment when known; without it the ID is located across every environment and refused if it exists in more than one (`environmentDiscovery` says what was queried). ' +
+        'Detailed state of an authorized thread, latest response and pending runtime requests. pendingRequests includes requestId, responseCapability, nextAction and content: user_input questions with IDs/options/field constraints, or approval prompt/options. Follow nextAction: answer questions with runtime-request.answer (answers keyed by question ID); approvals use runtime-request.approve (decision). thread.send does NOT answer a pending runtime request and can remain queued behind the blocked run. If contentAvailable is false, do not infer an answer: inspect the request in T3. Pass the thread environment when known; without it the ID is located across every environment and read only when all answered and exactly one has it (`environmentDiscovery` says what was queried); it is refused when the ID exists in more than one, in none, or when any environment failed or timed out, because the ID could still live there. ' +
         CONTRATO_ESTADO + ' ' + CONTRATO_WOKE + ' ' +
         '`activeRun` (present while a run is active) is that run with the model it executes; `latestRun` is the newest run and, when it differs from `activeRun`, is informational. ' +
         'Model precedence: `model` is what the thread runs next; `activeRun.model` is what the active run executes (fixed when the run was requested); `providerSession` (status, model) is the provider process as last reported and is informational only: it can keep the previous model after a model change and read `ready` while a run is active, so never use it to decide the model or the state. ' +
@@ -527,7 +533,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
     {
       title: 'Recent thread messages',
       description:
-        'Latest user and assistant messages of an authorized thread, oldest first, with truncated text. They come from the recent window of the thread; `history.complete` false means older messages exist outside it. Pass the thread environment when known; without it the ID is located across every environment and refused if it exists in more than one. Read-only.',
+        'Latest user and assistant messages of an authorized thread, oldest first, with truncated text. They come from the recent window of the thread; `history.complete` false means older messages exist outside it. Pass the thread environment when known; without it the ID is located across every environment and read only when all answered and exactly one has it; refused when it exists in more than one, in none, or when any environment failed or timed out. Read-only.',
       shape: {
         environment: campoAmbienteDaThread,
         threadId: z.string().min(1),

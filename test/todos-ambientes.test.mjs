@@ -211,23 +211,64 @@ test('t3_thread e t3_mensagens sem environment localizam a thread onde ela exist
   assert.equal('environmentDiscovery' in direto, false);
 });
 
-test('thread por ID em nenhum environment: recusa que distingue "não achou" de "alguém não respondeu"', async () => {
+test('thread por ID em nenhum environment, todos respondendo: ausência definitiva', async () => {
   const c = await conectarMcp(ambientesFalsos());
-  const nada = await c.callTool({ name: 't3_thread', arguments: { threadId: 'nao-existe' } });
-  assert.equal(nada.isError, true);
-  assert.match(nada.content[0].text, /not found in the authorized projects of any environment \(environments queried: local, remoto\)$/);
+  for (const name of ['t3_thread', 't3_mensagens']) {
+    const nada = await c.callTool({ name, arguments: { threadId: 'nao-existe' } });
+    assert.equal(nada.isError, true, name);
+    assert.match(nada.content[0].text, /^thread nao-existe not found in the authorized projects of any environment \(every environment answered: local, remoto\)$/, name);
+  }
+});
 
+test('t3_mensagens ambígua: o mesmo ID nos dois environments é recusado sem ler nenhum', async () => {
+  const chamadas = [];
+  const c = await conectarMcp(ambientesFalsos(undefined, { chamadas }));
+  const r = await c.callTool({ name: 't3_mensagens', arguments: { threadId: 't-comum' } });
+  assert.equal(r.isError, true);
+  assert.match(r.content[0].text, /exists in more than one environment \(local, remoto\); pass `environment`/);
+  assert.ok(!chamadas.some((x) => x.includes(':thread:')), 'nenhum /bounded foi lido');
+});
+
+test('descoberta incompleta é estrita: achada no local mas o remoto falhou, ou achada no remoto mas o local falhou, recusa sem ler', async () => {
+  for (const [caiu, achada, onde] of [['remoto', 't-local', 'local'], ['local', 't-llm', 'remoto']]) {
+    const d = dadosPadrao();
+    d[caiu].shell = recusa(401);
+    const chamadas = [];
+    const c = await conectarMcp(ambientesFalsos(d, { chamadas }));
+    for (const name of ['t3_thread', 't3_mensagens']) {
+      const r = await c.callTool({ name, arguments: { threadId: achada } });
+      assert.equal(r.isError, true, `${name} ${achada}`);
+      assert.match(r.content[0].text, new RegExp(`^thread ${achada} could not be resolved without \`environment\`: it was found in environment ${onde}, but ${caiu} \\(http_401\\) did not answer, so the ID could also live there and the ambiguity cannot be ruled out; pass \`environment\` \\(${onde} to read the one found\\) or retry later$`), r.content[0].text);
+      assert.doesNotMatch(r.content[0].text, /not found/, 'não afirma ausência');
+    }
+    assert.ok(!chamadas.some((x) => x.includes(':thread:')), 'nenhum /bounded foi lido');
+    // Com o environment em que ela está, a leitura segue.
+    const ok = dados(await c.callTool({ name: 't3_thread', arguments: { environment: onde, threadId: achada } }));
+    assert.equal(ok.threadId, achada);
+  }
+});
+
+test('descoberta incompleta sem achar em quem respondeu: recusa que não afirma ausência', async () => {
   const d = dadosPadrao();
-  d.remoto.shell = recusa(401);
-  const c2 = await conectarMcp(ambientesFalsos(d));
-  const talvez = await c2.callTool({ name: 't3_thread', arguments: { threadId: 't-llm' } });
-  assert.equal(talvez.isError, true);
-  assert.match(talvez.content[0].text, /environments queried: local; environments that did not answer: remoto \(http_401\); the thread may live in one of them/);
-  // Achada no que respondeu, com a varredura incompleta registrada.
-  const achada = dados(await c2.callTool({ name: 't3_thread', arguments: { threadId: 't-local' } }));
-  assert.equal(achada.environment.alias, 'local');
-  assert.equal(achada.environmentDiscovery.complete, false);
-  assert.equal(achada.environmentDiscovery.environmentFailures[0].code, 'http_401');
+  d.remoto.shell = nunca;
+  const c = await conectarMcp(ambientesFalsos(d), { prazoAmbienteMs: 50 });
+  const r = await c.callTool({ name: 't3_thread', arguments: { threadId: 'nao-existe' } });
+  assert.equal(r.isError, true);
+  assert.match(r.content[0].text, /^thread nao-existe could not be resolved without `environment`: it was not found in local, and remoto \(timeout\) did not answer, so the ID could also live there/);
+  assert.doesNotMatch(r.content[0].text, /not found in the authorized projects of any environment/);
+});
+
+test('zero environments respondem: recusa sem dizer que a thread não existe', async () => {
+  const d = dadosPadrao();
+  d.local.shell = recusa(403);
+  d.remoto.shell = recusa(500);
+  const c = await conectarMcp(ambientesFalsos(d));
+  for (const name of ['t3_thread', 't3_mensagens']) {
+    const r = await c.callTool({ name, arguments: { threadId: 't-llm' } });
+    assert.equal(r.isError, true, name);
+    assert.match(r.content[0].text, /^thread t-llm could not be resolved without `environment`: local \(http_403\), remoto \(http_500\) did not answer, so the ID could also live there and the ambiguity cannot be ruled out; pass `environment` or retry later$/, name);
+    assert.doesNotMatch(r.content[0].text, /not found/, name);
+  }
 });
 
 test('thread arquivada conta na localização por ID, como em exigirThread', async () => {
@@ -252,7 +293,11 @@ test('descrições: nenhuma ferramenta promete environment padrão; as de listag
     assert.match(tools.find((t) => t.name === nome).description, /Scope contract: without `environment` every configured environment is queried/, nome);
   }
   for (const nome of ['t3_thread', 't3_mensagens']) {
-    assert.match(tools.find((t) => t.name === nome).inputSchema.properties.environment.description, /located across every configured environment/, nome);
+    const t = tools.find((t) => t.name === nome);
+    assert.match(t.inputSchema.properties.environment.description, /located across every configured environment and read only when every environment answered and exactly one has it/, nome);
+    assert.match(t.inputSchema.properties.environment.description, /any environment failed or timed out/, nome);
+    assert.match(t.description, /read only when all answered and exactly one has it/, nome);
+    assert.match(t.description, /any environment failed or timed out/, nome);
   }
   assert.deepEqual(tools.find((t) => t.name === 't3_aguardar_thread').inputSchema.required.sort(), ['environment', 'threadId', 'timeoutMs']);
 });

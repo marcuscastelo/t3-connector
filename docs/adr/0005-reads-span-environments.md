@@ -43,12 +43,16 @@ environment, mark the result incomplete) was the behavior the other reads needed
    The top-level `environment` field is kept in that case.
 5. **Reads by ID locate, never choose.** `t3_thread` and `t3_mensagens` without
    `environment` run the same sweep over the shells to find the thread ID (archived
-   threads included, as `exigirThread` accepts them). Exactly one environment has it:
-   the read proceeds there and the response carries `environment` and
-   `environmentDiscovery` (the sweep summary). More than one: refused, asking for
-   `environment`. None: refused, naming the environments that answered and the ones
-   that did not, because the thread may live in one of those. With `environment`, the
-   read never looks elsewhere (ADR 0001 unchanged).
+   threads included, as `exigirThread` accepts them). The read proceeds only when every
+   environment answered and exactly one has it; the response then carries
+   `environment` and `environmentDiscovery` (the sweep summary). More than one: refused,
+   asking for `environment`. Every environment answered and none has it: refused as
+   definitive absence. Any environment failed or timed out: refused even if one that
+   answered has the ID, because the ID could also live in the one that did not answer
+   and the ambiguity cannot be ruled out (independent review, 2026-10-06); the message
+   names the environment found, if any, and the ones that did not answer, and asks for
+   `environment` or a retry without claiming absence. With `environment`, the read never
+   looks elsewhere (ADR 0001 unchanged).
 6. **Writes and waiting are unchanged.** `t3_aguardar_thread` and every write action keep
    requiring `environment`; there is still no fallback between environments.
 7. **Pagination.** Keys gain `environmentId` as a tiebreaker before the item ID (the same
