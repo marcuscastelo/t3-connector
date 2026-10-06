@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Fixes from the independent review of the control-plane candidate: `t3_aguardar_thread`
+  `until: "execution_idle"` decides nothing before the subscription's `synchronized` marker
+  (and reports `synchronized`); a settlement observation is complete only when the shell
+  describes the same thread version and binding as the full snapshot (a lagging shell, another
+  worktree or an edited message refuses the guard); batch results survive item keys such as
+  `__proto__` or `constructor`; route/preflight check option values by descriptor type
+  (`select`, `boolean`; any other type is `capability_unknown`); the front lookup treats a
+  malformed active row as incomplete coverage (`active_source_invalid`).
 - Control-plane v1, live validation fixes: an absent or empty `supportedRuntimeModes` now counts
   as every mode supported, which is T3's own runtime rule (codex and claudeAgent instances do
   not declare the list); a declared list without the mode is still refused. On the write side
