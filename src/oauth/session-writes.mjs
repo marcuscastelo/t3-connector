@@ -114,7 +114,7 @@ export const writeToolName = action => `t3_escrever_${action.replaceAll('.', '_'
 // In restricted mode, `allowedProjects` (Map alias → Set of project ids) narrows the sign-in grant
 // to those projects; an environment without an entry gets no grant. Without it the grant is the
 // full inventory, as with the lease.
-export function sessionWrites({ conexoes, journal, authority, issuer, allowedProjects = null, inventoryMs = 15000, batchDeadlineMs = PRAZO_LOTE_MS, projectPolicy = 'restricted', projectAdmin = false, nativeTools = false, audit = e => journal.audit(e) }) {
+export function sessionWrites({ conexoes, journal, authority, issuer, allowedProjects = null, inventoryMs = 15000, batchDeadlineMs = PRAZO_LOTE_MS, projectPolicy = 'restricted', projectAdmin = false, nativeTools = false, audit = e => journal.audit(e), chamarImpl }) {
   const all = projectPolicy === 'all';
   if (projectAdmin && !all) throw new Error('OAuth project administration requires projectPolicy all');
   if (nativeTools && !all) throw new Error('OAuth native tools require projectPolicy all');
@@ -122,7 +122,7 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
   const gate = new SessionWriteGate({ authority, issuer, audit });
   const registros = conexoes.map(c => c.registro);
   const porAlias = new Map(conexoes.map(c => [c.registro.alias, c]));
-  const dispatchers = new Map(all ? [] : conexoes.map(c => [c.registro.alias, new Dispatcher({ gate, adapter: c.adapter, journal, environmentId: c.registro.environmentId, destination: c.registro.destination, dispatchPreflight: (pedido, { scope }) => preflightDespacho(pedido, fontesEscrita(conexoes, scope)) })]));
+  const dispatchers = new Map(all ? [] : conexoes.map(c => [c.registro.alias, new Dispatcher({ gate, adapter: c.adapter, journal, environmentId: c.registro.environmentId, destination: c.registro.destination, dispatchPreflight: (pedido, { scope }) => preflightDespacho(pedido, fontesEscrita(conexoes, scope, { chamarImpl })) })]));
   const identity = principal => identidadeSessaoOAuth({ issuer, subject: principal.sub });
   const resolve = chave => porAlias.get(resolverAmbiente(registros, chave).alias);
 
@@ -187,7 +187,7 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     const adapter = { ...c.adapter, projectForThread: async id => threadProject(shell, id) };
     const d = new Dispatcher({ gate: opGate, adapter, journal, environmentId: c.registro.environmentId, destination: c.registro.destination,
       authorizeRecorded: target => authorizeRecord(principal, c, target.action),
-      dispatchPreflight: (pedido, { scope }) => preflightDespacho(pedido, fontesEscrita(conexoes, scope)),
+      dispatchPreflight: (pedido, { scope }) => preflightDespacho(pedido, fontesEscrita(conexoes, scope, { chamarImpl })),
       resolveGrant: async () => { shell = await liveShell(principal, c); opGate.operationGrant = grantFrom(shell); return opGate.operationGrant; },
       validateTarget: async ({ target, input, spec, validateWorkspace }) => {
         const latest = await liveShell(principal, c);

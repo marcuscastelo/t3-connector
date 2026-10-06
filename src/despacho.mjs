@@ -20,6 +20,7 @@ import { elegibilidadeProvider } from './rota.mjs';
 import { buscarFrentes, falhaSanitizada, lerShellFresca } from './busca-threads.mjs';
 import { lerObservacaoComDados } from './settlement.mjs';
 import { Cancelada } from './t3.mjs';
+import { lerProviders } from './providers.mjs';
 
 export const DISPATCH_GUARD_VERSIONS = Object.freeze([1]);
 const sha = (v) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
@@ -263,13 +264,13 @@ export function ambientesDeConexoes(conexoes, scope) {
   };
 }
 
-/** Providers e arquivadas pelo RPC da conexão de escrita (mesmas fontes da leitura). */
-export const fontesEscrita = (conexoes, scope) => ({
+/**
+ * Providers pelo WS de leitura da conexão de escrita (o transporte de escrita não aceita
+ * `server.getConfig`: rpc_unavailable, conferido ao vivo em 06/10) e arquivadas pelo RPC da
+ * conexão, o mesmo da contagem de projeto. `chamarImpl` só para testes.
+ */
+export const fontesEscrita = (conexoes, scope, { chamarImpl } = {}) => ({
   ambientes: ambientesDeConexoes(conexoes, scope),
-  lerProviders: async (cliente, r) => {
-    const config = await cliente.rpc('server.getConfig', {});
-    if (config?.environment?.environmentId !== r.environmentId || !Array.isArray(config.providers)) throw new Error('environment_mismatch');
-    return config.providers;
-  },
+  lerProviders: (cliente, r, o = {}) => lerProviders(cliente, { environmentIdEsperado: r.environmentId, signal: o.signal, ...(chamarImpl ? { chamarImpl } : {}) }),
   lerArquivadas: (cliente) => cliente.rpc('orchestration.getArchivedShellSnapshot', {}),
 });

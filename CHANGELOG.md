@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Control-plane v1, live validation fixes: an absent or empty `supportedRuntimeModes` now counts
+  as every mode supported, which is T3's own runtime rule (codex and claudeAgent instances do
+  not declare the list); a declared list without the mode is still refused. On the write side
+  (lease bridge and OAuth dispatchGuard) providers are read over the read WS, because the write
+  transport refuses `server.getConfig` (`rpc_unavailable`), which made every protected launch
+  inadmissible.
 - Control-plane v1, profile parity: the lease bridge offers `t3_ambientes`,
   `t3_thread_find_batch`, `t3_workset` (over every environment of the lease, each with its own
   read projects), `t3_providers`, `t3_aguardar_thread` and `t3_dispatch_preflight`, with the

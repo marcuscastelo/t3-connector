@@ -4,9 +4,12 @@
 //
 // Filtros duros, nesta ordem: environment permitido e respondendo, projeto vivo e autorizado,
 // provider da instância pedida habilitado, instalado, `ready`, autenticado, com o modo de
-// execução declarado e o modelo/opções exatos. Valor ausente ou desconhecido é
-// `capability_unknown`, nunca sucesso (decisão 4 da §9). Plataforma exigida sem fonte é
-// `insufficient_evidence`.
+// execução e o modelo/opções exatos. Valor ausente ou desconhecido é `capability_unknown`, nunca
+// sucesso (decisão 4 da §9), com uma exceção provada pela fonte: `supportedRuntimeModes` ausente
+// ou vazio é a regra do próprio T3 para "todos os modos rodam como pedidos"
+// (apps/server/src/orchestration-v2/RuntimePolicy.ts:79-87 em 8ed276c2; providers codex e
+// claudeAgent não declaram a lista, conferido ao vivo em 06/10). Lista declarada sem o modo é
+// recusa: o T3 rodaria em approval-required. Plataforma exigida sem fonte é `insufficient_evidence`.
 //
 // Ordem dos elegíveis (lexicográfica, ascendente): afinidade de workspace, afinidade de branch,
 // índice da preferência explícita, inFlight, needsIntervention, unknown, environmentId. Carga =
@@ -43,8 +46,9 @@ export function elegibilidadeProvider(provider, { model, options = [], runtimeMo
   const auth = provider.auth?.status;
   if (auth === undefined) r('capability_unknown', 'auth.status');
   else if (auth !== 'authenticated') r('provider_unavailable', 'auth.status', { value: auth });
-  if (!Array.isArray(provider.supportedRuntimeModes)) r('capability_unknown', 'supportedRuntimeModes');
-  else if (!provider.supportedRuntimeModes.includes(runtimeMode)) r('runtime_mode_unsupported', 'supportedRuntimeModes', { value: runtimeMode });
+  const modos = provider.supportedRuntimeModes;
+  if (modos !== undefined && !Array.isArray(modos)) r('capability_unknown', 'supportedRuntimeModes');
+  else if (Array.isArray(modos) && modos.length > 0 && !modos.includes(runtimeMode)) r('runtime_mode_unsupported', 'supportedRuntimeModes', { value: runtimeMode });
   if (!Array.isArray(provider.models)) r('capability_unknown', 'models');
   else {
     const m = provider.models.find((x) => x?.slug === model);

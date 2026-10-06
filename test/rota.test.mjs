@@ -31,7 +31,7 @@ test('elegibilidade: só ready+authenticated+modo+modelo+opções explícitos; a
     [provider({ enabled: false }), 'provider_unavailable'],
     [provider({ auth: { status: 'unauthenticated' } }), 'provider_unavailable'],
     [provider({ auth: undefined }), 'capability_unknown'],
-    [provider({ supportedRuntimeModes: undefined }), 'capability_unknown'],
+    [provider({ supportedRuntimeModes: 'full-access' }), 'capability_unknown'],
     [provider({ supportedRuntimeModes: ['approval-required'] }), 'runtime_mode_unsupported'],
     [provider({ models: [{ slug: 'outro' }] }), 'provider_model_unavailable'],
     [provider({ availability: 'unavailable' }), 'provider_unavailable'],
@@ -44,6 +44,17 @@ test('elegibilidade: só ready+authenticated+modo+modelo+opções explícitos; a
     assert.ok(e.reasons.some((x) => x.code === code), `${code}: ${JSON.stringify(e.reasons)}`);
   }
   assert.ok(elegibilidadeProvider(provider(), { ...pedido, options: [{ id: 'reasoningEffort', value: 'ultra' }] }).reasons.some((x) => x.code === 'model_option_unsupported'));
+});
+
+test('elegibilidade: supportedRuntimeModes ausente ou vazio é a regra do T3 para "todos os modos" (codex e claudeAgent ao vivo)', () => {
+  // RuntimePolicy.ts:79-87 (8ed276c2): undefined ou [] roda o modo pedido; lista sem ele cai em approval-required.
+  for (const modos of [undefined, []]) {
+    const e = elegibilidadeProvider(provider({ supportedRuntimeModes: modos }), pedido);
+    assert.equal(e.eligible, true, JSON.stringify(modos));
+  }
+  assert.ok(elegibilidadeProvider(provider({ supportedRuntimeModes: ['approval-required'] }), pedido).reasons.some((x) => x.code === 'runtime_mode_unsupported'));
+  // Os outros fatos continuam obrigatórios: auth ausente segue desconhecido.
+  assert.equal(elegibilidadeProvider(provider({ supportedRuntimeModes: undefined, auth: undefined }), pedido).eligible, false);
 });
 
 test('ordem: afinidade, branch, preferência, carga, intervenção, unknown, ID; mesma entrada embaralhada dá o mesmo ranking', () => {
@@ -90,7 +101,7 @@ test('rota: provider ausente/desconhecido e plataforma exigida falham fechado; n
   const sem = await rota({ candidates: candidatos() }, { providers: { [LOCAL.environmentId]: [provider({ status: 'disabled' })], [REMOTO.environmentId]: [provider({ instanceId: 'outro' })] } });
   assert.equal(sem.route.decision, 'no_eligible_environment');
   assert.equal(sem.route.recommendedEnvironmentId, null);
-  const desconhecido = await rota({ candidates: candidatos() }, { providers: { [LOCAL.environmentId]: [provider({ supportedRuntimeModes: undefined })], [REMOTO.environmentId]: [provider({ supportedRuntimeModes: undefined })] } });
+  const desconhecido = await rota({ candidates: candidatos() }, { providers: { [LOCAL.environmentId]: [provider({ auth: undefined })], [REMOTO.environmentId]: [provider({ installed: undefined })] } });
   assert.equal(desconhecido.route.decision, 'inconclusive');
   const plataforma = await rota({ candidates: candidatos(), constraints: { requiredPlatform: 'linux' } });
   assert.equal(plataforma.route.decision, 'inconclusive');

@@ -47,7 +47,7 @@ Hard filters (any failure makes the candidate ineligible, with `reasons`):
 | environment allowed and answering | caller, environment | `environment_not_allowed`, `environment_unavailable` |
 | project live and authorized | shell | `project_unavailable` |
 | instance `enabled`, `installed`, `status: ready`, `auth.status: authenticated`, not `availability: unavailable` | `server.getConfig` | `provider_unavailable` |
-| `supportedRuntimeModes` includes the mode | `server.getConfig` | `runtime_mode_unsupported` |
+| `supportedRuntimeModes` includes the mode; absent or empty means every mode (T3's own rule; codex and claudeAgent do not declare it) | `server.getConfig` | `runtime_mode_unsupported` |
 | exact model slug, options in its option descriptors | `server.getConfig` | `provider_model_unavailable`, `model_option_unsupported` |
 | any of these facts missing | `server.getConfig` | `capability_unknown` |
 | `requiredPlatform` (no source in this connector) | — | `insufficient_evidence` |

@@ -21,14 +21,15 @@ function conexao(alias, environmentId, estado) {
     calls,
     registro: { alias, environmentId, destination: `t3://${environmentId}`, acoes: ['thread.launch', 'thread.send'] },
     inventario: async () => [{ id: 'app', name: 'app', directory: `/${alias}/app` }],
-    cliente: async () => ({ shell: async () => shell(), thread: async () => ({ projection: { messages: [], runs: [] }, hasMoreHistory: false }), threadCompleto: async () => { throw new Error('404'); } }),
+    cliente: async () => ({ shell: async () => shell(), thread: async () => ({ projection: { messages: [], runs: [] }, hasMoreHistory: false }), threadCompleto: async () => { throw new Error('404'); }, base: `http://${alias}.invalid/`, ticketWs: async () => 'ticket' }),
     adapter: {
       prepare: async () => {},
       projectForThread: async (id) => (estado.threads[alias].some((t) => t.id === id) ? 'app' : undefined),
       invoke: async (m, p) => { calls.push({ m, p }); return m === 'orchestration.launchThread' ? { threadId: p.threadId, resumed: false } : { sequence: 9 }; },
       receipt: (r) => ('threadId' in r ? { threadId: r.threadId, resumed: r.resumed } : { sequence: r.sequence }),
       reconcile: async () => ({ found: false, state: 'unknown' }),
-      native: { rpc: async (tag) => (tag === 'server.getConfig' ? { environment: { environmentId }, providers: [provider] } : { snapshotSequence: estado.seq, threads: [] }) },
+      // Como o transporte real: só a contagem passa; providers vêm do WS de leitura.
+      native: { rpc: async (tag) => { if (tag !== 'orchestration.getArchivedShellSnapshot') throw new Error('rpc_unavailable'); return { snapshotSequence: estado.seq, threads: [] }; } },
     },
     fechar() {},
   };
@@ -39,7 +40,9 @@ async function montar() {
   const s = setup();
   const local = conexao('local', 'env-p', estado);
   const remoto = conexao('remoto', 'env-s', estado);
-  const c = controller({ conexoes: [local, remoto], passkeys: s.passkeys, journal: { ...memoryJournal(), audit: () => {} }, organization: 'my-org', tunnelId: 'tunnel_fixture' });
+  const porBase = { 'http://local.invalid/': 'env-p', 'http://remoto.invalid/': 'env-s' };
+  const chamarImpl = async ({ baseUrl, tag }) => { if (tag !== 'server.getConfig') throw new Error(`unexpected ${tag}`); return { environment: { environmentId: porBase[String(baseUrl)] }, providers: [provider] }; };
+  const c = controller({ conexoes: [local, remoto], passkeys: s.passkeys, journal: { ...memoryJournal(), audit: () => {} }, organization: 'my-org', tunnelId: 'tunnel_fixture', chamarImpl });
   const r = await c.relay(c.capability, { op: 'request' });
   const ch = c.gate.challenge(r.requestId, ORIGIN);
   const l = await c.gate.approve(r.requestId, { response: s.auth.assertion(ch), origin: ORIGIN });

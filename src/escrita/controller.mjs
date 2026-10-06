@@ -12,12 +12,12 @@ import {fontesEscrita,preflightDespacho} from '../despacho.mjs';
 // Cada environment configurado tem conexão, dispatcher e grant próprios. A operação
 // escolhe o environment por `ambiente` (alias ou environmentId); sem ele, ou fora da
 // lease, falha. Nunca há fallback para outro environment.
-export function controller({conexoes,passkeys,journal,organization,tunnelId,inventarioMs=15000}) {
+export function controller({conexoes,passkeys,journal,organization,tunnelId,inventarioMs=15000,chamarImpl}) {
  const capability=randomBytes(32).toString('base64url');
  const gate=new Gate({audit:e=>journal.audit(e),verify:p=>passkeys.verify(p)});
  const identity=identidadeCanal({organization,tunnelId});
  const registros=conexoes.map(c=>c.registro);
- const dispatchers=new Map(conexoes.map(c=>[c.registro.alias,new Dispatcher({gate,adapter:c.adapter,journal,environmentId:c.registro.environmentId,destination:c.registro.destination,dispatchPreflight:(pedido,{scope})=>preflightDespacho(pedido,fontesEscrita(conexoes,scope))})]));
+ const dispatchers=new Map(conexoes.map(c=>[c.registro.alias,new Dispatcher({gate,adapter:c.adapter,journal,environmentId:c.registro.environmentId,destination:c.registro.destination,dispatchPreflight:(pedido,{scope})=>preflightDespacho(pedido,fontesEscrita(conexoes,scope,{chamarImpl}))})]));
  const porAlias=new Map(conexoes.map(c=>[c.registro.alias,c]));
  const identidade=r=>({alias:r.alias,environmentId:r.environmentId});
  const authenticate=value=>{if(typeof value!=='string'||value.length!==capability.length||!timingSafeEqual(Buffer.from(value),Buffer.from(capability)))throw new Error('channel_unverified');};
@@ -61,7 +61,7 @@ export function controller({conexoes,passkeys,journal,organization,tunnelId,inve
    const s=leaseAtiva();
    const leitura=new Map(s.scope.environments.map(e=>[e.environmentId,new Set(e.readProjectIds??[])]));
    let r;
-   try {r=await preflightDespacho(request.input,fontesEscrita(conexoes,s.scope));}
+   try {r=await preflightDespacho(request.input,fontesEscrita(conexoes,s.scope,{chamarImpl}));}
    catch(e){if(e?.codigo==='invalid_input')throw new Error('invalid_input');throw e;}
    leaseAtiva();
    const visivel=c=>leitura.get(c.environmentId)?.has(c.projectId);

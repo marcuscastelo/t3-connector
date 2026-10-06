@@ -73,8 +73,10 @@ test('launch recusado: frente existente, criação de worktree, modo implícito,
 });
 
 test('launch: provider sem modo declarado e descoberta sem arquivadas falham fechado', async () => {
-  const semModo = await preflight(await cliente({ providers: [provider({ supportedRuntimeModes: undefined })] }), { action: 'thread.launch', input: launch(), expected: expectedRoot, duplicateCheck: dup });
+  const semModo = await preflight(await cliente({ providers: [provider({ auth: undefined })] }), { action: 'thread.launch', input: launch(), expected: expectedRoot, duplicateCheck: dup });
   assert.ok(codigos(semModo).includes('capability_unknown'));
+  const modosNaoDeclarados = await preflight(await cliente({ providers: [provider({ supportedRuntimeModes: undefined })] }), { action: 'thread.launch', input: launch(), expected: expectedRoot, duplicateCheck: dup });
+  assert.equal(modosNaoDeclarados.admissible, true, 'como codex/claudeAgent ao vivo: lista ausente = todos os modos');
   const semArquivo = await preflight(await cliente({ lerArquivadas: null }), { action: 'thread.launch', input: launch(), expected: expectedRoot, duplicateCheck: dup });
   assert.equal(semArquivo.complete, false);
   assert.ok(codigos(semArquivo).includes('front_discovery_incomplete'));
@@ -117,17 +119,20 @@ test('mesmo preflight pela fonte de escrita dá o mesmo inputDigest e observatio
   const leitura = await preflight(c, { action: 'thread.launch', input: launch(), expected: expectedRoot, duplicateCheck: dup });
   const conexao = (alias, environmentId, amb) => ({
     registro: { alias, environmentId, destination: `t3://${environmentId}` },
-    cliente: async () => ({ shell: async () => structuredClone(d[amb].shell), threadCompleto: async (id) => d[amb].completo?.[id] }),
-    adapter: { native: { rpc: async (tag) => (tag === 'server.getConfig' ? { environment: { environmentId }, providers: [provider()] } : { snapshotSequence: 7, threads: [] }) } },
+    cliente: async () => ({ shell: async () => structuredClone(d[amb].shell), threadCompleto: async (id) => d[amb].completo?.[id], base: `http://${alias}.invalid/`, ticketWs: async () => 'ticket' }),
+    // O transporte de escrita não aceita server.getConfig (rpc_unavailable ao vivo); só a contagem.
+    adapter: { native: { rpc: async (tag) => { if (tag !== 'orchestration.getArchivedShellSnapshot') throw new Error('rpc_unavailable'); return { snapshotSequence: 7, threads: [] }; } } },
   });
   const conexoes = [conexao('local', LOCAL.environmentId, 'local'), conexao('remoto', REMOTO.environmentId, 'remoto')];
   const scope = { environments: [{ environmentId: LOCAL.environmentId, projects: [{ id: LOCAL.projeto }] }, { environmentId: REMOTO.environmentId, projects: [{ id: REMOTO.projeto }] }] };
-  const escrita = await preflightDespacho({ action: 'thread.launch', environment: LOCAL.environmentId, input: launch(), expected: expectedRoot, duplicateCheck: dup }, fontesEscrita(conexoes, scope));
+  const porBase = { 'http://local.invalid/': LOCAL.environmentId, 'http://remoto.invalid/': REMOTO.environmentId };
+  const chamarImpl = async ({ baseUrl, tag }) => { assert.equal(tag, 'server.getConfig'); return { environment: { environmentId: porBase[String(baseUrl)] }, providers: [provider()] }; };
+  const escrita = await preflightDespacho({ action: 'thread.launch', environment: LOCAL.environmentId, input: launch(), expected: expectedRoot, duplicateCheck: dup }, fontesEscrita(conexoes, scope, { chamarImpl }));
   assert.equal(escrita.admissible, true, JSON.stringify(escrita.reasons));
   assert.equal(escrita.inputDigest, leitura.inputDigest);
   assert.equal(escrita.observationId, leitura.observationId);
   // Environment fora do grant: a descoberta não cobre o domínio pedido.
-  const semRemoto = await preflightDespacho({ action: 'thread.launch', environment: LOCAL.environmentId, input: launch(), expected: expectedRoot, duplicateCheck: dup }, fontesEscrita(conexoes, { environments: [scope.environments[0]] }));
+  const semRemoto = await preflightDespacho({ action: 'thread.launch', environment: LOCAL.environmentId, input: launch(), expected: expectedRoot, duplicateCheck: dup }, fontesEscrita(conexoes, { environments: [scope.environments[0]] }, { chamarImpl }));
   assert.equal(semRemoto.admissible, false);
   assert.ok(codigos(semRemoto).includes('front_discovery_incomplete'));
 });
