@@ -29,7 +29,8 @@ import { Cancelada } from './t3.mjs';
 import { correrComSinal, falhaSanitizada } from './busca-threads.mjs';
 import { resumoModelo } from './estado.mjs';
 import { seguraAThread } from './execucao.mjs';
-import { comparador } from './paginacao.mjs';
+import { assinatura, comparador, CursorInvalido, paginar, VERSAO_CURSOR } from './paginacao.mjs';
+import { CONTROL_PLANE_CONTRACT_VERSION } from './control-plane.mjs';
 
 export const GRUPOS = Object.freeze([
   'needs_intervention', 'running', 'background_pending', 'unknown', 'snoozed', 'failed_unsettled', 'completed_unsettled', 'cancelled_unsettled',
@@ -41,6 +42,29 @@ export const FILAS = Object.freeze({
 export const PRAZO_AMBIENTE_MS = 6000;
 export const PRAZO_TOTAL_MS = 12000;
 export const LIMITE_PADRAO = 25;
+export const GRUPOS_REVISAO = Object.freeze(['completed_unsettled']);
+export const LIMITE_REVISAO = 20;
+
+export class CursorSnapshotMudou extends CursorInvalido {
+  constructor() {
+    super();
+    this.code = 'cursor_snapshot_changed';
+    this.message = 'cursor_snapshot_changed: the environments or their snapshot sequences changed since the first page; start the review queue again without a cursor and deduplicate by environmentId and threadId';
+  }
+}
+
+/** Mesma fila (grupo, environments) com outro vetor de sequences: o snapshot mudou entre páginas. */
+function mesmaFilaOutroSnapshot(cursor, consulta) {
+  try {
+    const dados = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+    if (dados?.v !== VERSAO_CURSOR) return false;
+    const q = JSON.parse(dados.q);
+    const atual = JSON.parse(consulta);
+    return JSON.stringify(q.slice(0, -1)) === JSON.stringify(atual.slice(0, -1)) && JSON.stringify(q.at(-1)) !== JSON.stringify(atual.at(-1));
+  } catch {
+    return false;
+  }
+}
 
 function grupoDa(item, agora) {
   if (item.state === 'needs_intervention') return 'needs_intervention';
@@ -173,8 +197,10 @@ export async function montarWorkset(ambientes, args, {
   const comparar = comparador([true, false, false]);
   const counts = {};
   const omitidos = {};
+  const completos = {};
   for (const g of GRUPOS) {
     grupos[g].sort((a, b) => comparar(chave(a), chave(b)));
+    completos[g] = grupos[g];
     counts[g] = grupos[g].length;
     if (grupos[g].length > limite) {
       omitidos[g] = grupos[g].length - limite;
@@ -201,7 +227,42 @@ export async function montarWorkset(ambientes, args, {
       threads: lista.slice(0, limite),
     };
   }
+  // Fila de revisão (control-plane v1): página de referências do grupo, antes do corte por grupo,
+  // com cursor ligado aos environments e às sequences de cada um. Mesma classificação (grupoDa).
+  let reviewQueue;
+  if (args.reviewQueue) {
+    const { group, limit = LIMITE_REVISAO, cursor } = args.reviewQueue;
+    const lista = completos[group];
+    const vetor = consultados.map((c) => [c.environmentId, c.snapshotSequence ?? null]);
+    const consulta = assinatura(['t3_workset.reviewQueue', CONTROL_PLANE_CONTRACT_VERSION, group, selecionados.map((r) => r.environmentId), vetor]);
+    const chaveRef = (t) => [t.updatedAt ?? '', t.environment, t.threadId];
+    let pagina;
+    try {
+      pagina = paginar({ itens: lista, consulta, cursor, limite: limit, chave: chaveRef, comparar });
+    } catch (e) {
+      if (e instanceof CursorInvalido && cursor && mesmaFilaOutroSnapshot(cursor, consulta)) throw new CursorSnapshotMudou();
+      throw e;
+    }
+    const idPorAlias = new Map(consultados.map((c) => [c.alias, c.environmentId]));
+    reviewQueue = {
+      group,
+      total: lista.length,
+      returned: pagina.pagina.length,
+      truncated: pagina.truncado,
+      ...(pagina.proximoCursor ? { nextCursor: pagina.proximoCursor } : {}),
+      items: pagina.pagina.map((t) => ({
+        environment: t.environment,
+        environmentId: idPorAlias.get(t.environment) ?? null,
+        threadId: t.threadId,
+        projectId: t.projectId,
+        runId: t.latestRunId ?? t.runId ?? null,
+        updatedAt: t.updatedAt,
+        nextRead: { tool: 't3_thread', controlPlaneContractVersion: CONTROL_PLANE_CONTRACT_VERSION, settlementContractVersion: 2, review: true },
+      })),
+    };
+  }
   return {
+    ...(args.controlPlaneContractVersion ? { controlPlaneContractVersion: args.controlPlaneContractVersion } : {}),
     observedAt: new Date(agora).toISOString(),
     complete: falhas.length === 0,
     queriedEnvironments: consultados,
@@ -212,5 +273,6 @@ export async function montarWorkset(ambientes, args, {
     inFlight: fila(FILAS.inFlight),
     groups: grupos,
     archived,
+    ...(reviewQueue ? { reviewQueue } : {}),
   };
 }

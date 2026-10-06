@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Control-plane v1, review: `t3_workset` with `reviewQueue` (group `completed_unsettled`) pages
+  the whole group before `limitPerGroup`, with a cursor bound to the environments and their
+  snapshot sequences (`cursor_snapshot_changed` when they move) and the next read per item.
+  `t3_thread` with `review: true` (plus `settlementContractVersion: 2`) adds a review packet from
+  the same observation: the expected run, the response attributed to that run (never an older
+  run's text), workspace, linked PRs, related threads from `execution`, evidence references and
+  `verification.status: caller_required`. A missing, stale, truncated or streaming response makes
+  `review.complete` false.
 - Control-plane v1, route: `t3_ambientes` with `controlPlaneContractVersion: 1` and `route`
   recommends where to start new work. Hard filters: environment allowed and answering, project
   authorized, provider enabled, installed, `ready`, authenticated, with the runtime mode and the

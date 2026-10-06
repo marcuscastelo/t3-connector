@@ -24,7 +24,7 @@ import { GRUPOS, LIMITE_PADRAO, montarWorkset, PRAZO_AMBIENTE_MS as PRAZO_WORKSE
 import { compararShell, derivarExecucao } from './execucao.mjs';
 import { lerShellFresca } from './busca-threads.mjs';
 import { chamar } from './ws.mjs';
-import { CONTROL_PLANE_CONTRACT_VERSION } from './control-plane.mjs';
+import { CONTROL_PLANE_CONTRACT_VERSION, montarRevisao } from './control-plane.mjs';
 import { MAX_CANDIDATOS, rotear } from './rota.mjs';
 
 export { lerShellFresca };
@@ -483,11 +483,18 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         environments: z.array(z.string().min(1)).min(1).max(10).optional()
           .describe(`Environments to read (alias or environmentId): ${nomes}. Omitted: every configured environment`),
         limitPerGroup: z.number().int().min(1).max(100).optional().describe(`Maximum threads listed per group; default ${LIMITE_PADRAO}`),
+        controlPlaneContractVersion: z.literal(CONTROL_PLANE_CONTRACT_VERSION).optional(),
+        reviewQueue: z.strictObject({
+          group: z.literal('completed_unsettled'),
+          limit: z.number().int().min(1).max(100).optional().describe('References per page; default 20'),
+          cursor: z.string().min(1).optional().describe('`reviewQueue.nextCursor` of the previous page; cursor_snapshot_changed means start again'),
+        }).optional().describe(`Review queue page (controlPlaneContractVersion ${CONTROL_PLANE_CONTRACT_VERSION}): references of the whole group, before limitPerGroup, with a cursor bound to the environments and their snapshot sequences. Each item says the next read (t3_thread with review). A queue item is not proof of idleness or acceptance`),
       },
       annotations: SO_LEITURA,
     },
     async (args, extra) => {
       try {
+        if (args.reviewQueue && args.controlPlaneContractVersion !== CONTROL_PLANE_CONTRACT_VERSION) throw new EntradaInvalida(`\`reviewQueue\` needs controlPlaneContractVersion: ${CONTROL_PLANE_CONTRACT_VERSION}`);
         return resposta(await montarWorkset(ambientes, args, { ...opcoesWorkset, signal: extra?.signal, resumir: (t, p) => resumoDaThread(t, p) }));
       } catch (e) {
         return erro(e);
@@ -515,11 +522,17 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         maxCharacters: z.number().int().min(200).max(6000).optional().describe('Maximum length of the latest response; default 1500'),
         settlementContractVersion: z.union(SETTLEMENT_CONTRACT_VERSIONS.map((v) => z.literal(v))).optional()
           .describe('Pass 2 (or 1) to add the `settlement` facts of that contract version (full snapshot read; heavier). Omitted: the answer is unchanged'),
+        controlPlaneContractVersion: z.literal(CONTROL_PLANE_CONTRACT_VERSION).optional(),
+        review: z.boolean().optional().describe(`With controlPlaneContractVersion ${CONTROL_PLANE_CONTRACT_VERSION} and settlementContractVersion 2: add \`review\`, the facts to judge the delivery from the same observation (expected run, its own response, workspace, PRs, related threads, evidence refs). review.complete false (missing, stale, truncated or streaming response, incomplete observation) means it is not ready to accept. It never accepts anything: verification is yours`),
       },
       annotations: SO_LEITURA,
     },
-    noAmbiente(async ({ r, cliente, signal, threadId, maxCharacters: maxCaracteres = 1500, settlementContractVersion }) => {
+    noAmbiente(async ({ r, cliente, signal, threadId, maxCharacters: maxCaracteres = 1500, settlementContractVersion, controlPlaneContractVersion, review }) => {
+      if (review && (controlPlaneContractVersion !== CONTROL_PLANE_CONTRACT_VERSION || settlementContractVersion !== 2)) {
+        throw new EntradaInvalida(`\`review\` needs controlPlaneContractVersion: ${CONTROL_PLANE_CONTRACT_VERSION} and settlementContractVersion: 2`);
+      }
       let settlement = null;
+      let observada = false;
       let shell;
       let thread;
       let projecao;
@@ -548,6 +561,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
           projecao = lido.snapshot.projection;
           history = { complete: true, payloadBudgetExceeded: false, source: 'full_snapshot' };
           execution = lido.execucao;
+          observada = true;
         }
       }
       if (!projecao) {
@@ -583,6 +597,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         history,
         execution,
         ...(settlementContractVersion ? { settlement } : {}),
+        ...(review ? { controlPlaneContractVersion, review: montarRevisao({ environmentId: r.environmentId, thread: observada ? thread : null, projecao, settlement, execution, maxCaracteres }) } : {}),
       };
     }),
   );
