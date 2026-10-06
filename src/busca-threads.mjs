@@ -110,7 +110,7 @@ function criterio({ search: busca, threadId, match = 'partial' }) {
  * falhas de quem não respondeu. O critério de busca é aplicado depois, por quem chamou: a
  * busca em lote aplica várias consultas sobre a mesma leitura.
  */
-async function consultarAmbientes(ambientes, selecionados, { signal, prazoAmbienteMs, prazoTotalMs, concorrencia, populacao = 'active', lerArquivadas = null }) {
+async function consultarAmbientes(ambientes, selecionados, { signal, prazoAmbienteMs, prazoTotalMs, concorrencia, populacao = 'active', lerArquivadas = null, validarAtivas = false }) {
   const total = AbortSignal.timeout(prazoTotalMs);
   const resultados = new Map(); // environmentId -> { ok, ... }
 
@@ -129,13 +129,20 @@ async function consultarAmbientes(ambientes, selecionados, { signal, prazoAmbien
       );
       const projetos = new Map((shell.projects ?? []).map((p) => [p.id, p]));
       const ambiente = { ...ambientes.identidade(r), name: info?.nome ?? null };
-      const visiveis = shell.threads.filter((t) => r.escopo.projetoPermitido(t.projectId) && !t.deletedAt);
+      // Control-plane v1: uma linha ativa que não dá para atribuir (sem projectId, sem status...)
+      // seria descartada pela ACL em silêncio; a população fica incompleta, nunca "ausente"
+      // (revisão 334a1840, P2). Mesma validação de linha da contagem de projeto.
+      let populacaoFinal = estadoPopulacao;
+      if (validarAtivas && (!Array.isArray(shell.threads) || !shell.threads.every(validRow))) {
+        populacaoFinal = { population: estadoPopulacao.population, complete: false, reason: 'active_source_invalid' };
+      }
+      const visiveis = (Array.isArray(shell.threads) ? shell.threads : []).filter((t) => t && r.escopo.projetoPermitido(t.projectId) && !t.deletedAt);
       // Arquivadas da mesma sequence, mesma ACL; uma thread vista nas duas leituras conta uma vez.
       const ids = new Set(visiveis.map((t) => t.id));
       for (const t of arquivadas) {
         if (!ids.has(t.id) && r.escopo.projetoPermitido(t.projectId) && !t.deletedAt) { ids.add(t.id); visiveis.push({ ...t, _arquivada: true }); }
       }
-      resultados.set(r.environmentId, { ok: true, ambiente, projetos, visiveis, populacao: estadoPopulacao });
+      resultados.set(r.environmentId, { ok: true, ambiente, projetos, visiveis, populacao: populacaoFinal });
     } catch (e) {
       if (signal?.aborted || e instanceof Cancelada) throw new Cancelada();
       const falha = total.aborted
@@ -470,7 +477,7 @@ export async function buscarFrentes(ambientes, args, {
   const selecionados = ordenarSelecionados([...porId.values()]);
   const resolverProjetos = (sel) => (sel?.projectIds ? new Set(sel.projectIds.map((p) => `${ambientes.resolver(p.environment).environmentId}\u0000${p.projectId}`)) : null);
   const alvosPorConsulta = consultas.map((q) => resolverProjetos(q.selector));
-  const { sucesso, falhasAmbientes } = await consultarAmbientes(ambientes, selecionados, { signal, prazoAmbienteMs, prazoTotalMs, concorrencia, populacao, lerArquivadas });
+  const { sucesso, falhasAmbientes } = await consultarAmbientes(ambientes, selecionados, { signal, prazoAmbienteMs, prazoTotalMs, concorrencia, populacao, lerArquivadas, validarAtivas: true });
 
   const ambientesCompletos = falhasAmbientes.length === 0;
   const populacaoCompleta = sucesso.every((x) => x.populacao.complete);

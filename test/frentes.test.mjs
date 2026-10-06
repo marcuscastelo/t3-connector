@@ -75,6 +75,25 @@ test('arquivadas de outra sequence (repetida até o limite) ou inválidas nunca 
   assert.ok(invalida.results[0].reasons.some((x) => x.code === 'archived_source_invalid'));
 });
 
+test('linha ativa sem projectId (ou malformada) torna a população incompleta, nunca candidate_new (revisão 334a1840 P2)', async () => {
+  const sel = { key: 'nova', selector: { title: { value: 'Nada assim' } } };
+  for (const ruim of [{ ...thread({ id: 'sem-projeto' }), projectId: undefined }, { id: 'sem-status', projectId: LOCAL.projeto }, null]) {
+    const d = comSequencia(dadosPadrao());
+    d.remoto.shell.threads.push(ruim);
+    const r = await lote({ ...V, population: 'all', queries: [sel] }, { d, lerArquivadas: arquivadas({}) });
+    const q = r.results[0];
+    assert.equal(q.resolution, 'inconclusive', JSON.stringify(ruim));
+    assert.equal(q.launchDisposition, 'inconclusive');
+    assert.equal(q.coverage.populationComplete, false);
+    assert.ok(q.reasons.some((x) => x.code === 'active_source_invalid' && x.environmentId === REMOTO.environmentId));
+  }
+  // Sem a versão do control-plane, a busca legada continua igual.
+  const d = dadosPadrao();
+  d.remoto.shell.threads.push({ ...thread({ id: 'sem-projeto' }), projectId: undefined });
+  const legado = await lote({ queries: [{ key: 'c', threadId: 't-comum' }] }, { d });
+  assert.equal(legado.results[0].complete, true);
+});
+
 test('campo do seletor ausente na shell não prova nada: selector_evidence_unavailable', async () => {
   const d = comSequencia(dadosPadrao());
   for (const amb of ['local', 'remoto']) d[amb].shell.threads = d[amb].shell.threads.map(({ branch, ...t }) => t);
