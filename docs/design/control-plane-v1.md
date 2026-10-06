@@ -1,6 +1,6 @@
 # Control-plane/BFS v1 — proposta para revisão
 
-> **Status (dona):** proposta para revisão, **não implementada**, salvo a correção de recuperação do launch legacy (§5.4), já aplicada em `5196734` (replay de `thread.launch`/`thread.fork` devolve o recibo com o `threadId` criado). Implementação segue a ordem da §8 depois das decisões da §9. Citações `arquivo:linha` valem para `07cb5ad`.
+> **Status (dona):** proposta para revisão, **não implementada**, salvo a correção de recuperação do launch legacy (§5.4), já aplicada em `5196734` (replay de `thread.launch`/`thread.fork` devolve o recibo com o `threadId` criado). Commits 1 (aquisição coerente compartilhada, `5bba50f`) e 2 (settlement/settleGuard v2, `bc822df`) da §8 implementados; os demais esperam as decisões da §9. Citações `arquivo:linha` valem para `07cb5ad`.
 
 **Desenho, sem implementação.** Revalidado nesta execução Codex Galm, GPT-6.1-Sol/high, harness Codex, client T3 Code, host Sirius. Base exclusiva do código citado: **07cb5ade44d00ae3accf9a5d3eb4e970bf41277f**, em `integrate/bfs-snapshot-batch`. Referências `arquivo:linha` são desse commit; os antecedentes de batch e settle são históricos, não contratos atuais. Inventário completo: [control-plane-inventory.md](control-plane-inventory.md). Nenhum serviço, connector de produção, teste, sessão ou transcript foi acessado. Apenas arquivos desta pasta de entrega foram escritos.
 
