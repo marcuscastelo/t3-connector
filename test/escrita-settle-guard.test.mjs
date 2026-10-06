@@ -157,7 +157,7 @@ test('pós-check: reabertura após o ACK é mismatch e leitura falha/atrasada é
 test('versão de guard não suportada e campos desconhecidos nunca enviam', async () => {
   const { settle, adapter, observar, guard } = await preparar();
   const o = await observar();
-  await assert.rejects(settle('v2', guard(o, { version: 2 })), /settle_guard_version_unsupported/);
+  await assert.rejects(settle('v3', guard(o, { version: 3 })), /settle_guard_version_unsupported/);
   await assert.rejects(settle('extra', { ...guard(o), requireNoActiveRun: false }));
   assert.equal(adapter.calls.length, 0);
 });

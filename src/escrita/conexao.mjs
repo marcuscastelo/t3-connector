@@ -148,9 +148,10 @@ export function criarConexaoEscrita(registro, {
         return lerOcupacao({ projectId, readActive: () => clienteLeitura.shell(), readArchived: () => socket.invoke('orchestration.getArchivedShellSnapshot', {}) });
       },
       // Settlement observation for the settle guard (shell → full snapshot → shell; GETs only).
-      settlementObservation: (threadId) => lerObservacao({
+      settlementObservation: (threadId, { version } = {}) => lerObservacao({
         environmentId: registro.environmentId,
         threadId,
+        version,
         lerShell: () => clienteLeitura.shell(),
         lerCompleto: (id) => clienteLeitura.threadCompleto(id),
       }),

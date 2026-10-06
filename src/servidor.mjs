@@ -19,7 +19,7 @@ import { lerProviders, resumoProvider } from './providers.mjs';
 import { assinatura, casaBusca, comparador, CursorInvalido, normalizar, paginar } from './paginacao.mjs';
 import { Cancelada, ErroT3 } from './t3.mjs';
 import { resumirPedidosRuntime } from './pedidos-runtime.mjs';
-import { lerObservacaoComDados, SETTLEMENT_CONTRACT_VERSION } from './settlement.mjs';
+import { lerObservacaoComDados, SETTLEMENT_CONTRACT_VERSIONS } from './settlement.mjs';
 import { GRUPOS, LIMITE_PADRAO, montarWorkset, PRAZO_AMBIENTE_MS as PRAZO_WORKSET_AMBIENTE, PRAZO_TOTAL_MS as PRAZO_WORKSET_TOTAL } from './workset.mjs';
 import { compararShell, derivarExecucao } from './execucao.mjs';
 
@@ -404,7 +404,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         'Active queue, ready to consume without filtering: `actionable` (decide now: needs_intervention, unknown, failed_unsettled, completed_unsettled, cancelled_unsettled) and `inFlight` (running, background_pending), as {environment, threadId, group} in that group order. Settled idle threads, threads snoozed until a future time and archived threads are never in them; a pending request, an active run or background work keeps a thread in the queue even if settled or snoozed; an expired snooze returns the thread to its normal group. ' +
         '`archived` is listed apart and never mixed with today\'s work; while no validated source of archived threads exists it is {available: false, reason}, which does not mean there are none. ' +
         `Each environment has ${PRAZO_WORKSET_AMBIENTE} ms and the call ${PRAZO_WORKSET_TOTAL} ms; environments that fail are listed in \`environmentFailures\` with \`complete: false\`, and the groups still hold what the other environments returned, so an empty group with complete=false proves nothing. ` +
-        'Next step per thread: t3_thread with that environment and threadId (add settlementContractVersion: 1 before deciding to settle). ' + CONTRATO_ESTADO + ' Read-only.',
+        'Next step per thread: t3_thread with that environment and threadId (add settlementContractVersion: 2 before deciding to settle). ' + CONTRATO_ESTADO + ' Read-only.',
       shape: {
         environments: z.array(z.string().min(1)).min(1).max(10).optional()
           .describe(`Environments to read (alias or environmentId): ${nomes}. Omitted: every configured environment`),
@@ -432,14 +432,15 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         'Model precedence: `model` is what the thread runs next; `activeRun.model` is what the active run executes (fixed when the run was requested); `providerSession` (status, model) is the provider process as last reported and is informational only: it can keep the previous model after a model change and read `ready` while a run is active, so never use it to decide the model or the state. ' +
         'Message `streaming` flags do not decide the state either. ' +
         CONTRATO_EXECUCAO + ' ' +
-        'With `settlementContractVersion: 1` the whole answer (latestResponse, pendingRequests, activeRun, latestRun, execution) is built from one validated observation of the full thread snapshot, and adds `settlement` from that same observation (when it cannot be observed coherently, `settlement.complete` is false with no observationId and the rest comes from the usual read): `blockers` (pending_request, active_run, queued_work, unresolved_work, observation_incomplete; background work comes from that same `execution`), `eligibleMechanically`, `observationId`, `expectedRunId`, lifecycle fields (settledAt, settledOverride, unsettledAt, snoozedUntil, pinnedAt, autoSettleDisabledAt, linkedPullRequests) with `fieldAvailability`, and `warnings` (e.g. linked_pr_merge_can_auto_settle). ' +
-        '`eligibleMechanically: true` only means nothing objective blocks a settle; it is never acceptance of the delivered scope, which is your decision. To settle with protection pass expectedRunId and observationId in thread.settle `settleGuard`. Read-only.',
+        'With `settlementContractVersion` (1 or 2) the whole answer (latestResponse, pendingRequests, activeRun, latestRun, execution) is built from one validated observation of the full thread snapshot, and adds `settlement` from that same observation (when it cannot be observed coherently, `settlement.complete` is false with no observationId and the rest comes from the usual read): `blockers` (pending_request, active_run, queued_work, unresolved_work, observation_incomplete; background work comes from that same `execution`), `eligibleMechanically`, `observationId`, `expectedRunId`, lifecycle fields (settledAt, settledOverride, unsettledAt, snoozedUntil, pinnedAt, autoSettleDisabledAt, linkedPullRequests) with `fieldAvailability`, and `warnings` (e.g. linked_pr_merge_can_auto_settle). ' +
+        'Version 2 (recommended) uses the codes of `execution.continuation.blockers` (active_run, queued_runs, pending_request, proposed_plan, usage_limit, usage_limit_auto_resume, background_work_active, background_work_unknown) plus observation_incomplete, so unknown background work blocks; its observationId (obs2_) also changes with the workspace, the reviewed response text and the background work. Version 1 is unchanged. ' +
+        '`eligibleMechanically: true` only means nothing objective blocks a settle; it is never acceptance of the delivered scope, which is your decision. To settle with protection pass expectedRunId and observationId in thread.settle `settleGuard` with the same version. Read-only.',
       shape: {
         environment: campoAmbiente,
         threadId: z.string().min(1),
         maxCharacters: z.number().int().min(200).max(6000).optional().describe('Maximum length of the latest response; default 1500'),
-        settlementContractVersion: z.literal(SETTLEMENT_CONTRACT_VERSION).optional()
-          .describe('Pass 1 to add the `settlement` facts (full snapshot read; heavier). Omitted: the answer is unchanged'),
+        settlementContractVersion: z.union(SETTLEMENT_CONTRACT_VERSIONS.map((v) => z.literal(v))).optional()
+          .describe('Pass 2 (or 1) to add the `settlement` facts of that contract version (full snapshot read; heavier). Omitted: the answer is unchanged'),
       },
       annotations: SO_LEITURA,
     },
@@ -462,6 +463,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
             return { ...atual, threads: (atual.threads ?? []).filter((t) => r.escopo.projetoPermitido(t.projectId)) };
           },
           lerCompleto: (id) => cliente.threadCompleto(id, { signal }),
+          version: settlementContractVersion,
         });
         settlement = lido.observacao;
         if (lido.thread) {

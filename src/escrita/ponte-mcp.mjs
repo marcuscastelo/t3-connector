@@ -63,7 +63,7 @@ export function criarPonteEscrita({relay,aliases=[],approvalOrigin}) {
  const cursor=z.string().min(1).optional();
  const leituras={t3_projetos:{search:z.string().min(1).optional(),limit:z.number().int().min(1).optional(),cursor},t3_atencao:{},
   t3_threads:{projectId:z.string().optional(),state:z.enum(['running','needs_intervention','completed','failed','cancelled','no_run','unknown']).optional(),includeNoRun:z.boolean().optional(),search:z.string().min(1).optional(),limit:z.number().int().min(1).max(50).optional(),cursor},
-  t3_thread:{threadId:z.string().min(1),maxCharacters:z.number().int().min(200).max(6000).optional(),settlementContractVersion:z.literal(1).optional()},
+  t3_thread:{threadId:z.string().min(1),maxCharacters:z.number().int().min(200).max(6000).optional(),settlementContractVersion:z.union([z.literal(1),z.literal(2)]).optional()},
   t3_mensagens:{threadId:z.string().min(1),limit:z.number().int().min(1).max(20).optional(),maxCharacters:z.number().int().min(100).max(4000).optional()}};
  for(const name of LEITURAS)registrar(name,{description:`${name}: read of the projects approved in the lease, in the chosen environment; requires an active lease and never renews it.${name==='t3_thread'?' Pending runtime requests include full public content and nextAction; thread.send does NOT answer them. Use runtime-request.answer for user_input or runtime-request.approve for approval with the requestId; unavailable detail requires inspection in T3.':''}`,forma:{leaseId:z.string(),environment,...leituras[name]},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true}},
   async({leaseId,environment:amb,...input})=>{try{return await relay({op:'read',operation:name,leaseId,ambiente:amb,input});}catch(e){return erro(e);}});

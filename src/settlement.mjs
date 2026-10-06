@@ -26,7 +26,10 @@ import { estadoDaThread, pedidosPendentes, runAtivoDaShell } from './estado.mjs'
 import { derivarExecucao, seguraAThread } from './execucao.mjs';
 
 export const SETTLEMENT_CONTRACT_VERSION = 1;
-export const SETTLE_GUARD_VERSIONS = Object.freeze([1]);
+// v2: bloqueios projetados de `execution.continuation.blockers` (mesmos códigos), fundo
+// desconhecido bloqueia, observationId `obs2_` cobre binding, resposta e fundo. v1 inalterada.
+export const SETTLEMENT_CONTRACT_VERSIONS = Object.freeze([1, 2]);
+export const SETTLE_GUARD_VERSIONS = Object.freeze([1, 2]);
 export const TENTATIVAS_OBSERVACAO = 3;
 
 const ATIVOS = new Set(['preparing', 'starting', 'running', 'waiting']);
@@ -75,9 +78,9 @@ function lifecycleConfere(shellThread, appThread) {
   return LIFECYCLE.every((k) => !(k in appThread) || instante(appThread[k]) === instante(shellThread[k]));
 }
 
-function incompleta(motivos) {
+function incompleta(motivos, version = SETTLEMENT_CONTRACT_VERSION) {
   return {
-    contractVersion: SETTLEMENT_CONTRACT_VERSION,
+    contractVersion: version,
     guardVersions: SETTLE_GUARD_VERSIONS,
     complete: false,
     eligibleMechanically: false,
@@ -88,45 +91,9 @@ function incompleta(motivos) {
   };
 }
 
-/** Snapshot de execução de um snapshot completo validado (histórico inteiro, uma transação). */
-export function execucaoDoSnapshot({ thread, snapshot, attempts = 1 }) {
-  return derivarExecucao({
-    projecao: snapshot.projection,
-    shellThread: thread,
-    fonte: { kind: 'thread_full_snapshot', threadSequence: snapshot.snapshotSequence ?? null, historyComplete: true, attempts },
-  });
-}
-
-/**
- * Observação pura a partir de uma thread da shell e de um snapshot completo
- * `{snapshotSequence, projection}` da mesma thread. Nunca lança: entrada inconsistente
- * vira complete=false com bloqueio `observation_incomplete`.
- */
-export function observarSettlement(args) {
-  return observar(args).observacao;
-}
-
-/** Observação e o snapshot de execução que decidiu seus bloqueios de fundo (null se incompleta). */
-function observar({ environmentId, thread, snapshot, attempts = 1 }) {
-  const p = snapshot?.projection;
-  const problemas = [];
-  if (!thread) problemas.push('thread_missing_from_shell');
-  if (!p || !Array.isArray(p.runs) || !Array.isArray(p.runtimeRequests)) problemas.push('snapshot_without_runs_or_requests');
-  if (!Number.isInteger(snapshot?.snapshotSequence) || snapshot.snapshotSequence < 0) problemas.push('snapshot_sequence_invalid');
-  if (thread && p?.thread?.id !== thread.id) problemas.push('snapshot_of_another_thread');
-  if (thread && !STATUS_THREAD.has(thread.status)) problemas.push('thread_status_unknown');
-  if (Array.isArray(p?.runs) && !p.runs.every((r) => textoNaoVazio(r?.id) && STATUS_RUN.has(r.status))) problemas.push('run_malformed_or_status_unknown');
-  if (Array.isArray(p?.runtimeRequests) && !p.runtimeRequests.every((r) => textoNaoVazio(r?.id) && STATUS_PEDIDO.has(r.status))) {
-    problemas.push('request_malformed_or_status_unknown');
-  }
-  if (thread?.latestRunId && Array.isArray(p?.runs) && !p.runs.some((r) => r.id === thread.latestRunId)) {
-    problemas.push('latest_run_missing_from_snapshot');
-  }
-  if (problemas.length) return { observacao: incompleta(problemas), execucao: null };
-  const execution = execucaoDoSnapshot({ thread, snapshot, attempts });
-
-  const pendentesProjecao = pedidosPendentes(p);
-  const estado = estadoDaThread(thread, pendentesProjecao);
+/** Bloqueios v1 (contrato publicado): códigos settle (pending_request, active_run, queued_work,
+ * unresolved_work); fundo de `execution` com o roster da shell por cima. */
+function bloqueiosV1({ execution, thread, p, pendentesProjecao, estado }) {
   const bloqueios = [];
 
   // Pedidos: resumo da shell e qualquer runtimeRequest pending do snapshot, sem duplicar.
@@ -165,6 +132,86 @@ function observar({ environmentId, thread, snapshot, attempts = 1 }) {
     bloqueios.push({ code: 'unresolved_work', kind: 'background_task', taskId: t.taskId, backgroundKind: t.kind, source: t.source });
   }
   if (estado.state === 'unknown') bloqueios.push({ code: 'unresolved_work', kind: 'unknown_state', status: thread.status });
+  return bloqueios;
+}
+
+/**
+ * Bloqueios v2: os códigos canônicos de `execution.continuation.blockers` (active_run,
+ * queued_runs, pending_request, proposed_plan, usage_limit, usage_limit_auto_resume,
+ * background_work_active, background_work_unknown), com os IDs que execution traz. A shell só
+ * acrescenta (pedido, run ativo, plano, roster que ela vê e a projeção não), nunca remove.
+ * Código que este contrato não conhece vira observation_incomplete: nada fica elegível.
+ */
+function bloqueiosV2({ execution, thread, estado }) {
+  const bloqueios = [];
+  const ja = new Set();
+  const add = (b, chave) => { if (chave && ja.has(chave)) return; if (chave) ja.add(chave); bloqueios.push(b); };
+  for (const code of execution.continuation.blockers) {
+    if (code === 'active_run') add({ code, runId: execution.runs.active?.runId ?? null, status: execution.runs.active?.status ?? null }, `run:${execution.runs.active?.runId}`);
+    else if (code === 'queued_runs') for (const r of execution.runs.queued) add({ code, runId: r.runId, queueHeld: Boolean(r.queueHeld) });
+    else if (code === 'pending_request') for (const q of execution.pendingRequests) add({ code, requestId: q.requestId, kind: q.kind ?? null }, `req:${q.requestId}`);
+    else if (code === 'proposed_plan') add({ code }, 'plan');
+    else if (code === 'usage_limit' || code === 'usage_limit_auto_resume') add({ code, runId: thread.limitRecovery?.runId ?? null });
+    else if (code === 'background_work_active') {
+      for (const t of execution.background.pending) if (t.holdsThread) add({ code, taskId: t.taskId, backgroundKind: t.kind, source: t.source }, `bg:${t.taskId}`);
+    } else if (code === 'background_work_unknown') add({ code, knowledge: execution.background.knowledge });
+    else add({ code: 'observation_incomplete', reason: 'execution_blocker_unsupported', blocker: code });
+  }
+  if (thread.pendingRuntimeRequest) add({ code: 'pending_request', requestId: thread.pendingRuntimeRequest.id, kind: thread.pendingRuntimeRequest.kind ?? null, source: 'shell' }, `req:${thread.pendingRuntimeRequest.id}`);
+  const daShell = runAtivoDaShell(thread);
+  if (daShell) add({ code: 'active_run', runId: daShell.runId ?? null, status: daShell.status, source: 'shell' }, `run:${daShell.runId}`);
+  if (thread.hasActionableProposedPlan) add({ code: 'proposed_plan', source: 'shell' }, 'plan');
+  for (const t of thread.pendingBackgroundTasks ?? []) {
+    const kind = t.kind ?? 'background_task';
+    if (seguraAThread(kind)) add({ code: 'background_work_active', taskId: t.taskId ?? null, backgroundKind: kind, source: 'shell_roster' }, `bg:${t.taskId ?? null}`);
+  }
+  if (estado.state === 'running' && !bloqueios.some((b) => b.code === 'active_run')) add({ code: 'active_run', runId: estado.runId ?? null, status: estado.statusRun ?? null, source: 'shell_state' });
+  if (estado.state === 'unknown') add({ code: 'observation_incomplete', reason: 'unknown_state', status: thread.status });
+  return bloqueios;
+}
+
+/** Snapshot de execução de um snapshot completo validado (histórico inteiro, uma transação). */
+export function execucaoDoSnapshot({ thread, snapshot, attempts = 1 }) {
+  return derivarExecucao({
+    projecao: snapshot.projection,
+    shellThread: thread,
+    fonte: { kind: 'thread_full_snapshot', threadSequence: snapshot.snapshotSequence ?? null, historyComplete: true, attempts },
+  });
+}
+
+/**
+ * Observação pura a partir de uma thread da shell e de um snapshot completo
+ * `{snapshotSequence, projection}` da mesma thread. Nunca lança: entrada inconsistente
+ * vira complete=false com bloqueio `observation_incomplete`.
+ */
+export function observarSettlement(args) {
+  return observar(args).observacao;
+}
+
+/** Observação e o snapshot de execução que decidiu seus bloqueios de fundo (null se incompleta). */
+function observar({ environmentId, thread, snapshot, attempts = 1, version = SETTLEMENT_CONTRACT_VERSION }) {
+  const p = snapshot?.projection;
+  const problemas = [];
+  if (!thread) problemas.push('thread_missing_from_shell');
+  if (!p || !Array.isArray(p.runs) || !Array.isArray(p.runtimeRequests)) problemas.push('snapshot_without_runs_or_requests');
+  if (!Number.isInteger(snapshot?.snapshotSequence) || snapshot.snapshotSequence < 0) problemas.push('snapshot_sequence_invalid');
+  if (thread && p?.thread?.id !== thread.id) problemas.push('snapshot_of_another_thread');
+  if (thread && !STATUS_THREAD.has(thread.status)) problemas.push('thread_status_unknown');
+  if (Array.isArray(p?.runs) && !p.runs.every((r) => textoNaoVazio(r?.id) && STATUS_RUN.has(r.status))) problemas.push('run_malformed_or_status_unknown');
+  if (Array.isArray(p?.runtimeRequests) && !p.runtimeRequests.every((r) => textoNaoVazio(r?.id) && STATUS_PEDIDO.has(r.status))) {
+    problemas.push('request_malformed_or_status_unknown');
+  }
+  if (thread?.latestRunId && Array.isArray(p?.runs) && !p.runs.some((r) => r.id === thread.latestRunId)) {
+    problemas.push('latest_run_missing_from_snapshot');
+  }
+  if (problemas.length) return { observacao: incompleta(problemas, version), execucao: null };
+  const execution = execucaoDoSnapshot({ thread, snapshot, attempts });
+
+  const pendentesProjecao = pedidosPendentes(p);
+  const estado = estadoDaThread(thread, pendentesProjecao);
+  const bloqueios = version === 2
+    ? bloqueiosV2({ execution, thread, estado })
+    : bloqueiosV1({ execution, thread, p, pendentesProjecao, estado });
 
   const disponibilidade = {
     pinnedAt: 'pinnedAt' in thread,
@@ -179,16 +226,16 @@ function observar({ environmentId, thread, snapshot, attempts = 1 }) {
   else if (!disponibilidade.pullRequests) avisos.push({ code: 'linked_pr_state_unavailable' });
   if (thread.settledAt) avisos.push({ code: 'already_settled', settledOverride: ou(thread.settledOverride) });
   if (thread.settledAt && disponibilidade.pinnedAt) avisos.push({ code: 'pin_can_clear_settlement' });
-  // Sem roster no servidor a ausência de trabalho de fundo não é provada; não bloqueia (mesma
-  // regra do preflight de thread.send), mas fica dito.
-  if (execution.background.knowledge !== 'complete') avisos.push({ code: 'background_work_unknown', knowledge: execution.background.knowledge });
+  // v1: sem roster no servidor a ausência de trabalho de fundo não é provada; não bloqueia (mesma
+  // regra do preflight de thread.send), mas fica dito. Na v2 é o bloqueio background_work_unknown.
+  if (version === 1 && execution.background.knowledge !== 'complete') avisos.push({ code: 'background_work_unknown', knowledge: execution.background.knowledge });
 
   // Digest determinístico do que invalida um aceite: atividade, pedidos, mensagens (IDs e
   // timestamps, sem texto), lifecycle e PRs. Sem updatedAt nem sequence global, para não
   // invalidar o aceite por evento em outra thread ou por visita.
   const ultimaMensagem = (p.messages ?? []).at(-1);
   const material = [
-    SETTLEMENT_CONTRACT_VERSION, environmentId, thread.id, thread.projectId,
+    version, environmentId, thread.id, thread.projectId,
     thread.latestRunId ?? null, thread.status, ou(thread.activeRunId), ou(thread.activityRunStatus),
     ordenar(p.runs, (r) => r.id).map((r) => [r.id, r.status, Boolean(r.queueHeld)]),
     ordenar(p.runtimeRequests, (r) => r.id).map((r) => [r.id, r.status]),
@@ -201,13 +248,27 @@ function observar({ environmentId, thread, snapshot, attempts = 1 }) {
     thread.limitRecovery ? [ou(thread.limitRecovery.runId), Boolean(thread.limitRecovery.autoResume)] : null,
     [...new Set([...execution.background.pending.map((t) => t.taskId), ...(thread.pendingBackgroundTasks ?? []).map((t) => ou(t.taskId))])].map(String).sort(),
   ];
+  if (version === 2) {
+    // v2 também invalida o aceite quando muda o workspace, a resposta revisada (texto editado sem
+    // messageId novo), o tipo ou a fonte do trabalho de fundo, o que terminou sem ser absorvido,
+    // os planos da projeção e os próprios bloqueios. Sem texto cru: só o digest.
+    const resposta = [...(p.messages ?? [])].reverse().find((m) => m.role === 'assistant' && m.text);
+    material.push(
+      [ou(thread.worktreePath), ou(thread.branch)],
+      resposta ? [resposta.id, ou(resposta.runId), ou(resposta.updatedAt), digest(resposta.text)] : null,
+      ordenar(execution.background.pending, (t) => t.taskId).map((t) => [t.taskId, t.kind, t.holdsThread, t.source]),
+      ordenar(execution.background.endedSinceLatestRun, (t) => t.taskId).map((t) => [t.taskId, ou(t.outcome)]),
+      Array.isArray(p.plans) ? ordenar(p.plans, (x) => x.id).map((x) => [ou(x.id), ou(x.kind), ou(x.status)]) : null,
+      bloqueios.map((b) => JSON.stringify(b)),
+    );
+  }
 
   const observacao = {
-    contractVersion: SETTLEMENT_CONTRACT_VERSION,
+    contractVersion: version,
     guardVersions: SETTLE_GUARD_VERSIONS,
     guarantee: 'connector_preflight_and_observation',
     complete: true,
-    observationId: `obs1_${digest(material)}`,
+    observationId: `obs${version}_${digest(material)}`,
     snapshotSequence: snapshot.snapshotSequence ?? null,
     expectedRunId: thread.latestRunId ?? null,
     state: estado.state,
@@ -243,25 +304,25 @@ export async function lerObservacao(args) {
  * Como lerObservacao, devolvendo também a thread da shell e o snapshot que a observação
  * validou (null quando incompleta), para quem monta uma resposta a partir dos MESMOS dados.
  */
-export async function lerObservacaoComDados({ environmentId, threadId, lerShell, lerCompleto, tentativas = TENTATIVAS_OBSERVACAO }) {
+export async function lerObservacaoComDados({ environmentId, threadId, lerShell, lerCompleto, tentativas = TENTATIVAS_OBSERVACAO, version = SETTLEMENT_CONTRACT_VERSION }) {
   const achar = (shell) => (shell?.threads ?? []).find((t) => t.id === threadId && !t.deletedAt);
   // `ultimoSnapshot`: o último snapshot completo lido, mesmo sem observação coerente; só serve a
   // quem precisa de uma projeção (uma transação) e declara a falta da shell.
   let ultimoSnapshot = null;
   for (let i = 0; i < tentativas; i++) {
     const antes = achar(await lerShell());
-    if (!antes) return { observacao: observarSettlement({ environmentId, thread: null, snapshot: null }), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1 };
+    if (!antes) return { observacao: observarSettlement({ environmentId, thread: null, snapshot: null, version }), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1 };
     const snapshot = await lerCompleto(threadId);
     ultimoSnapshot = snapshot;
     const depois = achar(await lerShell());
     if (depois && marcaDaShell(antes) === marcaDaShell(depois) && lifecycleConfere(depois, snapshot?.projection?.thread)) {
-      const { observacao, execucao } = observar({ environmentId, thread: depois, snapshot, attempts: i + 1 });
+      const { observacao, execucao } = observar({ environmentId, thread: depois, snapshot, attempts: i + 1, version });
       return observacao.complete
         ? { observacao, thread: depois, snapshot, execucao, ultimoSnapshot, tentativas: i + 1 }
         : { observacao, thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1 };
     }
   }
-  return { observacao: incompleta(['thread_changed_during_observation']), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas };
+  return { observacao: incompleta(['thread_changed_during_observation'], version), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas };
 }
 
 /**
@@ -297,12 +358,34 @@ const ORDEM = ['observation_incomplete', 'pending_request', 'active_run', 'queue
  * recusa. Ordem fixa: versão, aceite, completude, bloqueios objetivos e só então run e
  * observação esperados, para que trabalho ativo seja recusado mesmo com runId velho.
  */
+// v2: código canônico de execution → recusa settle (mesmos códigos públicos da v1). Fundo
+// desconhecido e código que o contrato não conhece são observação incompleta.
+const RECUSA_V2 = {
+  observation_incomplete: 'settle_observation_incomplete',
+  background_work_unknown: 'settle_observation_incomplete',
+  pending_request: 'settle_pending_request',
+  active_run: 'settle_active_run',
+  queued_runs: 'settle_queued_work',
+  proposed_plan: 'settle_unresolved_work',
+  usage_limit: 'settle_unresolved_work',
+  usage_limit_auto_resume: 'settle_unresolved_work',
+  background_work_active: 'settle_unresolved_work',
+};
+const ORDEM_V2 = ['settle_observation_incomplete', 'settle_pending_request', 'settle_active_run', 'settle_queued_work', 'settle_unresolved_work'];
+
 export function avaliarGuard(guard, observacao) {
   if (!SETTLE_GUARD_VERSIONS.includes(guard.version)) return 'settle_guard_version_unsupported';
   if (guard.acceptance?.accepted !== true) return 'settle_acceptance_required';
-  if (!observacao?.complete) return 'settle_observation_incomplete';
-  for (const code of ORDEM) {
-    if (observacao.blockers.some((b) => b.code === code)) return RECUSA_DO_BLOQUEIO[code];
+  // O guard é avaliado contra uma observação da MESMA versão; obs1 num guard v2 nunca confere.
+  if (!observacao?.complete || observacao.contractVersion !== guard.version) return 'settle_observation_incomplete';
+  if (guard.version === 2) {
+    const recusas = new Set(observacao.blockers.map((b) => RECUSA_V2[b.code] ?? 'settle_observation_incomplete'));
+    const primeira = ORDEM_V2.find((c) => recusas.has(c));
+    if (primeira) return primeira;
+  } else {
+    for (const code of ORDEM) {
+      if (observacao.blockers.some((b) => b.code === code)) return RECUSA_DO_BLOQUEIO[code];
+    }
   }
   if ((guard.expectedRunId ?? null) !== observacao.expectedRunId) return 'settle_run_changed';
   if (guard.expectedObservationId !== observacao.observationId) return 'settle_observation_changed';
@@ -313,7 +396,7 @@ export function avaliarGuard(guard, observacao) {
 export const MENSAGENS_GUARD = Object.freeze({
   settle_guard_version_unsupported: 'settleGuard.version is not supported by this connector (supported: 1); nothing was sent',
   settle_acceptance_required: 'settleGuard needs acceptance.accepted=true from whoever accepted the delivered scope; a completed run is not acceptance; nothing was sent',
-  settle_observation_incomplete: 'could not observe the thread completely and coherently (snapshot, runs or requests missing, or the thread kept changing); nothing was sent. Read t3_thread with settlementContractVersion=1 again',
+  settle_observation_incomplete: 'could not observe the thread completely and coherently (snapshot, runs or requests missing, or the thread kept changing); nothing was sent. Read t3_thread again with the settlementContractVersion of your guard',
   settle_pending_request: 'the thread has a pending runtime request; nothing was sent. Answer or resolve it first',
   settle_active_run: 'the thread has an active run (even with no pending request); nothing was sent. Wait for it or interrupt it explicitly',
   settle_queued_work: 'the thread has queued work; nothing was sent',

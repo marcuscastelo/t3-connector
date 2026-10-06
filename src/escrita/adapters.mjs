@@ -5,7 +5,7 @@ import { digest, grantDoAmbiente } from './gate.mjs';
 import { exigirIdentidade } from './identidade.mjs';
 import { PROJECT_ACTIONS, PROJECT_SCHEMAS, isProjectAction, guardProjectDelete, lockProject } from './project-admin.mjs';
 import { NATIVE_WRITES, NATIVE_WRITE_ACTIONS, NativeToolError, NativeRpcError } from './native.mjs';
-import { avaliarGuard, SETTLEMENT_CONTRACT_VERSION } from '../settlement.mjs';
+import { avaliarGuard, SETTLEMENT_CONTRACT_VERSION, SETTLEMENT_CONTRACT_VERSIONS } from '../settlement.mjs';
 const str=z.string().trim().min(1).max(1024), id=str;
 const model=z.object({instanceId:str.describe('Exact ID of the provider instance configured in the chosen environment, as listed by the read tool t3_providers (instanceId); keep case, underscores and hyphens, for example claudeAgent_custom.'),model:str.describe('Exact model ID for that instance (models[].slug in t3_providers), including custom models, for example claude-opus-5-5. The connector has no model enum or allowlist; availability is decided by T3 in that environment.'),options:z.array(z.object({id:str,value:z.union([z.string(),z.boolean()])}).strict()).optional()}).strict();
 const runtimeMode=z.enum(['approval-required','auto-accept-edits','auto','full-access']).default('full-access').describe('T3 execution mode; omitted preserves the connector default full-access. Supported modes are decided by the selected provider in T3.');
@@ -16,11 +16,11 @@ function command(action,type,fields={},fixed={},refs=['threadId']) {
 }
 for(const suffix of ['archive','unarchive','delete','settle','pin','unpin','unsnooze','mark-unread']) command(`thread.${suffix}`,`thread.${suffix}`,{},suffix==='unsnooze'?{reason:'user'}:{});
 command('thread.unsettle','thread.unsettle',{}, {reason:'user'});
-// Optional settleGuard (v1): checked by the connector right before the send and never forwarded;
+// Optional settleGuard (v1, v2): checked by the connector right before the send and never forwarded;
 // the wire command stays {type,commandId,threadId}. Omitted: legacy settle, unchanged.
-export const SETTLE_DESCRIPTION='Settles the thread (moves it out of the active list). A completed run is NOT acceptance of the delivered scope: settle only after you absorbed the result and it was accepted. Recommended: pass settleGuard {version:1, expectedRunId, expectedObservationId, acceptance:{accepted:true, evidenceRef}} with expectedRunId/observationId from t3_thread (settlementContractVersion: 1). With the guard the connector re-reads the full thread right before sending and refuses, sending nothing, on a pending request (settle_pending_request), an active run even with no request (settle_active_run), queued work, unresolved work, an incomplete observation, a different latest run (settle_run_changed) or any change since your observation (settle_observation_changed). After the send it reports settlement.postCheck verified, mismatch or unavailable. It is an observation by the connector, not an atomic check in T3: a linked PR merge, a pin or new activity can still change the thread later. Without settleGuard nothing is checked.';
+export const SETTLE_DESCRIPTION='Settles the thread (moves it out of the active list). A completed run is NOT acceptance of the delivered scope: settle only after you absorbed the result and it was accepted. Recommended: pass settleGuard {version:2, expectedRunId, expectedObservationId, acceptance:{accepted:true, evidenceRef}} with expectedRunId/observationId from t3_thread with the same settlementContractVersion (2: blockers from execution, unknown background work blocks; 1 still accepted). With the guard the connector re-reads the full thread right before sending and refuses, sending nothing, on a pending request (settle_pending_request), an active run even with no request (settle_active_run), queued work, unresolved work, an incomplete observation, a different latest run (settle_run_changed) or any change since your observation (settle_observation_changed). After the send it reports settlement.postCheck verified, mismatch or unavailable. It is an observation by the connector, not an atomic check in T3: a linked PR merge, a pin or new activity can still change the thread later. Without settleGuard nothing is checked.';
 const settleGuard=z.object({
- version:z.number().int().positive().describe('Guard contract version; supported: 1'),
+ version:z.number().int().positive().describe('Guard contract version; supported: 1, 2. Must match the settlementContractVersion of the observation'),
  expectedRunId:id.nullable().describe('settlement.expectedRunId from t3_thread (latest run you absorbed); null only when the thread has no run'),
  expectedObservationId:str.max(128).describe('settlement.observationId from t3_thread'),
  acceptance:z.object({accepted:z.boolean().describe('true only when the delivered scope was accepted; never inferred from a completed run'),evidenceRef:str.max(512).describe('Short reference to the acceptance (review result, PR, decision); not a transcript')}).strict(),
@@ -192,7 +192,7 @@ export class Dispatcher {
    this.#store('put',key,done);
    if(guard) {
     // Like the delete post-check: evidence kept with the record, so a replay returns it too.
-    const settlement=await this.#afterSettle(parsed.input.threadId,done.receipt);
+    const settlement=await this.#afterSettle(parsed.input.threadId,done.receipt,guard.version);
     this.#store('put',key,{...done,settlement});
     return {state:'completed',operationId,receipt:done.receipt,settlement};
    }
@@ -253,7 +253,7 @@ export class Dispatcher {
    // A launch or fork recorded the thread it created: return it, so a caller that lost the first
    // answer (an expired OAuth session hides it) recovers the threadId without launching again.
    ...(CREATES_THREAD.has(action)&&record.state==='completed'&&record.receipt?{receipt:record.receipt}:{}),
-   ...(guard&&record.receipt?{receipt:record.receipt,settlement:record.settlement??Dispatcher.#verificationPending()}:{}),
+   ...(guard&&record.receipt?{receipt:record.receipt,settlement:record.settlement??Dispatcher.#verificationPending(guard.version)}:{}),
    ...(record.error?{error:record.error}:{}),
    ...(project&&record.state==='rejected'?{sent:false,...(record.refusal?{refusal:record.refusal}:{})}:{})};
  }
@@ -266,7 +266,8 @@ export class Dispatcher {
  async #guardSettle(threadId,guard) {
   if(!this.adapter.settlementObservation) throw new Error('settle_observation_incomplete');
   let observation;
-  try {observation=await this.adapter.settlementObservation(threadId);} catch {throw new Error('settle_observation_incomplete');}
+  // Observed with the guard's own contract version (unsupported versions are refused by avaliarGuard).
+  try {observation=await this.adapter.settlementObservation(threadId,{version:SETTLEMENT_CONTRACT_VERSIONS.includes(guard.version)?guard.version:SETTLEMENT_CONTRACT_VERSION});} catch {throw new Error('settle_observation_incomplete');}
   const refusal=avaliarGuard(guard,observation);
   if(refusal) throw new Error(refusal);
  }
@@ -275,11 +276,11 @@ export class Dispatcher {
  // difference (the backend or another client may have changed the thread), not proof of no effect.
  // Acknowledged but the post-check is not recorded (still running, or the process stopped before
  // recording it). Reported as such on replay; a fresh read is t3_thread, never a resend.
- static #verificationPending() {return {contractVersion:SETTLEMENT_CONTRACT_VERSION,guarantee:'observed_at_sequence',postCheck:'pending',code:'settle_verification_pending'};}
- async #afterSettle(threadId,receipt) {
-  const base={contractVersion:SETTLEMENT_CONTRACT_VERSION,guarantee:'observed_at_sequence'};
+ static #verificationPending(version=SETTLEMENT_CONTRACT_VERSION) {return {contractVersion:version,guarantee:'observed_at_sequence',postCheck:'pending',code:'settle_verification_pending'};}
+ async #afterSettle(threadId,receipt,version=SETTLEMENT_CONTRACT_VERSION) {
+  const base={contractVersion:version,guarantee:'observed_at_sequence'};
   let o;
-  try {o=await this.adapter.settlementObservation(threadId);} catch {return {...base,postCheck:'unavailable',code:'settle_verification_unavailable'};}
+  try {o=await this.adapter.settlementObservation(threadId,{version});} catch {return {...base,postCheck:'unavailable',code:'settle_verification_unavailable'};}
   if(!o?.complete) return {...base,postCheck:'unavailable',code:'settle_verification_unavailable'};
   // `verified` needs freshness shown by sequences: an observation at or after the receipt.
   if(!Number.isInteger(receipt?.sequence)||!Number.isInteger(o.snapshotSequence)||o.snapshotSequence<receipt.sequence) return {...base,postCheck:'unavailable',code:'settle_verification_unavailable',observationSequence:o.snapshotSequence??null};

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Settlement and settle guard version 2 (`t3_thread` `settlementContractVersion: 2`,
+  `thread.settle` `settleGuard.version: 2`): blockers are the codes of
+  `execution.continuation.blockers` from the same full snapshot (the shell can only add one),
+  so unknown background work, a plan known only from the projection and a self-resuming usage
+  limit block a guarded settle; `obs2_` ids also change with the workspace, the reviewed response
+  text and the background work. The guard is evaluated against an observation of its own
+  version and the post-check reports that version. Version 1 is unchanged.
 - One coherent acquisition for decisions: the `thread.send` preflight now derives `execution`
   from the settlement observation (shell → full snapshot → shell), so it sees the usage limit,
   the proposed plan and the shell's background roster; a thread that keeps changing falls back

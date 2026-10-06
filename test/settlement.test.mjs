@@ -24,7 +24,7 @@ test('completed sem aceite: elegível mecanicamente, não liquidada, aceite cont
   assert.match(o.observationId, /^obs1_[0-9a-f]{32}$/);
   assert.equal(avaliarGuard(guard(o, { acceptance: { accepted: false, evidenceRef: 'x' } }), o), 'settle_acceptance_required');
   assert.equal(avaliarGuard(guard(o), o), null);
-  assert.equal(avaliarGuard(guard(o, { version: 2 }), o), 'settle_guard_version_unsupported');
+  assert.equal(avaliarGuard(guard(o, { version: 3 }), o), 'settle_guard_version_unsupported');
 });
 
 test('pedido pendente só no snapshot completo bloqueia o settle', () => {
@@ -144,7 +144,7 @@ test('t3_thread: sem settlementContractVersion a resposta não muda; com 1 traz 
   // Sem snapshot completo disponível, o opt-in falha como erro; nunca devolve settlement vazio.
   const semCompleto = await c.callTool({ name: 't3_thread', arguments: { threadId: 't-local', settlementContractVersion: 1 } });
   assert.equal(semCompleto.isError, true);
-  const invalido = await c.callTool({ name: 't3_thread', arguments: { threadId: 't-comum', settlementContractVersion: 2 } });
+  const invalido = await c.callTool({ name: 't3_thread', arguments: { threadId: 't-comum', settlementContractVersion: 3 } });
   assert.equal(invalido.isError, true);
 });
 

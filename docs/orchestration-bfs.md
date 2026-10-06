@@ -133,7 +133,7 @@ Right before sending, the connector reads the thread again and refuses, sending 
 | `settle_unresolved_work` | usage limit, proposed plan, background task or unknown state |
 | `settle_run_changed` | the latest run is not `expectedRunId` |
 | `settle_observation_changed` | anything in the observation changed since you read it |
-| `settle_guard_version_unsupported` | `version` is not 1 |
+| `settle_guard_version_unsupported` | `version` is not 1 or 2 |
 
 A refusal does not end the session and does not need reconciliation: replaying its
 `operationId` returns `state: rejected`, `sent: false`, `reconciliationRequired: false` and the
@@ -156,6 +156,37 @@ The connector never sends a compensating command. Repeating the same `operationI
 same receipt and post-check without sending again.
 
 Without `settleGuard`, `thread.settle` behaves exactly as before and checks nothing.
+
+### Settlement and guard version 2 (recommended)
+
+Read with `settlementContractVersion: 2` and settle with `settleGuard.version: 2`. The version of
+the guard must match the version of the observation: an `obs1_` id in a version 2 guard is
+`settle_observation_changed`, and the connector observes again in the guard's version.
+
+- `blockers` use the codes of `execution.continuation.blockers`, from the same full snapshot:
+  `active_run`, `queued_runs`, `pending_request`, `proposed_plan`, `usage_limit`,
+  `usage_limit_auto_resume`, `background_work_active`, `background_work_unknown`, plus
+  `observation_incomplete`. The shell can only add a blocker (a pending request, an active run, a
+  plan or background work that it shows and the projection does not), never remove one.
+- Differences from version 1: unknown background work (a server without a roster) blocks instead
+  of being a warning; a proposed plan known only from the projection and a usage limit that
+  resumes on its own also block. A blocker code the contract does not know makes the observation
+  incomplete.
+- `observationId` (`obs2_`) also changes with the thread's workspace (worktree path, branch), the
+  text of the latest assistant response (edited without a new message id), the kind and source
+  of background work, work that ended after the latest run, the projection's plans and the
+  blockers themselves.
+
+| Blocker (v2) | Refusal |
+|---|---|
+| `observation_incomplete`, `background_work_unknown`, an unknown code | `settle_observation_incomplete` |
+| `pending_request` | `settle_pending_request` |
+| `active_run` | `settle_active_run` |
+| `queued_runs` | `settle_queued_work` |
+| `proposed_plan`, `usage_limit`, `usage_limit_auto_resume`, `background_work_active` | `settle_unresolved_work` |
+
+Refusal codes, replay, post-check (`settlement.contractVersion: 2`) and the legacy path are the
+same as in version 1. Version 1 keeps its output and its `obs1_` ids.
 
 ## Example: a BFS round after a voice drop
 
