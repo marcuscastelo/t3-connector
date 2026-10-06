@@ -45,8 +45,13 @@ path the behavior is that of 0.2.0, pinned by a snapshot test (`test/fixtures/su
 | WebAuthn origin, `Origin` check | the issuer | the bare origin (`https://host.example`); the rpID is the hostname in both cases |
 
 Every other path gets 404, so a wrong ingress rule fails closed instead of answering for the other
-connector. Tokens are per process and bound to the resource; client assertions name this issuer
-(`<issuer>/token`, `<issuer>/revoke` or `<issuer>`). The transaction cookie stays
+connector. The ingress picks the owner from the raw request-target, so a mounted connector routes only
+origin-form targets whose path the URL parser keeps as is: dot segments (`.`, `..`, `%2e`),
+backslashes, `//authority` and absolute-form targets get 404 instead of being normalized into or out
+of the mount. Without a mount, request-targets are parsed as in 0.2.0. Tokens are per process and bound
+to the resource. A client assertion is accepted only when every `aud` value names this issuer
+(`<issuer>/token`, `<issuer>/revoke` or `<issuer>`), so one naming two issuers is refused by both;
+this holds with or without a mount. The transaction cookie stays
 `__Host-<brand.cookie>_tx` with `Path=/` (the `__Host-` prefix requires it), so a mounted connector
 needs a `brand.cookie` of its own: `createOAuthConnector` refuses the default one. Each connector keeps
 its own state directory; the public passkey file is tagged with the full issuer, so a state directory

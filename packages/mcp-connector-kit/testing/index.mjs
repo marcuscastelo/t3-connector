@@ -111,12 +111,13 @@ export function http(method, url, { headers = {}, body, host, timeoutMs = defaul
 /**
  * Runs createOAuthConnector (or `create`, a connector's branded wrapper) on loopback with a fake
  * client and an enrolled software passkey. Returns helpers for sign-in, token, refresh and MCP.
- * `mount` ('/fleet') serves it under a path of the issuer: http://localhost:<port>/fleet.
+ * `mount` ('/fleet') serves it under a path of the issuer: http://localhost:<port>/fleet. `keys`
+ * (from clientKeys()) gives several connectors the same fake client key.
  */
-export async function startConnector({ create = createOAuthConnector, tools, config = {}, loginMode = 'button', enroll = true, mount = '', serverInfo = { name: 'connector-test', version: '0.0.0' }, ...options } = {}) {
+export async function startConnector({ create = createOAuthConnector, tools, config = {}, loginMode = 'button', enroll = true, mount = '', keys: clientKey, serverInfo = { name: 'connector-test', version: '0.0.0' }, ...options } = {}) {
   let mono = 0, wallMs = Date.now();
   const clock = () => mono, wall = () => wallMs;
-  const keys = clientKeys('ES256');
+  const keys = clientKey ?? clientKeys('ES256');
   const doc = { client_id: CLIENT, client_name: 'Fake client', redirect_uris: ['https://client.example/cb'], token_endpoint_auth_method: 'private_key_jwt', jwks: { keys: [keys.jwk] } };
   // freePort() releases the port before the connector binds it, so a parallel test file can take it
   // first. A partial listen leaves bound servers that keep the process alive: close and retry.

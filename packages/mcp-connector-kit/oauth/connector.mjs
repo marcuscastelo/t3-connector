@@ -87,6 +87,11 @@ export function createOAuthConnector({ config, tools, serverInfo, fetch, clock, 
     // The issuer is configuration; Host and X-Forwarded-* from the internet never define it.
     if (req.headers.host !== publicHost) { audit({ event: 'public_bad_host' }); return json(res, 421, { error: 'misdirected_request' }); }
     const url = new URL(req.url, issuer);
+    // A mounted connector sits behind an ingress that routes by the raw request-target, so it routes
+    // only targets whose path the URL parser keeps as is: no dot segments (literal or %2e), backslash,
+    // authority or absolute form, which would otherwise land in or out of the mount after the ingress
+    // decided the owner.
+    if (mount && url.pathname !== req.url.split('?')[0]) { audit({ event: 'public_noncanonical_target' }); return json(res, 404, { error: 'not_found' }); }
     if (publicFlow && await publicFlow.handle(req, res, url)) return;
     if (await as(req, res, url)) return;
     if (!tunnel && await rs(req, res, url)) return;

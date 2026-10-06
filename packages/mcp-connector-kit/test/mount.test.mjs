@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createServer } from 'node:http';
+import { createServer, request } from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import { createOAuthConnector, DEFAULTS, loadOAuthConfig } from '../oauth/index.mjs';
-import { CLIENT, freePort, http, startConnector } from '../testing/index.mjs';
+import { CLIENT, clientKeys, http, startConnector } from '../testing/index.mjs';
 import { brand, publicHarness, surface, tools } from './surface.mjs';
 
 const fleetBrand = { name: 'Fleet Connector', cookie: 'flc', passkeyUser: 'fleet-oauth' };
@@ -117,22 +117,36 @@ test('mount /fleet (public): a WebAuthn assertion for a path-bearing origin is r
   assert.equal(v.status, 400);
 });
 
-// Two connectors on one host behind an ingress that routes by path: the root one (no mount) and one
-// mounted at /fleet. `x-route` lets a test address one connector directly, past the routing rule.
-test('two connectors on one host (root and /fleet): tokens, assertions, resources, cookies and paths do not cross', async (t) => {
+// Two connectors on one host behind an ingress that routes by the raw request-target with the
+// documented rule: the root one (no mount) and one mounted at /fleet, with one client (same
+// client_id, CIMD document and key) registered at both. `x-route` addresses one connector directly,
+// past the rule.
+const INGRESS = /^\/(fleet|\.well-known\/(oauth-authorization-server|openid-configuration|oauth-protected-resource)\/fleet)(\/.*)?$/;
+async function twoConnectors(t) {
   let root, fleet;
-  const toFleet = p => p.startsWith('/fleet/') || /^\/\.well-known\/[^/]+\/fleet(\/|$)/.test(p);
   const proxy = createServer((req, res) => {
-    const target = req.headers['x-route'] ?? (toFleet(new URL(req.url, 'http://x').pathname) ? 'fleet' : 'root');
+    const target = req.headers['x-route'] ?? (INGRESS.test(req.url.split('?')[0]) ? 'fleet' : 'root');
     (target === 'fleet' ? fleet : root).connector.publicHandler(req, res);
   });
   const port = await new Promise(ok => proxy.listen(0, '127.0.0.1', () => ok(proxy.address().port)));
   t.after(() => new Promise(r => proxy.close(r)));
-  const host = `http://localhost:${port}`;
-  root = await startConnector({ tools, brand, config: { issuer: host } });
-  fleet = await startConnector({ tools, brand: fleetBrand, config: { issuer: `${host}/fleet` } });
+  const host = `http://localhost:${port}`, keys = clientKeys();
+  root = await startConnector({ tools, brand, keys, config: { issuer: host } });
+  fleet = await startConnector({ tools, brand: fleetBrand, keys, config: { issuer: `${host}/fleet` } });
   t.after(() => Promise.all([root.close(), fleet.close()]));
+  return { root, fleet, host, port };
+}
 
+// HTTP request with the request-target sent byte for byte (fetch and testing's http normalize it).
+const raw = (port, target, { method = 'GET', host } = {}) => new Promise((ok, ko) => {
+  const req = request({ host: '127.0.0.1', port, method, path: target, headers: { host } }, res => {
+    res.resume(); res.on('end', () => ok({ status: res.statusCode, cookie: res.headers['set-cookie'] }));
+  });
+  req.on('error', ko); req.end();
+});
+
+test('two connectors on one host (root and /fleet): tokens, resources, cookies and paths do not cross', async (t) => {
+  const { root, fleet, host } = await twoConnectors(t);
   const a = await root.signIn(), b = await fleet.signIn();
   assert.equal(a.tokenResponse.status, 200, a.tokenResponse.text);
   assert.equal(b.tokenResponse.status, 200, b.tokenResponse.text);
@@ -146,12 +160,6 @@ test('two connectors on one host (root and /fleet): tokens, assertions, resource
   }
   assert.equal((await fleet.refresh(a.tokens.refresh_token)).status, 400);
   assert.equal((await root.refresh(b.tokens.refresh_token)).status, 400);
-
-  // A client assertion whose audience is the other issuer (its token endpoint or the issuer itself).
-  for (const [c, aud] of [[fleet, `${root.issuer}/token`], [fleet, root.issuer], [root, `${fleet.issuer}/token`], [root, fleet.issuer]]) {
-    const r = await c.token({ grant_type: 'refresh_token', refresh_token: (c === fleet ? b : a).tokens.refresh_token }, { assertion: c.assertion({ aud }) });
-    assert.equal(r.status, 401, `${c.issuer} accepted aud ${aud}`); assert.equal(r.data.error, 'invalid_client');
-  }
 
   // /authorize of one with the other's resource -> invalid_target.
   for (const [c, resource] of [[fleet, root.resource], [root, fleet.resource]]) {
@@ -179,6 +187,96 @@ test('two connectors on one host (root and /fleet): tokens, assertions, resource
   for (const p of fleetPaths) assert.equal((await http('GET', `${host}${p}`, { headers: { 'x-route': 'root' } })).status, 404, `root served ${p}`);
   for (const p of ['/token', '/revoke']) assert.equal((await http('POST', `${host}${p}`, { headers: { 'x-route': 'fleet' }, body: '' })).status, 404);
   for (const p of ['/fleet/token', '/fleet/revoke']) assert.equal((await http('POST', `${host}${p}`, { headers: { 'x-route': 'root' }, body: '' })).status, 404);
+});
+
+test('two connectors, one client key: an assertion is accepted only where every audience is the server\'s own', async (t) => {
+  const { root, fleet } = await twoConnectors(t);
+  // Client authentication through /revoke with an unknown token: 200 (RFC 7009) only when the
+  // assertion authenticated the client.
+  const revoke = (c, assertion) => http('POST', `${c.issuer}/revoke`, { headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form({ client_id: CLIENT, client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer', client_assertion: assertion, token: 'unknown' }) });
+  const outcome = r => (r.status === 200 ? 'ok' : `${r.status} ${r.data.error} ${r.data.error_description}`);
+  const refused = '401 invalid_client assertion_audience_invalid';
+  const R = root.issuer, F = fleet.issuer;
+
+  // Mixed audiences naming both issuers: refused by both, at revoke and at token.
+  for (const aud of [[`${R}/token`, `${F}/token`], [R, F], [`${R}/revoke`, `${F}/revoke`], [`${F}/token`, `${R}/token`, R], ['https://elsewhere.example/token', `${R}/token`, `${F}/token`]]) {
+    const assertion = root.assertion({ aud });
+    assert.equal(outcome(await revoke(root, assertion)), refused, `root revoke ${aud}`);
+    assert.equal(outcome(await revoke(fleet, assertion)), refused, `fleet revoke ${aud}`);
+  }
+  const a = await root.signIn(), b = await fleet.signIn();
+  const mixed = root.assertion({ aud: [`${R}/token`, `${F}/token`] });
+  assert.equal(outcome(await root.token({ grant_type: 'refresh_token', refresh_token: a.tokens.refresh_token }, { assertion: mixed })), refused);
+  assert.equal(outcome(await fleet.token({ grant_type: 'refresh_token', refresh_token: b.tokens.refresh_token }, { assertion: mixed })), refused);
+
+  // One server's audiences (string or array) work there and only there, whatever the key.
+  for (const [own, other] of [[root, fleet], [fleet, root]]) {
+    for (const aud of [`${own.issuer}/token`, own.issuer, `${own.issuer}/revoke`, [`${own.issuer}/token`, own.issuer], [`${own.issuer}/revoke`, `${own.issuer}/token`, own.issuer]]) {
+      assert.equal(outcome(await revoke(own, own.assertion({ aud }))), 'ok', `${own.issuer} refused its own aud ${aud}`);
+      assert.equal(outcome(await revoke(other, own.assertion({ aud }))), refused, `${other.issuer} accepted aud ${aud}`);
+    }
+    for (const aud of [`${own.issuer}/token`, [`${own.issuer}/token`, own.issuer]]) {
+      assert.equal(outcome(await other.token({ grant_type: 'refresh_token', refresh_token: (other === root ? a : b).tokens.refresh_token }, { assertion: own.assertion({ aud }) })), refused);
+    }
+    // Replay: once per server, and the other refuses it for its audience, not as a replay.
+    const once = own.assertion({ aud: `${own.issuer}/token` });
+    assert.equal(outcome(await revoke(own, once)), 'ok');
+    assert.equal(outcome(await revoke(own, once)), '401 invalid_client assertion_replayed');
+    assert.equal(outcome(await revoke(other, once)), refused);
+  }
+  // The refresh tokens refused above are still valid with the right audience: the refusals came
+  // from client authentication.
+  assert.equal((await root.refresh(a.tokens.refresh_token)).status, 200);
+  assert.equal((await fleet.token({ grant_type: 'refresh_token', refresh_token: b.tokens.refresh_token, resource: fleet.resource }, { assertion: fleet.assertion({ aud: [`${F}/token`, F] }) })).status, 200);
+  assert.equal(outcome(await root.token({ grant_type: 'refresh_token', refresh_token: 'x' }, { assertion: root.assertion({ aud: [] }) })), refused);
+});
+
+test('two connectors behind the ingress rule: raw request-targets never reach the other connector', async (t) => {
+  const { port } = await twoConnectors(t);
+  const host = `localhost:${port}`;
+  // target -> [owner by the ingress rule, expected status]; 404s must not set a cookie.
+  const cases = [
+    ['/fleet/../authorize', 404], ['/fleet/%2e%2e/authorize', 404], ['/fleet/./authorize', 404], ['/fleet/%2e/authorize', 404],
+    ['/fleet\\authorize', 404], ['/x/../fleet/authorize', 404], ['/x/%2e%2e/fleet/authorize', 404], ['//evil.example/fleet/authorize', 404],
+    ['/fleet/../.well-known/oauth-authorization-server', 404], ['/.well-known/oauth-authorization-server/x/../fleet', 404],
+    ['/.well-known/oauth-authorization-server/fleet/../../oauth-authorization-server', 404], ['/outside/../fleet/.well-known/openid-configuration', 404],
+    ['/fleet/../.well-known/oauth-protected-resource', 404], ['/.well-known/oauth-protected-resource/x/../fleet/mcp', 404],
+    ['/fleet/authorize', 400], ['/authorize', 400], ['/.well-known/oauth-authorization-server/fleet', 200], ['/.well-known/oauth-authorization-server', 200],
+  ];
+  for (const [target, status] of cases) {
+    const r = await raw(port, target, { host });
+    assert.equal(r.status, status, target);
+    if (status === 404) assert.equal(r.cookie, undefined, target);
+  }
+  for (const [target, status] of [['/fleet/../mcp', 404], ['/x/../fleet/mcp', 404], ['/fleet/mcp', 401], ['/mcp', 401]]) assert.equal((await raw(port, target, { method: 'POST', host })).status, status, target);
+});
+
+test('mount /fleet: only canonical origin-form request-targets are routed', async (t) => {
+  const h = await publicHarness({ issuer: 'https://issuer.example.test/fleet', connectorBrand: fleetBrand });
+  t.after(() => h.close());
+  h.c.publicEnrollment.issue(); // /fleet/enroll answers only while an enrollment is open
+  const get = (target, method) => raw(h.publicPort, target, { method, host: 'issuer.example.test' });
+  for (const target of [
+    '/.well-known/oauth-authorization-server/outside/../fleet', '/.well-known/openid-configuration/outside/../fleet', '/outside/../fleet/.well-known/openid-configuration',
+    '/outside/../fleet/enroll', '/outside/%2e%2e/fleet/enroll', '/fleet/./enroll', '/fleet/./.well-known/openid-configuration', '/fleet/%2e/enroll', '/fleet/%2E/enroll',
+    '/fleet/%2e%2e/fleet/enroll', '/fleet/enroll/.', '/fleet/enroll/..', '//evil.example/fleet/enroll', '//evil.example/fleet/.well-known/openid-configuration', '//issuer.example.test/fleet/enroll',
+    '/fleet\\enroll', '/fleet\\.well-known\\openid-configuration', '/fleet/../authorize', '/fleet/%2e%2e/authorize',
+    'https://issuer.example.test/fleet/enroll', 'http://issuer.example.test/fleet/enroll', '*',
+  ]) {
+    const r = await get(target);
+    assert.equal(r.status, 404, target); assert.equal(r.cookie, undefined, target);
+  }
+  assert.equal((await get('\\fleet/enroll')).status, 400); // refused by Node's HTTP parser, before any handler
+  for (const target of ['/fleet/./token', '/fleet/%2e/revoke', '/outside/../fleet/mcp', '/fleet\\mcp']) assert.equal((await get(target, 'POST')).status, 404, target);
+  // Canonical targets, including dot or encoded characters in the query, are routed as before.
+  for (const [target, status] of [['/fleet/enroll', 200], ['/.well-known/oauth-authorization-server/fleet', 200], ['/.well-known/openid-configuration/fleet', 200],
+    ['/fleet/.well-known/openid-configuration', 200], ['/.well-known/oauth-authorization-server/fleet/mcp', 200], ['/.well-known/oauth-protected-resource/fleet/mcp', 200],
+    ['/fleet/authorize/vendor/swa.js', 200], ['/fleet/authorize?next=/../x&p=%2e%2e/..', 400], ['/fleet/authorize/status?tx=..', 403], ['/fleet/resume?tx=./', 400]]) {
+    assert.equal((await get(target)).status, status, target);
+  }
+  assert.ok((await get('/fleet/enroll')).cookie[0].startsWith('__Host-flc_enroll='));
+  assert.equal((await get('/fleet/mcp', 'POST')).status, 401);
+  assert.equal((await get('/fleet/token', 'POST')).status, 400); // reached the token endpoint: form encoding required
 });
 
 test('createOAuthConnector refuses an issuer with an invalid mount', () => {

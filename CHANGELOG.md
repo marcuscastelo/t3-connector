@@ -6,7 +6,13 @@
   several connectors share one host behind a path-routing ingress. Discovery uses RFC 8414 path
   insertion, endpoints and pages live under the mount, WebAuthn uses the bare origin, and the root
   protected-resource alias is served only without a mount. Without a path the public surface is
-  identical to 0.2.0 (snapshot test), so the T3 Connector's behavior does not change.
+  identical to 0.2.0 (snapshot test). A mounted connector routes only canonical origin-form
+  request-targets (no dot segments, backslash, authority or absolute form), so the connector that
+  answers is always the one the ingress chose from the raw path.
+- OAuth client authentication: a `private_key_jwt` assertion is accepted only when every `aud` value
+  names this authorization server (its issuer, token or revocation endpoint). Before, one matching
+  value was enough, so an assertion naming two servers authenticated at both. Assertions with a single
+  audience, or with several that all name this server, work as before.
 
 ## 0.11.2
 
