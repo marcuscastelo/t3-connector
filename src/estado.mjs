@@ -134,11 +134,13 @@ export function estadoDaThread(thread, pedidosPendentes = []) {
   }
   if (status === 'completed') {
     const fundo = thread.pendingBackgroundTasks ?? [];
+    // Roster fora do contrato não derruba o resumo: fica dito, sem interpretar.
+    if (!Array.isArray(fundo)) return { state: 'completed', stateSource: 'latest_run', ...base, backgroundTasksInvalid: true };
     return {
       state: 'completed',
       stateSource: 'latest_run',
       ...base,
-      ...(fundo.length ? { backgroundTasks: fundo.map((t) => ({ kind: t.kind, taskId: t.taskId, description: t.description ?? null })) } : {}),
+      ...(fundo.length ? { backgroundTasks: fundo.map((t) => ({ kind: t?.kind ?? null, taskId: t?.taskId ?? null, description: t?.description ?? null })) } : {}),
     };
   }
   if (status === 'failed') {

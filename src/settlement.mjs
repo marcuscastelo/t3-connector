@@ -70,7 +70,7 @@ function marcaDaShell(t) {
     t.status, t.latestRunId, ou(t.activeRunId), ou(t.activityRunStatus), ou(t.pendingRuntimeRequest?.id),
     ou(t.settledAt), ou(t.settledOverride), ou(t.unsettledAt), ou(t.pinnedAt), ou(t.archivedAt),
     ou(t.latestVisibleMessage?.id), instante(t.latestVisibleMessage?.updatedAt), Boolean(t.hasActionableProposedPlan),
-    (t.pendingBackgroundTasks ?? []).map((x) => ou(x.taskId)),
+    Array.isArray(t.pendingBackgroundTasks) ? t.pendingBackgroundTasks.map((x) => ou(x?.taskId)) : ou(t.pendingBackgroundTasks),
   ]);
 }
 
@@ -205,6 +205,15 @@ function observar({ environmentId, thread, snapshot, attempts = 1, version = SET
   if (!Number.isInteger(snapshot?.snapshotSequence) || snapshot.snapshotSequence < 0) problemas.push('snapshot_sequence_invalid');
   if (thread && p?.thread?.id !== thread.id) problemas.push('snapshot_of_another_thread');
   if (thread && !STATUS_THREAD.has(thread.status)) problemas.push('thread_status_unknown');
+  // Linha da shell que decide bloqueios: tipos do contrato ou observação incompleta.
+  if (thread) {
+    const obj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
+    if (thread.pendingRuntimeRequest != null && !(obj(thread.pendingRuntimeRequest) && typeof thread.pendingRuntimeRequest.id === 'string' && thread.pendingRuntimeRequest.id)) problemas.push('shell_pending_request_invalid');
+    if (thread.limitRecovery != null && !obj(thread.limitRecovery)) problemas.push('shell_limit_recovery_invalid');
+    if (thread.pendingBackgroundTasks != null && !(Array.isArray(thread.pendingBackgroundTasks) && thread.pendingBackgroundTasks.every((t) => obj(t) && typeof t.taskId === 'string' && t.taskId.trim()))) problemas.push('shell_background_roster_invalid');
+    if (thread.hasActionableProposedPlan !== undefined && typeof thread.hasActionableProposedPlan !== 'boolean') problemas.push('shell_plan_flag_invalid');
+    if (thread.activeRunId != null && typeof thread.activeRunId !== 'string') problemas.push('shell_active_run_invalid');
+  }
   if (Array.isArray(p?.runs) && !p.runs.every((r) => textoNaoVazio(r?.id) && STATUS_RUN.has(r.status))) problemas.push('run_malformed_or_status_unknown');
   if (Array.isArray(p?.runtimeRequests) && !p.runtimeRequests.every((r) => textoNaoVazio(r?.id) && STATUS_PEDIDO.has(r.status))) {
     problemas.push('request_malformed_or_status_unknown');

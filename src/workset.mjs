@@ -108,7 +108,12 @@ function itemCompacto(t, resumo, ambiente, projeto) {
     pinned: 'pinnedAt' in t ? Boolean(t.pinnedAt) : null,
     ...(linha.parentThreadId ? { parentThreadId: linha.parentThreadId, relationshipToParent: linha.relationshipToParent ?? null } : {}),
     ...(pr ? { linkedPullRequest: { number: pr.number ?? null, url: pr.url ?? null, state: pr.state ?? null } } : {}),
-    ...(t.pendingBackgroundTasks?.length ? {
+    // Roster fora do contrato (não lista, tarefa sem taskId): conta como trabalho que segura a
+    // thread, para nunca sair da fila em silêncio.
+    ...(t.pendingBackgroundTasks != null && !(Array.isArray(t.pendingBackgroundTasks) && t.pendingBackgroundTasks.every((x) => x && typeof x.taskId === 'string')) ? {
+      backgroundRosterInvalid: true,
+      backgroundHoldsThread: true,
+    } : t.pendingBackgroundTasks?.length ? {
       backgroundTaskCount: t.pendingBackgroundTasks.length,
       // Mesma regra de `execution.background` (src/execucao.mjs): comando não segura a thread.
       backgroundHoldsThread: t.pendingBackgroundTasks.some((x) => seguraAThread(x.kind ?? 'background_task')),

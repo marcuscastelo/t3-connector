@@ -100,3 +100,20 @@ test('R5 consumidores por ID: clienteFiltrado recusa linhas divergentes; workset
   const refs = [...w.actionable, ...w.inFlight].filter((x) => x.threadId === 'dup');
   assert.deepEqual(refs.map((x) => x.group), ['unknown']);
 });
+
+test('R5+ linha da shell fora do contrato também deixa o settlement incompleto', async () => {
+  for (const campos of [{ pendingRuntimeRequest: 'x' }, { pendingRuntimeRequest: {} }, { limitRecovery: 'x' }, { pendingBackgroundTasks: [{ kind: 'monitor' }] }, { pendingBackgroundTasks: 'x' }, { hasActionableProposedPlan: 'yes' }, { activeRunId: 7 }]) {
+    const o = await ler([thread(campos)], proj());
+    assert.equal(o.complete, false, JSON.stringify(campos));
+    assert.equal(avaliarGuard(guard(o), o), 'settle_observation_incomplete');
+  }
+  assert.equal((await ler([thread()], proj())).complete, true);
+});
+
+test('R5+ workset: roster fora do contrato mantém a thread em voo, sem derrubar o environment', async () => {
+  const d = dadosPadrao();
+  d.local.shell.threads.push(thread({ id: 'rx', projectId: LOCAL.projeto, status: 'completed', pendingBackgroundTasks: 'x' }), thread({ id: 'ry', projectId: LOCAL.projeto, status: 'completed', pendingBackgroundTasks: [{ kind: 'command' }] }));
+  const w = dados(await (await conectarMcp(ambientesFalsos(d))).callTool({ name: 't3_workset', arguments: { environments: ['local'] } }));
+  assert.equal(w.complete, true);
+  assert.deepEqual(w.inFlight.filter((x) => ['rx', 'ry'].includes(x.threadId)).map((x) => x.threadId).sort(), ['rx', 'ry']);
+});
