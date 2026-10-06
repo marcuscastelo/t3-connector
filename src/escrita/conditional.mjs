@@ -23,7 +23,7 @@
 //                         queued it (a run that appeared after the last check), with the run's model.
 import { z } from 'zod';
 import { digest } from './gate.mjs';
-import { chaveOperacao } from './adapters.mjs';
+import { chaveOperacao, parseAction } from './adapters.mjs';
 import { runAtivoDaShell } from '../estado.mjs';
 
 export const CONDITIONAL_SEND = 'thread.conditional-send';
@@ -78,27 +78,34 @@ const inflight = new Map();
  * @param host.caller          canonical caller identity (journal key)
  * @param host.environment     {environmentId, destination}
  * @param host.journal         same atomic journal as the Dispatcher
- * @param host.authorize(actions)  throws unless the caller may run these actions now
- * @param host.observe(threadId)   shell thread (authorized), throws thread_not_found
+ * @param host.authorize(actions, projectId?)  throws unless the caller may run these actions now
+ *                                   (and, with projectId, in that project)
+ * @param host.observe(threadId)   shell thread (project authorized), throws thread_not_found
  * @param host.readThread(threadId) full projection {runs, ...} for the post-check (optional)
  * @param host.dispatch(action, operationId, input)  the existing dispatch path
  * @param host.audit(event)
  * @param host.failClosed()  called when the journal fails
  */
-export function conditionalSend(host, operationId, rawInput, { sleep = ms => new Promise(r => setTimeout(r, ms)), now = Date.now } = {}) {
+export async function conditionalSend(host, operationId, rawInput, { sleep = ms => new Promise(r => setTimeout(r, ms)), now = Date.now } = {}) {
   const input = conditionalSchema.parse(rawInput);
   if (input.clientRequestId !== operationId) throw new Error('request_id_mismatch');
   const key = manifestKey({ ...host.environment, caller: host.caller, clientRequestId: input.clientRequestId });
-  // Concurrent duplicates in this process share one execution and one result.
-  if (inflight.has(key)) return inflight.get(key);
-  const running = run(host, key, input, { sleep, now }).finally(() => inflight.delete(key));
-  inflight.set(key, running);
+  const hash = digest([CONDITIONAL_SEND, input]);
+  // Every call authorizes with its own lease/session before anything else, joined or not.
+  host.authorize(requiredActions(input));
+  // Concurrent duplicates in this process share one execution and one result; a different input
+  // under the same clientRequestId is a conflict, as it is against the journal.
+  const current = inflight.get(key);
+  if (current) {
+    if (current.hash !== hash) throw new Error('operation_conflict');
+    return current.running.then(result => { host.authorize(requiredActions(input), result.projectId); return structuredClone(result); });
+  }
+  const running = run(host, key, input, hash, { sleep, now }).finally(() => inflight.delete(key));
+  inflight.set(key, { hash, running });
   return running;
 }
 
-async function run(host, key, input, { sleep, now }) {
-  host.authorize(requiredActions(input));
-  const hash = digest([CONDITIONAL_SEND, input]);
+async function run(host, key, input, hash, { sleep, now }) {
   // A journal failure fails closed like the Dispatcher's: the host ends its leases/sessions.
   const store = (method, ...args) => { try { return host.journal[method](...args); } catch { host.failClosed(); throw new Error('journal_failed'); } };
   const at = () => new Date(now()).toISOString();
@@ -107,11 +114,34 @@ async function run(host, key, input, { sleep, now }) {
   if (!store('reserve', key, record)) {
     const old = store('get', key);
     if (old.hash !== hash) throw new Error('operation_conflict');
+    // A recorded request reveals its thread, observations and model: the caller's current lease or
+    // session must still cover that thread's project, as the Dispatcher's replay re-checks its target.
+    if (old.projectId !== undefined) host.authorize(requiredActions(input), old.projectId);
+    else if (old.observations.length || old.steps.length) old.projectId = (await host.observe(input.threadId)).projectId;
     if (FINAL.has(old.state)) return view(old, true);
     record = old; // pending, or interrupted mid-way: steps are idempotent by their own operationIds
   }
   record.attempts++;
   const save = () => store('put', key, record);
+  // The Dispatcher commits a step before the manifest records it. Adopt every step its journal
+  // already holds before any precondition is evaluated, so a resumed request never answers
+  // "nothing sent" for a step T3 received, and never decides a new send from a shell that shows
+  // the request's own run.
+  const inputs = stepInputs(input, ids);
+  const recovered = inputs.flatMap(({ action, operationId, stepInput }) => {
+    if (record.steps.some(x => x.operationId === operationId)) return [];
+    const durable = store('get', chaveOperacao({ ...host.environment, caller: host.caller, operationId }));
+    if (!durable) return [];
+    // Same rule as the Dispatcher: an operationId used for another input is a conflict.
+    if (durable.hash !== digest([action, parseAction(action, stepInput).input])) throw new Error('operation_conflict');
+    return [stepFromDispatcher(durable, operationId, at())];
+  });
+  if (recovered.length) {
+    // Nothing about these steps is returned before the thread's project is authorized.
+    if (record.projectId === undefined) record.projectId = (await host.observe(input.threadId)).projectId;
+    record.steps = [...record.steps, ...recovered];
+    save();
+  }
   const finish = (state, extra = {}) => {
     Object.assign(record, { state, finishedAt: at(), ...extra });
     save();
@@ -120,6 +150,7 @@ async function run(host, key, input, { sleep, now }) {
   };
   const observe = async phase => {
     const thread = await host.observe(input.threadId);
+    record.projectId ??= thread.projectId;
     const evaluation = evaluatePrecondition(thread, input.afterRunId);
     const entry = { phase, at: at(), verdict: evaluation.verdict, reason: evaluation.reason, ...evaluation.observation, model: thread.modelSelection ?? null };
     record.observations.push(entry);
@@ -127,7 +158,8 @@ async function run(host, key, input, { sleep, now }) {
     return { thread, evaluation };
   };
   const step = async (action, operationId, stepInput) => {
-    const done = record.steps.find(s => s.operationId === operationId && s.state === 'completed');
+    // A recorded step (completed, refused or uncertain) is the outcome; it is never dispatched again.
+    const done = record.steps.find(s => s.operationId === operationId);
     if (done) return done;
     const entry = { action, operationId, startedAt: at() };
     try {
@@ -167,7 +199,7 @@ async function run(host, key, input, { sleep, now }) {
 
   // 2. Model selection through the existing write action.
   if (input.modelSelection) {
-    const s = await step('thread.model-selection.set', ids.model, { threadId: input.threadId, modelSelection: input.modelSelection });
+    const s = await step('thread.model-selection.set', ids.model, inputs[0].stepInput);
     if (s.state === 'uncertain') return finish('uncertain', { failedStep: s.action, reason: 'reconciliation_required' });
     if (s.state !== 'completed') return finish('failed', { failedStep: s.action, reason: s.error ?? 'step_rejected', ...(s.detail ? { detail: s.detail } : {}) });
   }
@@ -187,10 +219,27 @@ async function run(host, key, input, { sleep, now }) {
   }
 
   // 4. The send, as start_immediately: never queue_after_active, steer or restart.
-  const s = await step('thread.send', ids.send, { threadId: input.threadId, clientRequestId: ids.send, text: input.text, delivery: 'start_immediately' });
+  const s = await step('thread.send', ids.send, inputs.at(-1).stepInput);
   if (s.state === 'uncertain') return finish('uncertain', { failedStep: s.action, reason: 'reconciliation_required' });
   if (s.state !== 'completed') return finish('failed', { failedStep: s.action, reason: s.error ?? 'step_rejected', ...(s.detail ? { detail: s.detail } : {}), sent: false });
   return finish('completed', { delivery: await postCheck(host, input, ids.send) });
+}
+
+// The existing writes this request is made of, in order.
+const stepInputs = (input, ids) => [
+  ...(input.modelSelection ? [{ action: 'thread.model-selection.set', operationId: ids.model, stepInput: { threadId: input.threadId, modelSelection: input.modelSelection } }] : []),
+  { action: 'thread.send', operationId: ids.send, stepInput: { threadId: input.threadId, clientRequestId: ids.send, text: input.text, delivery: 'start_immediately' } },
+];
+
+// A step as the Dispatcher's journal holds it. `preparing` was never sent (the Dispatcher marks a
+// step uncertain before the outbound call) but its operationId can no longer be dispatched.
+function stepFromDispatcher(durable, operationId, at) {
+  const action = durable.action;
+  const base = { action, operationId, recovered: true, finishedAt: at };
+  if (durable.state === 'completed') return { ...base, state: 'completed', ...(durable.receipt ? { receipt: durable.receipt } : {}) };
+  if (durable.state === 'rejected' || durable.state === 'failed') return { ...base, state: 'rejected', error: 'dispatch_rejected' };
+  if (durable.state === 'preparing') return { ...base, state: 'rejected', error: 'interrupted_before_send' };
+  return { ...base, state: 'uncertain' };
 }
 
 // What T3 did with the message: the run whose userMessageId is the send's stable messageId.
