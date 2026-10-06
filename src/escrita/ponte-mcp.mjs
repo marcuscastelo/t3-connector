@@ -5,7 +5,7 @@ import {z} from 'zod';
 import {ACTIONS,schemaForAction,SEND_DESCRIPTION} from './adapters.mjs';
 import {LEITURAS} from './read-guarded.mjs';
 
-export const VERSAO_ESCRITA='0.12.0';
+export const VERSAO_ESCRITA='0.12.1';
 
 const MENSAGENS={
  target_run_id_required:'targetRunId required: read t3_thread in the same environment and pass the active run for steer_active or restart_active; do not replace it with queue_after_active',
@@ -34,7 +34,9 @@ const comAmbiente=({ambiente,...r})=>ambiente?{environment:ambiente,...r}:r;
 
 export function criarPonteEscrita({relay,aliases=[],approvalOrigin}) {
  const lista=aliases.length?aliases.join(', '):'see t3_pedir_aprovacao';
- const erro=e=>{const code=/^[a-z_]+$/.test(e.message)?codigo(e.message):'gate_rejected';const extra=code==='environment_unknown'?` (configured: ${lista})`:'';return {isError:true,content:[{type:'text',text:MENSAGENS[code]?`${code}: ${MENSAGENS[code]}${extra}`:code}]};};
+ // A native wrapper's typed refusal (through the relay) is T3's own code and message; a connector code
+ // carrying a typed T3 answer (reconciliation_required) appends it.
+ const erro=e=>{if(e?.native&&(e.message==='t3_error'||e.message===e.native.code))return {isError:true,content:[{type:'text',text:`${e.native.code}: ${e.native.message}`}]};const t3=e?.native?` T3 answered ${e.native.code}: ${e.native.message}`:'';const code=/^[a-z_]+$/.test(e.message)?codigo(e.message):'gate_rejected';const extra=code==='environment_unknown'?` (configured: ${lista})`:'';return {isError:true,content:[{type:'text',text:(MENSAGENS[code]?`${code}: ${MENSAGENS[code]}${extra}`:code)+t3}]};};
  const resultado=async op=>{try{return {content:[{type:'text',text:JSON.stringify(await op())}]};}catch(e){return erro(e);}};
  const environment=z.string().min(1).describe(`T3 environment where the thread/project lives (required; alias or environmentId): ${lista}. IDs from one environment are not valid in another.`);
  const server=new McpServer({name:'t3-connector-write',version:VERSAO_ESCRITA});
@@ -75,6 +77,6 @@ export function relayHttp({porta,lerCapability,timeoutMs=20000}) {
  return async request=>{
   let capability;try{capability=lerCapability();}catch{throw new Error('gate_indisponivel');}
   let r;try{r=await fetch(`http://localhost:${porta}/relay`,{method:'POST',headers:{'content-type':'application/json','x-t3-private-relay':capability},body:JSON.stringify(request),signal:AbortSignal.timeout(timeoutMs)});}catch{throw new Error('gate_indisponivel');}
-  const v=await r.json();if(!r.ok)throw new Error(v.error);return v;
+  const v=await r.json();if(!r.ok){const e=new Error(v.error);if(v.native)e.native=v.native;throw e;}return v;
  };
 }

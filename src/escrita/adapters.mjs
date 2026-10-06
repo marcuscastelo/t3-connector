@@ -163,7 +163,8 @@ export class Dispatcher {
    }
    const payloadIds={commandId:payload.commandId,threadId:payload.threadId,messageId:payload.messageId};
    this.#store('put',key,{...initial,state:'uncertain',target,payloadIds});
-   const result=await this.gate.dispatch(identity,leaseId,{environmentId:this.environmentId,destination:this.destination,projectIds:[...projects],action},()=>this.adapter.invoke(method,payload,parsed.spec.native?{nativeErrors:true}:undefined),operationId);
+   // Typed errors for every method: a tagged Fail is T3 answering, not the transport failing (see catch).
+   const result=await this.gate.dispatch(identity,leaseId,{environmentId:this.environmentId,destination:this.destination,projectIds:[...projects],action},()=>this.adapter.invoke(method,payload,{nativeErrors:true}),operationId);
    const done={...initial,state:'completed',target,payloadIds,receipt:parsed.spec.native?await this.#nativeResult(parsed.spec,{raw:result,method,payload,input:parsed.input}):this.adapter.receipt(result)};
    this.#store('put',key,done);
    if(!isProjectAction(action)) return {state:'completed',operationId,receipt:done.receipt};
@@ -173,11 +174,23 @@ export class Dispatcher {
    return {state:'completed',operationId,receipt:done.receipt,...postCheck};
   } catch(error) {
    const record=this.#store('get',key);
-   // A native refusal: nothing sent (built before the send) or a typed answer from T3 (it refused).
-   // Neither is uncertain: no reconciliation, no fail-closed of the sessions.
-   if(error instanceof NativeToolError || error instanceof NativeRpcError) {
+   // A typed refusal decided before the send (NativeToolError, or a typed answer to a preflight read)
+   // is `rejected`: nothing was sent. A native wrapper's typed answer stays `failed` (T3 refused; as
+   // reviewed for 0.11.0). Neither reconciles nor fails closed.
+   if(error instanceof NativeToolError || (error instanceof NativeRpcError && (record.state==='preparing' || parsed.spec.native))) {
     this.#store('put',key,{...record,state:record.state==='preparing'?'rejected':'failed',error:error.native});
     throw error;
+   }
+   // A typed answer from T3 to a sent canonical action. T3 received the command, keeps a receipt
+   // under this commandId and answered a typed error; whether it refused before any effect or
+   // failed after a commit (e.g. the post-commit steps of queue.resume, or a launch whose thread
+   // exists) cannot be told from the error, so the operation stays uncertain and is never resent.
+   // The transport is healthy and the connector is in sync with T3, so sessions and leases survive;
+   // ending every OAuth session is reserved to a lost transport or a failed journal. Before, this
+   // answer was treated as a lost transport and cost ChatGPT a Reconnect + passkey (06/10/2026).
+   if(error instanceof NativeRpcError) {
+    this.#store('put',key,{...record,state:'uncertain',error:error.native});
+    throw Object.assign(new Error('reconciliation_required'),{native:error.native});
    }
    if(record.state!=='preparing') this.gate.close();
    // No blind retry even if transport or audit failed. Reconciliation is read-only.
@@ -217,6 +230,6 @@ export class Dispatcher {
   const observation=z.object({found:z.boolean(),sequence:z.number().int().nonnegative().optional(),threadId:z.string().optional(),state:z.enum(['running','completed','failed','unknown']).optional()}).strict().parse(await this.adapter.reconcile(record));
   this.gate.check(identity,leaseId,record.target);
   this.gate.audit({event:'reconciled',operationId,leaseId,caller,target:record.target});
-  return {operationId,state:record.state,observation};
+  return {operationId,state:record.state,observation,...(record.error?{error:record.error}:{})};
  }
 }

@@ -109,3 +109,28 @@ test('conexão: leitura repete uma vez quando o transporte caiu, com transporte 
  assert.equal(await c.adapter.projectForThread('llm'),'app');
  assert.equal(t.descartes,1,'túnel descartado e recriado');
 });
+
+test('ponte: recusa tipada do T3 chega ao cliente com o código e a mensagem do T3',async()=>{
+ const c=await ponte(async()=>{throw Object.assign(new Error('t3_error'),{native:{code:'OrchestrationV2DispatchCommandError',message:'This thread still needs attention. Resolve or interrupt it first, then try again.'}});});
+ const r=await c.callTool({name:'t3_escrever_thread_send',arguments:{leaseId:'l',environment:'remoto',operationId:'op',input:{threadId:'t',text:'oi',clientRequestId:'op',delivery:'start_immediately'}}});
+ assert.equal(r.isError,true);
+ assert.equal(r.content[0].text,'OrchestrationV2DispatchCommandError: This thread still needs attention. Resolve or interrupt it first, then try again.');
+});
+
+test('relayHttp: preserva o detalhe tipado do T3 numa recusa do relay',async()=>{
+ const {createServer}=await import('node:http');
+ const {relayHttp}=await import('../src/escrita/ponte-mcp.mjs');
+ const server=createServer((req,res)=>{res.writeHead(403,{'content-type':'application/json'});res.end(JSON.stringify({error:'t3_error',native:{code:'OrchestrationV2DispatchCommandError',message:'m'}}));});
+ await new Promise(r=>server.listen(0,r));
+ try {
+  const relay=relayHttp({porta:server.address().port,lerCapability:()=>'cap'});
+  await assert.rejects(relay({op:'dispatch'}),e=>e.message==='t3_error'&&e.native.code==='OrchestrationV2DispatchCommandError'&&e.native.message==='m');
+ } finally {server.close();}
+});
+
+test('ponte: resposta tipada do T3 numa ação canônica mantém reconciliation_required e acrescenta o motivo do T3',async()=>{
+ const c=await ponte(async()=>{throw Object.assign(new Error('reconciliation_required'),{native:{code:'OrchestrationV2DispatchCommandError',message:'This thread still needs attention.'}});});
+ const r=await c.callTool({name:'t3_escrever_thread_send',arguments:{leaseId:'l',environment:'remoto',operationId:'op',input:{threadId:'t',text:'oi',clientRequestId:'op',delivery:'start_immediately'}}});
+ assert.equal(r.isError,true);
+ assert.match(r.content[0].text,/^reconciliation_required: .*t3_reconciliar_escrita.* T3 answered OrchestrationV2DispatchCommandError: This thread still needs attention\.$/);
+});
