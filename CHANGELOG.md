@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- New write tool `t3_escrever_thread_conditional_send` (lease bridge and OAuth): "after run
+  `afterRunId` ends, optionally apply `modelSelection`, then send `text`" as one request with one
+  `clientRequestId`. The precondition (run terminal, still the latest, nothing active) is checked
+  before the first step and again right before the send; a run started in between refuses the
+  send instead of letting T3 queue it. Steps reuse `thread.model-selection.set` and `thread.send`
+  `start_immediately` through the existing dispatch (journal, scope, stable commandId, fail-closed
+  uncertainty) under `<clientRequestId>:model-selection` and `<clientRequestId>:send`. A manifest in
+  the same journal records every observation and step: retries replay it (only
+  `precondition_pending` is re-evaluated), concurrent duplicates share one execution, and the
+  result states `precondition_pending | precondition_failed | failed | uncertain | completed`, with
+  `delivery.deliveredAs` from the run T3 created. No new consented action; existing tools unchanged.
+
 ## 0.12.0
 
 - Read tools: thread summaries add `woke` and `wokeAt`, the "Woke" marker of the T3 sidebar
