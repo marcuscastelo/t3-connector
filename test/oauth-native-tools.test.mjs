@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ambientesFalsos, dadosPadrao } from './apoio.mjs';
 import { startConnector } from './oauth-apoio.mjs';
-import { memoryJournal } from './escrita-fixtures.mjs';
+import { memoryJournal, providersFor } from './escrita-fixtures.mjs';
 import { t3Tools } from '../src/oauth/t3-tools.mjs';
 import { loadOAuthConfig } from '../src/oauth/config.mjs';
 import { ACTIONS } from '../src/escrita/adapters.mjs';
@@ -65,7 +65,7 @@ async function fixture(t, { nativeTools = true, scope } = {}) {
     return { registro: { ...r, destination: `t3://${r.environmentId}`, acoes: ACTIONS },
       inventario: async () => { throw new Error('unused'); },
       cliente: async () => ({ shell: async () => structuredClone(e.shell()) }),
-      adapter: { prepare: async () => {}, invoke: e.invoke, native: e.native, receipt: r => r, verifyWorkspace: async () => true, reconcile: async () => ({ found: false, state: 'unknown' }) }, fechar() {} };
+      adapter: { prepare: async () => {}, providers: async () => providersFor(MODEL), invoke: e.invoke, native: e.native, receipt: r => r, verifyWorkspace: async () => true, reconcile: async () => ({ found: false, state: 'unknown' }) }, fechar() {} };
   });
   const c = await startConnector({ tools: t3Tools({ ambientes: reads, conexoes: connections, journal, projectPolicy: 'all', nativeTools }) }); t.after(c.close);
   const s = await c.signIn(scope ? { scope } : {}), at = s.tokens.access_token;

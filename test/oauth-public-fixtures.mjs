@@ -10,7 +10,7 @@ import { consentAll } from '../src/oauth/project-policy.mjs';
 import { perRequestSource } from '../src/oauth/resource-server.mjs';
 import { rehearsalTools } from '../src/oauth/rehearsal-tools.mjs';
 import { freePort, http } from './oauth-apoio.mjs';
-import { authenticator, memoryJournal } from './escrita-fixtures.mjs';
+import { authenticator, memoryJournal, providersFor } from './escrita-fixtures.mjs';
 import { clientKeys, cimdFetch, CLIENT } from './oauth-fixtures.mjs';
 import { ambientesFalsos, dadosPadrao } from './apoio.mjs';
 import { thread, projecao, mensagem } from './fixtures.mjs';
@@ -30,7 +30,7 @@ export async function publicFixture(t, { config = {}, tools, fetch, limits, enro
   const data = dadosPadrao(), reads = ambientesFalsos(data), journal = { ...memoryJournal(), audit() {} };
   const connections = reads.registros.map(r => {
     const calls = [], d = data[r.alias];
-    return { calls, registro: { ...r, destination: `t3://${r.environmentId}`, acoes: ACTIONS }, inventario: async () => d.shell.projects.map(p => ({ id: p.id, name: p.title, directory: p.workspaceRoot })), cliente: async () => ({ shell: async () => structuredClone(d.shell) }), adapter: { prepare: async () => {}, projectForThread: async id => d.shell.threads.find(t => t.id === id)?.projectId, invoke: async (method, payload) => { calls.push({ method, payload }); return { sequence: 1 }; }, receipt: r => r, reconcile: async r => ({ found: !!r.receipt }) }, fechar() {} };
+    return { calls, registro: { ...r, destination: `t3://${r.environmentId}`, acoes: ACTIONS }, inventario: async () => d.shell.projects.map(p => ({ id: p.id, name: p.title, directory: p.workspaceRoot })), cliente: async () => ({ shell: async () => structuredClone(d.shell) }), adapter: { prepare: async () => {}, providers: async () => providersFor({ instanceId: 'codex', model: 'test' }), projectForThread: async id => d.shell.threads.find(t => t.id === id)?.projectId, invoke: async (method, payload) => { calls.push({ method, payload }); return { sequence: 1 }; }, receipt: r => r, reconcile: async r => ({ found: !!r.receipt }) }, fechar() {} };
   });
   const factory = tools ?? (backend ? t3Tools({ ambientes: reads, conexoes: connections, journal, projectPolicy: 'all' }) : () => ({ sources: [perRequestSource(rehearsalTools())], grantProvider: Object.assign(async () => ({ grants: consentAll(reads.registros), unavailable: [] }), { projectPolicy: 'all' }) }));
   let c;

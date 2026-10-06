@@ -5,7 +5,7 @@ import {InMemoryTransport} from '@modelcontextprotocol/sdk/inMemory.js';
 import {criarPonteEscrita} from '../src/escrita/ponte-mcp.mjs';
 import {Dispatcher} from '../src/escrita/adapters.mjs';
 import {StagingRpcTransport} from '../src/escrita/transport-staging.mjs';
-import {setup,memoryJournal} from './escrita-fixtures.mjs';
+import {setup,memoryJournal,providersFor} from './escrita-fixtures.mjs';
 
 const selection={instanceId:'claudeAgent_custom',model:'claude-opus-5-5'};
 async function isolated(t,{failure=false}={}) {
@@ -19,7 +19,7 @@ async function isolated(t,{failure=false}={}) {
     exit:failure?{_tag:'Failure',cause:{private:'must not leak'}}:{_tag:'Success',value:frame.tag==='orchestration.launchThread'?{threadId:frame.payload.threadId,projection:{},resumed:false}:{sequence:1}}})}));
   }};
  const rpc=new StagingRpcTransport({socket,onFailure:()=>{}});
- const adapter={invoke:(...args)=>rpc.invoke(...args),receipt:r=>rpc.receipt(r),projectForThread:async()=>'app'};
+ const adapter={providers:async()=>providersFor({...selection,options:[{id:'effort',value:'high'}]}),invoke:(...args)=>rpc.invoke(...args),receipt:r=>rpc.receipt(r),projectForThread:async()=>'app'};
  const dispatcher=new Dispatcher({gate:s.gate,adapter,journal:memoryJournal(),environmentId:s.env.environmentId,destination:s.env.destination});
  let relays=0;
  const server=criarPonteEscrita({aliases:['isolated'],approvalOrigin:'https://approval.example.test',relay:async req=>{

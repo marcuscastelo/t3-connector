@@ -5,11 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Dispatcher,ACTIONS,parseAction } from '../src/escrita/adapters.mjs';
 import { FileJournal } from '../src/escrita/journal.mjs';
-import { setup } from './escrita-fixtures.mjs';
+import { setup,providersFor } from './escrita-fixtures.mjs';
 import { memoryJournal } from './escrita-fixtures.mjs';
 function dispatcher(s,adapter,journal=memoryJournal()) {return new Dispatcher({gate:s.gate,adapter,journal,environmentId:s.env.environmentId,destination:s.env.destination});}
 const send={operationId:'req1',action:'thread.send',input:{threadId:'thread',text:'hello',clientRequestId:'req1',delivery:'start_immediately'}};
-function adapter() {const calls=[];return {calls,verifyWorkspace:async()=>true,projectForThread:async()=> 'app',invoke:async(method,payload)=>{calls.push({method,payload});return {sequence:10};},receipt:r=>({sequence:r.sequence}),reconcile:async()=>({found:true})};}
+function adapter() {const calls=[];return {calls,providers:async()=>providersFor({instanceId:'codex',model:'model'}),verifyWorkspace:async()=>true,projectForThread:async()=> 'app',invoke:async(method,payload)=>{calls.push({method,payload});return {sequence:10};},receipt:r=>({sequence:r.sequence}),reconcile:async()=>({found:true})};}
 test('explicit launch adapter defaults to full-access/default; no generic RPC',()=>{const p=parseAction('thread.launch',{projectId:'app',title:'work',modelSelection:{instanceId:'codex',model:'model'},workspaceStrategy:{type:'root'},text:'task'});const wire=p.spec.encode(p.input);assert.equal(wire.runtimeMode,'full-access');assert.equal(wire.interactionMode,'default');assert.equal(p.spec.method,'orchestration.launchThread');assert.throws(()=>parseAction('arbitrary.rpc',{}));assert.throws(()=>parseAction('thread.launch',{...p.input,runtimeMode:'auto',type:'anything'}));});
 test('native runtime modes reach dispatch unchanged; omission keeps legacy full-access and invalid modes never send',async()=>{
  const inputs={

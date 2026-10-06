@@ -140,8 +140,9 @@ version), and refresh the tool list in the client.
    user and call again on a later turn. Do not chain waits in the same turn.
 4. **`needs_intervention`** (approval, question, plan) is not an end
    state. The connector only reports it; answering requires T3 itself.
-5. **Before choosing a provider or model**, call `t3_providers` in the target environment.
-   See [Provider instances](#provider-instances-t3_providers).
+5. **To browse providers or models**, call `t3_providers` in the target environment. A write
+   with `modelSelection` does not need it first: it validates the selection itself. See
+   [Provider instances](#provider-instances-t3_providers).
 
 ### Read tools
 
@@ -393,7 +394,9 @@ carries no providers.
 
 **Using it before a write.** `thread.launch`, `thread.model-selection.set`,
 `provider.switch` and `delegated_task.request` take
-`modelSelection: {instanceId, model, options?}`:
+`modelSelection: {instanceId, model, options?}`. A client that already knows the exact IDs
+(for example `{instanceId: "claudeAgent_custom", model: "claude-opus-5-5", options: [{id:
+"fastMode", value: true}]}`) can write directly; otherwise:
 
 1. `t3_providers {environment}` and pick the instance by `instanceId`
    or `displayName` (ask the user if more than one fits).
@@ -402,9 +405,23 @@ carries no providers.
    `models[].capabilities.optionDescriptors[].id` and `value` one of that descriptor's
    `options[].id` (select) or a boolean.
 
-Copy the IDs exactly. The connector keeps no allowlist: whether an instance or model can
-run is decided by T3 when the write arrives, and `status`/`enabled` here are information,
-not a gate.
+Copy the IDs exactly. Before sending, the write reads the same `server.getConfig` of the
+environment (fresh on every write, so a capability change applies to the next write) and
+refuses, with nothing sent, a selection the environment does not offer. Each refusal names
+the problem and the offered values:
+
+| Code | Meaning |
+|---|---|
+| `provider_instance_unavailable` | `instanceId` is not configured in this environment (lists the configured ones) |
+| `provider_model_unavailable` | `model` is not a `models[].slug` of that instance (lists the offered ones) |
+| `model_option_unsupported` | an option `id` is not offered by that model, or is repeated (lists the offered options and types) |
+| `model_option_value_unsupported` | a boolean option got a non-boolean, or a select option a value outside its choices (lists them) |
+| `model_capabilities_unknown` | T3 did not declare the models or option descriptors needed to check, or uses a descriptor type the connector does not interpret |
+| `model_capabilities_unavailable` | the provider configuration could not be read |
+
+The selection is sent exactly as given: no option is added, removed or defaulted (omitted
+options keep T3's defaults). `status`/`enabled` here are information, not a gate: whether a
+valid instance can run is still decided by T3 when the write arrives.
 
 ## Writes
 
@@ -452,8 +469,8 @@ are refused at start-up with the new name in the message.
    `operationId`.
 4. `reconciliation_required` means the result is uncertain: do not retry; call
    `t3_reconciliar_escrita` with the same `environment` and `operationId`.
-5. For `modelSelection`, take `instanceId` and `model` from the read tool `t3_providers`
-   in the same environment; see
+5. `modelSelection` is validated by the write against the environment's provider
+   configuration; `t3_providers` is optional, for browsing. See
    [Using it before a write](#provider-instances-t3_providers).
 
 Write results carry `environment: {alias, environmentId}`. Routing errors:

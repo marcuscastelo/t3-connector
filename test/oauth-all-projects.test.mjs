@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { ambientesFalsos, dadosPadrao, config, conectarMcp } from './apoio.mjs';
 import { startConnector, http } from './oauth-apoio.mjs';
 import { thread, projecao, mensagem } from './fixtures.mjs';
-import { memoryJournal } from './escrita-fixtures.mjs';
+import { memoryJournal, providersFor } from './escrita-fixtures.mjs';
 import { t3Tools } from '../src/oauth/t3-tools.mjs';
 import { loadOAuthConfig } from '../src/oauth/config.mjs';
 import { carregarConfigOAuthAll, validarConfigOAuthAll, assertEnvironmentParity, consentAll, liveReadContext } from '../src/oauth/project-policy.mjs';
@@ -24,7 +24,7 @@ async function fixture(t, { empty = false, config = {} } = {}) {
     const c = { registro: { ...r, destination: `t3://${r.environmentId}`, acoes: ACTIONS }, calls: [],
       inventario: async () => { throw new Error('all login must not snapshot inventory'); },
       cliente: async () => ({ shell: async () => { await c.inventoryHook?.(); if (c.offline) throw new Error('ambiente_indisponivel'); return structuredClone(d.shell); } }),
-      adapter: { prepare: async () => { c.calls.push('prepare'); await c.prepareHook?.(); }, invoke: async (method, payload) => { c.calls.push({ method, payload }); return { sequence: 1 }; }, receipt: r => r, verifyWorkspace: async (path, roots) => { await c.workspaceHook?.(); return roots.includes(path); }, reconcile: async r => ({ found: !!r.receipt, state: 'unknown' }) }, fechar() {} };
+      adapter: { prepare: async () => { c.calls.push('prepare'); await c.prepareHook?.(); }, providers: async () => providersFor({ instanceId: 'codex', model: 'test' }), invoke: async (method, payload) => { c.calls.push({ method, payload }); return { sequence: 1 }; }, receipt: r => r, verifyWorkspace: async (path, roots) => { await c.workspaceHook?.(); return roots.includes(path); }, reconcile: async r => ({ found: !!r.receipt, state: 'unknown' }) }, fechar() {} };
     return c;
   });
   const c = await startConnector({ config, tools: t3Tools({ ambientes: reads, conexoes: connections, journal, projectPolicy: 'all' }) }); t.after(c.close);

@@ -17,7 +17,8 @@ const RESULTS={
 // Native-tool RPCs (see native.mjs). T3 validates their payloads; the result must be an object
 // (scheduledTasks.delete answers {id}).
 const object=z.object({}).passthrough();
-for(const m of ['projects.createNew','sourceControl.cloneRepository','server.getSettings','server.updateSettings','orchestration.searchThreads','vcs.listRefs','scheduledTasks.list','scheduledTasks.upsert','scheduledTasks.delete','scheduledTasks.runNow']) RESULTS[m]=r=>object.parse(r);
+// server.getConfig: provider configuration, read before a modelSelection write (model-selection.mjs).
+for(const m of ['server.getConfig','projects.createNew','sourceControl.cloneRepository','server.getSettings','server.updateSettings','orchestration.searchThreads','vcs.listRefs','scheduledTasks.list','scheduledTasks.upsert','scheduledTasks.delete','scheduledTasks.runNow']) RESULTS[m]=r=>object.parse(r);
 export class StagingRpcTransport {
  #pending=new Map(); #next=1; #closed=false;
  constructor({socket,onFailure,timeoutMs=10000,maxPending=64,allowLoopback=false}) {
