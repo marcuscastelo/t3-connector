@@ -112,3 +112,80 @@ test('t3_workset: limitPerGroup corta a lista mas não a contagem; environments 
   assert.equal(r.isError, true);
   assert.match(r.content[0].text, /not configured/);
 });
+
+test('review P2: thread liquidada com trabalho de fundo pendente não é ociosa', async () => {
+  const d = dadosPadrao();
+  d.local.shell.threads = [
+    thread({ id: 'fundo', projectId: LOCAL.projeto, status: 'completed', settledAt: '2026-10-05T10:00:00.000Z', pendingBackgroundTasks: [{ kind: 'shell', taskId: 'bg-1' }] }),
+    thread({ id: 'estranha', projectId: LOCAL.projeto, status: 'novo_status', settledAt: '2026-10-05T10:00:00.000Z' }),
+    thread({ id: 'ociosa', projectId: LOCAL.projeto, status: 'completed', settledAt: '2026-10-05T10:00:00.000Z' }),
+  ];
+  const c = await conectarMcp(ambientesFalsos(d), undefined, undefined, opcoes);
+  const w = dados(await c.callTool({ name: 't3_workset', arguments: { environments: ['local'] } }));
+  assert.deepEqual(ids(w.groups.background_pending), ['local:fundo']);
+  assert.equal(w.groups.background_pending[0].settled, true);
+  assert.equal(w.groups.background_pending[0].backgroundTaskCount, 1);
+  assert.deepEqual(ids(w.groups.unknown), ['local:estranha']);
+  assert.equal(w.counts.settledIdle, 1);
+});
+
+// Fila ativa: o host consome `actionable`/`inFlight` sem refiltrar settled, snoozed ou arquivada.
+function dadosFila() {
+  const d = dadosPadrao();
+  d.local.shell.threads = [
+    thread({ id: 'aberta', projectId: LOCAL.projeto, status: 'completed', updatedAt: '2026-10-05T09:00:00.000Z' }),
+    thread({ id: 'liquidada', projectId: LOCAL.projeto, status: 'completed', settledAt: '2026-10-05T10:00:00.000Z' }),
+    thread({ id: 'adiada', projectId: LOCAL.projeto, status: 'completed', snoozedUntil: '2026-10-06T12:00:00.000Z' }),
+    thread({ id: 'acordou', projectId: LOCAL.projeto, status: 'failed', snoozedUntil: '2026-10-05T11:59:00.000Z' }),
+    thread({ id: 'adiada-pedindo', projectId: LOCAL.projeto, status: 'waiting', activityRunStatus: 'waiting', snoozedUntil: '2026-10-06T12:00:00.000Z', pendingRuntimeRequest: { id: 'req-2', kind: 'command', createdAt: '2026-10-05T11:00:00.000Z' } }),
+    thread({ id: 'adiada-rodando', projectId: LOCAL.projeto, status: 'running', activeRunId: 'run-1', snoozedUntil: '2026-10-06T12:00:00.000Z' }),
+    thread({ id: 'liquidada-fundo', projectId: LOCAL.projeto, status: 'completed', settledAt: '2026-10-05T10:00:00.000Z', pendingBackgroundTasks: [{ kind: 'shell', taskId: 'bg-1' }] }),
+    thread({ id: 'arquivada', projectId: LOCAL.projeto, status: 'completed', archivedAt: '2026-10-04T00:00:00.000Z' }),
+    thread({ id: 'desarquivada', projectId: LOCAL.projeto, status: 'completed', snoozedUntil: '2026-10-07T00:00:00.000Z' }),
+  ];
+  return d;
+}
+const refs = (fila) => fila.map((x) => `${x.threadId}:${x.group}`);
+
+test('fila ativa: settled, snoozed e arquivada fora; snooze vencido e completed não liquidada dentro', async () => {
+  const c = await conectarMcp(ambientesFalsos(dadosFila()), undefined, undefined, opcoes);
+  const w = dados(await c.callTool({ name: 't3_workset', arguments: { environments: ['local'] } }));
+  assert.deepEqual(refs(w.actionable), ['adiada-pedindo:needs_intervention', 'acordou:failed_unsettled', 'aberta:completed_unsettled']);
+  assert.deepEqual(refs(w.inFlight), ['adiada-rodando:running', 'liquidada-fundo:background_pending']);
+  const ativos = [...w.actionable, ...w.inFlight].map((x) => x.threadId);
+  for (const fora of ['liquidada', 'adiada', 'arquivada', 'desarquivada']) assert.ok(!ativos.includes(fora), fora);
+  // Snoozed continua visível à parte, para inspeção e contagem.
+  assert.deepEqual(ids(w.groups.snoozed).sort(), ['local:adiada', 'local:desarquivada']);
+  assert.equal(w.counts.snoozed, 2);
+  assert.equal(w.counts.actionable, 3);
+  assert.equal(w.counts.inFlight, 2);
+  assert.equal(w.counts.settledIdle, 1);
+  // Arquivada não aparece em grupo nenhum; sem fonte validada a lacuna é explícita.
+  assert.ok(!Object.values(w.groups).flat().some((t) => t.threadId === 'arquivada'));
+  assert.deepEqual(w.archived, { available: false, reason: 'archived_source_not_validated' });
+});
+
+test('fila ativa: arquivadas listadas à parte só com fonte disponível; desarquivar volta ao fluxo normal', async () => {
+  const d = dadosFila();
+  const arquivadas = [
+    thread({ id: 'arq-aberta', projectId: LOCAL.projeto, status: 'completed', archivedAt: '2026-10-04T00:00:00.000Z' }),
+    thread({ id: 'arq-liquidada', projectId: LOCAL.projeto, status: 'completed', archivedAt: '2026-10-04T00:00:00.000Z', settledAt: '2026-10-03T00:00:00.000Z' }),
+    thread({ id: 'arq-alheia', projectId: PROJETO_ALHEIO, status: 'completed', archivedAt: '2026-10-04T00:00:00.000Z' }),
+  ];
+  const c = await conectarMcp(ambientesFalsos(d), undefined, undefined, { ...opcoes, lerArquivadas: async () => arquivadas });
+  const w = dados(await c.callTool({ name: 't3_workset', arguments: { environments: ['local'] } }));
+  assert.equal(w.archived.available, true);
+  assert.deepEqual(w.archived.threads.map((t) => [t.threadId, t.settled]).sort(), [['arq-aberta', false], ['arq-liquidada', true]]);
+  const ativos = [...w.actionable, ...w.inFlight].map((x) => x.threadId);
+  assert.ok(!ativos.includes('arq-aberta') && !ativos.includes('arq-liquidada'));
+  // Desarquivada (sem archivedAt) segue a regra normal: aqui ainda snoozed; com o wake vencido, acionável.
+  assert.ok(ids(w.groups.snoozed).includes('local:desarquivada'));
+  const depois = await conectarMcp(ambientesFalsos(dadosFila()), undefined, undefined, { agora: Date.parse('2026-10-08T00:00:00.000Z') });
+  const w2 = dados(await depois.callTool({ name: 't3_workset', arguments: { environments: ['local'] } }));
+  assert.ok(refs(w2.actionable).includes('desarquivada:completed_unsettled'));
+  // Fonte de arquivadas que falha: indisponível, nunca lista vazia como se completa.
+  const falha = await conectarMcp(ambientesFalsos(dadosFila()), undefined, undefined, { ...opcoes, lerArquivadas: async () => { throw new Error('x'); } });
+  const w3 = dados(await falha.callTool({ name: 't3_workset', arguments: { environments: ['local'] } }));
+  assert.equal(w3.archived.available, false);
+  assert.deepEqual(w3.archived.environmentFailures.map((f) => f.alias), ['local']);
+});

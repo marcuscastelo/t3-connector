@@ -4,19 +4,26 @@
 
 - Read tool `t3_workset`: one call returns every thread that still needs a decision across
   all configured environments (or `environments`), in disjoint groups (needs_intervention,
-  running, snoozed, failed_unsettled, completed_unsettled, cancelled_unsettled, unknown) with
-  compact references and no conversation text. A failing environment is listed in
+  running, background_pending, unknown, snoozed, failed_unsettled, completed_unsettled,
+  cancelled_unsettled) with compact references and no conversation text. `actionable` and
+  `inFlight` give the active queue directly: settled idle, future-snoozed and archived threads
+  are left out, while a pending request, an active run or background work keeps a thread in.
+  Archived threads are reported apart (`archived.available: false` until a validated source
+  exists). A failing environment is listed in
   `environmentFailures` with `complete: false`; the other environments' threads are kept.
 - `t3_thread` accepts `settlementContractVersion: 1` (read connector, lease bridge and OAuth).
-  It then reads the full thread snapshot and adds `settlement`: objective blockers (pending
+  It then builds the whole answer from one validated observation of the full thread snapshot
+  and adds `settlement` from that same observation: objective blockers (pending
   request, active run, queued work, unresolved work, incomplete observation),
   `eligibleMechanically`, `observationId`, `expectedRunId`, lifecycle fields with
   availability, and warnings. Without the parameter the answer is unchanged.
 - `thread.settle` accepts an optional `settleGuard` (version 1: `expectedRunId`,
   `expectedObservationId`, `acceptance`). The connector observes the thread again right before
   sending and refuses with `settle_*` codes, sending nothing, when something blocks the settle
-  or the thread changed. After the acknowledgement it reports `settlement.postCheck`
-  (verified, mismatch, unavailable), kept for replays. The guard is never forwarded to T3.
+  or the thread changed; replaying a refusal needs no reconciliation. After the acknowledgement
+  it reports `settlement.postCheck` (verified only with a read at or after the receipt sequence;
+  mismatch; unavailable), kept for replays; a replay before it is recorded returns the receipt
+  with `postCheck: pending`. The guard is never forwarded to T3.
   Without it, settle is unchanged. See `docs/orchestration-bfs.md`.
 
 ## 0.11.2

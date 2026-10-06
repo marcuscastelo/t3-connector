@@ -24,6 +24,12 @@ export const SETTLE_GUARD_VERSIONS = Object.freeze([1]);
 export const TENTATIVAS_OBSERVACAO = 3;
 
 const ATIVOS = new Set(['preparing', 'starting', 'running', 'waiting']);
+// Enums do contrato V2 (OrchestrationV2RunStatus, RuntimeRequest.status). Valor fora deles
+// não é interpretado: a observação fica incompleta e nada é elegível nem verificado.
+const STATUS_RUN = new Set([...ATIVOS, 'queued', 'completed', 'interrupted', 'failed', 'cancelled', 'rolled_back']);
+const STATUS_THREAD = new Set(['idle', ...STATUS_RUN]);
+const STATUS_PEDIDO = new Set(['pending', 'resolved', 'expired', 'cancelled']);
+const textoNaoVazio = (v) => typeof v === 'string' && v.length > 0;
 
 const digest = (valor) => createHash('sha256').update(JSON.stringify(valor)).digest('hex').slice(0, 32);
 const ordenar = (lista, chave) => [...lista].sort((a, b) => String(chave(a)).localeCompare(String(chave(b))));
@@ -85,7 +91,13 @@ export function observarSettlement({ environmentId, thread, snapshot }) {
   const problemas = [];
   if (!thread) problemas.push('thread_missing_from_shell');
   if (!p || !Array.isArray(p.runs) || !Array.isArray(p.runtimeRequests)) problemas.push('snapshot_without_runs_or_requests');
-  if (thread && p?.thread?.id && p.thread.id !== thread.id) problemas.push('snapshot_of_another_thread');
+  if (!Number.isInteger(snapshot?.snapshotSequence) || snapshot.snapshotSequence < 0) problemas.push('snapshot_sequence_invalid');
+  if (thread && p?.thread?.id !== thread.id) problemas.push('snapshot_of_another_thread');
+  if (thread && !STATUS_THREAD.has(thread.status)) problemas.push('thread_status_unknown');
+  if (Array.isArray(p?.runs) && !p.runs.every((r) => textoNaoVazio(r?.id) && STATUS_RUN.has(r.status))) problemas.push('run_malformed_or_status_unknown');
+  if (Array.isArray(p?.runtimeRequests) && !p.runtimeRequests.every((r) => textoNaoVazio(r?.id) && STATUS_PEDIDO.has(r.status))) {
+    problemas.push('request_malformed_or_status_unknown');
+  }
   if (thread?.latestRunId && Array.isArray(p?.runs) && !p.runs.some((r) => r.id === thread.latestRunId)) {
     problemas.push('latest_run_missing_from_snapshot');
   }
@@ -189,18 +201,27 @@ export function observarSettlement({ environmentId, thread, snapshot }) {
  * Falha de leitura propaga (quem chama decide se é recusa); incoerência repetida vira
  * observação incompleta.
  */
-export async function lerObservacao({ environmentId, threadId, lerShell, lerCompleto, tentativas = TENTATIVAS_OBSERVACAO }) {
+export async function lerObservacao(args) {
+  return (await lerObservacaoComDados(args)).observacao;
+}
+
+/**
+ * Como lerObservacao, devolvendo também a thread da shell e o snapshot que a observação
+ * validou (null quando incompleta), para quem monta uma resposta a partir dos MESMOS dados.
+ */
+export async function lerObservacaoComDados({ environmentId, threadId, lerShell, lerCompleto, tentativas = TENTATIVAS_OBSERVACAO }) {
   const achar = (shell) => (shell?.threads ?? []).find((t) => t.id === threadId && !t.deletedAt);
   for (let i = 0; i < tentativas; i++) {
     const antes = achar(await lerShell());
-    if (!antes) return observarSettlement({ environmentId, thread: null, snapshot: null });
+    if (!antes) return { observacao: observarSettlement({ environmentId, thread: null, snapshot: null }), thread: null, snapshot: null };
     const snapshot = await lerCompleto(threadId);
     const depois = achar(await lerShell());
     if (depois && marcaDaShell(antes) === marcaDaShell(depois) && lifecycleConfere(depois, snapshot?.projection?.thread)) {
-      return observarSettlement({ environmentId, thread: depois, snapshot });
+      const observacao = observarSettlement({ environmentId, thread: depois, snapshot });
+      return observacao.complete ? { observacao, thread: depois, snapshot } : { observacao, thread: null, snapshot: null };
     }
   }
-  return incompleta(['thread_changed_during_observation']);
+  return { observacao: incompleta(['thread_changed_during_observation']), thread: null, snapshot: null };
 }
 
 const RECUSA_DO_BLOQUEIO = {

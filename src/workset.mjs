@@ -3,11 +3,19 @@
 // configurados (ou nos escolhidos). Uma leitura de shell por environment; nada é inferido.
 //
 // Cada thread visível (projeto autorizado, não arquivada, não apagada) cai em UM grupo,
-// pela ordem: needs_intervention > running > snoozed > failed_unsettled >
-// completed_unsettled > cancelled_unsettled > unknown. Threads liquidadas que não estão
-// rodando nem pedindo intervenção e threads sem run não entram (só contadas).
+// pela ordem: needs_intervention > running > background_pending > unknown > snoozed >
+// failed_unsettled > completed_unsettled > cancelled_unsettled. Os quatro primeiros valem
+// também para threads liquidadas: trabalho de fundo pode continuar depois do settlement e
+// estado desconhecido nunca é tratado como ocioso. Threads liquidadas ociosas e threads sem
+// run não entram (só contadas).
 // `completed` é desfecho de run, não aceite: completed_unsettled é exatamente o que ainda
 // precisa de uma decisão (absorver, continuar, liquidar).
+//
+// Fila ativa: `actionable` (decisão agora) e `inFlight` (em execução) já vêm prontos, para o
+// host não refiltrar a cada rodada. Settled ociosa, snoozed com wake no futuro e arquivada
+// nunca entram neles; snoozed fica no grupo `snoozed` só para inspeção. Pedido pendente,
+// run ativo e trabalho de fundo valem mais que settled/snoozed: continuam na fila.
+// Arquivadas ficam fora dos grupos; só são listadas, à parte, quando há fonte validada.
 //
 // Environment que falha não derruba os outros: entra em `environmentFailures` e
 // `complete` fica false; os grupos trazem o que os environments que responderam mostraram.
@@ -18,8 +26,12 @@ import { resumoModelo } from './estado.mjs';
 import { comparador } from './paginacao.mjs';
 
 export const GRUPOS = Object.freeze([
-  'needs_intervention', 'running', 'snoozed', 'failed_unsettled', 'completed_unsettled', 'cancelled_unsettled', 'unknown',
+  'needs_intervention', 'running', 'background_pending', 'unknown', 'snoozed', 'failed_unsettled', 'completed_unsettled', 'cancelled_unsettled',
 ]);
+export const FILAS = Object.freeze({
+  actionable: Object.freeze(['needs_intervention', 'unknown', 'failed_unsettled', 'completed_unsettled', 'cancelled_unsettled']),
+  inFlight: Object.freeze(['running', 'background_pending']),
+});
 export const PRAZO_AMBIENTE_MS = 6000;
 export const PRAZO_TOTAL_MS = 12000;
 export const LIMITE_PADRAO = 25;
@@ -27,13 +39,14 @@ export const LIMITE_PADRAO = 25;
 function grupoDa(item, agora) {
   if (item.state === 'needs_intervention') return 'needs_intervention';
   if (item.state === 'running') return 'running';
+  if (item.backgroundTaskCount) return 'background_pending';
+  if (item.state === 'unknown') return 'unknown';
   if (item.settled) return null;
   if (item.snoozedUntil && Date.parse(item.snoozedUntil) > agora) return 'snoozed';
   if (item.state === 'failed') return 'failed_unsettled';
   if (item.state === 'completed') return 'completed_unsettled';
   if (item.state === 'cancelled') return 'cancelled_unsettled';
-  if (item.state === 'no_run') return null;
-  return 'unknown';
+  return null; // no_run
 }
 
 /** Item compacto: referências e fatos de decisão, sem texto de conversa. */
@@ -77,6 +90,10 @@ export async function montarWorkset(ambientes, args, {
   agora = Date.now(),
   prazoAmbienteMs = PRAZO_AMBIENTE_MS,
   prazoTotalMs = PRAZO_TOTAL_MS,
+  // Leitor de threads arquivadas de um environment: (cliente, {signal}) => shell threads.
+  // Nenhuma fonte de produção foi validada ainda (a shell HTTP não garante arquivadas), então
+  // por padrão não há leitor e a resposta declara a lacuna em vez de inferir.
+  lerArquivadas = null,
 } = {}) {
   const limite = args.limitPerGroup ?? LIMITE_PADRAO;
   const selecionados = args.environments?.length
@@ -92,8 +109,15 @@ export async function montarWorkset(ambientes, args, {
     const proprio = AbortSignal.timeout(prazoAmbienteMs);
     const sinal = AbortSignal.any([total, proprio, ...(signal ? [signal] : [])]);
     try {
-      const { shell, info } = await correrComSinal(
-        ambientes.usar(r, async (cliente, info) => ({ shell: await cliente.shell({ signal: sinal }), info }), { signal: sinal }),
+      const { shell, info, arquivadas } = await correrComSinal(
+        ambientes.usar(r, async (cliente, info) => {
+          const shell = await cliente.shell({ signal: sinal });
+          let arquivadas = null;
+          if (lerArquivadas) {
+            try { arquivadas = { ok: true, threads: await lerArquivadas(cliente, { signal: sinal }) }; } catch (e) { arquivadas = { ok: false, falha: falhaSanitizada(e) }; }
+          }
+          return { shell, info, arquivadas };
+        }, { signal: sinal }),
         sinal,
       );
       const projetos = new Map((shell.projects ?? []).map((p) => [p.id, p]));
@@ -102,7 +126,15 @@ export async function montarWorkset(ambientes, args, {
         const projeto = projetos.get(t.projectId);
         return itemCompacto(t, resumir(t, projeto), ambiente, projeto);
       });
-      return { ok: true, ambiente, snapshotSequence: shell.snapshotSequence ?? null, itens };
+      const arquivo = arquivadas?.ok
+        ? {
+            ok: true,
+            itens: (arquivadas.threads ?? [])
+              .filter((t) => r.escopo.projetoPermitido(t.projectId) && !t.deletedAt && t.archivedAt)
+              .map((t) => ({ ...itemCompacto(t, resumir(t, projetos.get(t.projectId)), ambiente, projetos.get(t.projectId)), archivedAt: t.archivedAt })),
+          }
+        : arquivadas;
+      return { ok: true, ambiente, snapshotSequence: shell.snapshotSequence ?? null, itens, arquivo };
     } catch (e) {
       if (signal?.aborted || e instanceof Cancelada) throw new Cancelada();
       const falha = total.aborted
@@ -140,13 +172,35 @@ export async function montarWorkset(ambientes, args, {
     }
   }
   const falhas = resultados.filter((x) => !x.ok).map((x) => x.falha);
+  const ref = (g) => (t) => ({ environment: t.environment, threadId: t.threadId, group: g });
+  const fila = (nomes) => nomes.flatMap((g) => grupos[g].map(ref(g)));
+  const somar = (nomes) => nomes.reduce((n, g) => n + counts[g], 0);
+
+  let archived;
+  if (!lerArquivadas) {
+    archived = { available: false, reason: 'archived_source_not_validated' };
+  } else {
+    const ok = resultados.filter((x) => x.ok);
+    const falhasArquivo = ok.filter((x) => !x.arquivo?.ok).map((x) => ({ ...x.ambiente, ...(x.arquivo?.falha ?? {}) }));
+    const lista = ok.filter((x) => x.arquivo?.ok).flatMap((x) => x.arquivo.itens).sort((a, b) => comparar(chave(a), chave(b)));
+    archived = {
+      available: falhasArquivo.length === 0 && falhas.length === 0,
+      total: lista.length,
+      ...(lista.length > limite ? { truncated: lista.length - limite } : {}),
+      environmentFailures: falhasArquivo,
+      threads: lista.slice(0, limite),
+    };
+  }
   return {
     observedAt: new Date(agora).toISOString(),
     complete: falhas.length === 0,
     queriedEnvironments: consultados,
     environmentFailures: falhas,
-    counts: { ...counts, settledIdle: liquidadas, noRun: semRun },
+    counts: { ...counts, actionable: somar(FILAS.actionable), inFlight: somar(FILAS.inFlight), settledIdle: liquidadas, noRun: semRun },
     ...(Object.keys(omitidos).length ? { truncated: omitidos } : {}),
+    actionable: fila(FILAS.actionable),
+    inFlight: fila(FILAS.inFlight),
     groups: grupos,
+    archived,
   };
 }

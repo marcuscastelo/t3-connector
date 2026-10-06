@@ -135,6 +135,7 @@ export class Dispatcher {
  async dispatch(identity,leaseId,{operationId,action,input}) {
   id.parse(operationId);const caller=exigirIdentidade(identity);
   const parsed=parseAction(action,input), key=this.#key(caller,operationId), hash=digest([action,parsed.input]);
+  const guard=action==='thread.settle'?parsed.input.settleGuard:undefined;
   if(action==='thread.send' && parsed.input.clientRequestId!==operationId) throw new Error('request_id_mismatch');
   // Initial auth before lookup/dedupe; final auth happens immediately before dispatch.
   const status=this.gate.status(leaseId);
@@ -145,7 +146,11 @@ export class Dispatcher {
   const initial={hash,state:'preparing',action,operationId,environmentId:this.environmentId,destination:this.destination};
   const owned=this.#store('reserve',key,initial);
   const old=owned?null:this.#store('get',key);
-  if(old) {if(old.hash!==hash) throw new Error('operation_conflict');if(old.target)(this.authorizeRecorded??((target)=>this.gate.check(identity,leaseId,target)))(old.target);return {state:old.state,operationId,reconciliationRequired:!['completed','failed'].includes(old.state),...((isProjectAction(action)||parsed.spec.native)&&old.receipt?{receipt:old.receipt,...(old.postCheck??{})}:{}),...(old.settlement?{receipt:old.receipt,settlement:old.settlement}:{}),...(old.error?{error:old.error}:{})};}
+  // A replay reports the recorded outcome and never sends again. A settle guard refusal is a known
+  // result (refused by the connector before the send): nothing to reconcile. Other rejections keep
+  // the conservative contract (e.g. a journal failure right before the send).
+  const guardRefusal=old?.state==='rejected'&&/^settle_[a-z_]+$/.test(old.error??'');
+  if(old) {if(old.hash!==hash) throw new Error('operation_conflict');if(old.target)(this.authorizeRecorded??((target)=>this.gate.check(identity,leaseId,target)))(old.target);return {state:old.state,operationId,reconciliationRequired:!guardRefusal&&!['completed','failed'].includes(old.state),...(guardRefusal?{sent:false}:{}),...((isProjectAction(action)||parsed.spec.native)&&old.receipt?{receipt:old.receipt,...(old.postCheck??{})}:{}),...(guard&&old.receipt?{receipt:old.receipt,settlement:old.settlement??Dispatcher.#verificationPending()}:{}),...(old.error?{error:old.error}:{})};}
   if(!owned)throw new Error('journal_failed');
   let release=null;
   try {
@@ -158,7 +163,6 @@ export class Dispatcher {
    // Stable commandId: T3 replays the receipt of a command it already committed.
    const h=key.slice(0,32), stableId=`${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
    let method=parsed.spec.method, payload=parsed.spec.native?null:parsed.spec.encode(parsed.input);
-   const guard=action==='thread.settle'?parsed.input.settleGuard:undefined;
    if(action==='thread.send'||isProjectAction(action)||guard) { payload.commandId=stableId; if(action==='thread.send')payload.messageId=payload.commandId; }
    // Conexão do environment aberta ainda em 'preparing' (falha aqui não enviou nada) e antes
    // da checagem final: entre a checagem e o envio não há await.
@@ -224,12 +228,16 @@ export class Dispatcher {
  // What the thread looks like after the acknowledged settle. Never throws and never sends anything:
  // a stale or failed read is `unavailable`, not an uncertain send; `mismatch` is an observed
  // difference (the backend or another client may have changed the thread), not proof of no effect.
+ // Acknowledged but the post-check is not recorded (still running, or the process stopped before
+ // recording it). Reported as such on replay; a fresh read is t3_thread, never a resend.
+ static #verificationPending() {return {contractVersion:SETTLEMENT_CONTRACT_VERSION,guarantee:'observed_at_sequence',postCheck:'pending',code:'settle_verification_pending'};}
  async #afterSettle(threadId,receipt) {
   const base={contractVersion:SETTLEMENT_CONTRACT_VERSION,guarantee:'observed_at_sequence'};
   let o;
   try {o=await this.adapter.settlementObservation(threadId);} catch {return {...base,postCheck:'unavailable',code:'settle_verification_unavailable'};}
   if(!o?.complete) return {...base,postCheck:'unavailable',code:'settle_verification_unavailable'};
-  if(Number.isInteger(receipt?.sequence)&&Number.isInteger(o.snapshotSequence)&&o.snapshotSequence<receipt.sequence) return {...base,postCheck:'unavailable',code:'settle_verification_unavailable',observationSequence:o.snapshotSequence};
+  // `verified` needs freshness shown by sequences: an observation at or after the receipt.
+  if(!Number.isInteger(receipt?.sequence)||!Number.isInteger(o.snapshotSequence)||o.snapshotSequence<receipt.sequence) return {...base,postCheck:'unavailable',code:'settle_verification_unavailable',observationSequence:o.snapshotSequence??null};
   const verified=o.settled&&o.blockers.length===0;
   return {...base,postCheck:verified?'verified':'mismatch',...(verified?{}:{code:'settle_postcondition_mismatch'}),settled:o.settled,observationSequence:o.snapshotSequence,blockers:o.blockers};
  }
@@ -252,6 +260,16 @@ export class Dispatcher {
  async reconcile(identity,leaseId,operationId) {
   const caller=exigirIdentidade(identity),record=this.#store('get',this.#key(caller,operationId));
   if(!record) throw new Error('operation_unknown');
+  // A settle guard refusal has no target (refused before the send): answer locally that nothing
+  // was sent, after the same lease/action authorization the dispatch makes.
+  if(!record.target&&record.state==='rejected'&&/^settle_[a-z_]+$/.test(record.error??'')) {
+   const status=this.gate.status(leaseId);
+   if(status.scope.caller!==caller||!status.active) throw new Error('lease_closed');
+   const grant=grantDoAmbiente(status.scope,{environmentId:this.environmentId,destination:this.destination});
+   if(!grant) throw new Error('ambiente_fora_da_lease');
+   if(!grant.actions.includes(record.action)) throw new Error('scope_denied');
+   return {operationId,state:'rejected',observation:null,sent:false,error:record.error};
+  }
   if(!record.target)throw new Error('reconciliation_target_unknown');
   this.gate.check(identity,leaseId,record.target);
   const observation=z.object({found:z.boolean(),sequence:z.number().int().nonnegative().optional(),threadId:z.string().optional(),state:z.enum(['running','completed','failed','unknown']).optional()}).strict().parse(await this.adapter.reconcile(record));

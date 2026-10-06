@@ -19,10 +19,11 @@ Call it at the start of a session, after a voice drop, or when you no longer tru
 It reads one shell snapshot per environment (all of them, or `environments: [...]`) and puts
 each visible thread in exactly one group:
 
-`needs_intervention > running > snoozed > failed_unsettled > completed_unsettled > cancelled_unsettled > unknown`
+`needs_intervention > running > background_pending > unknown > snoozed > failed_unsettled > completed_unsettled > cancelled_unsettled`
 
-- `needs_intervention` and `running` include settled threads. The other groups only hold
-  unsettled threads.
+- `needs_intervention`, `running`, `background_pending` (background tasks still pending; they
+  can outlive a settle) and `unknown` include settled and snoozed threads. The other groups only
+  hold unsettled threads.
 - `snoozed` holds unsettled threads whose `snoozedUntil` is still in the future. A past
   `snoozedUntil` falls back to its state group.
 - `completed_unsettled` is the main "forgotten work" list. A completed run is not an accepted
@@ -34,6 +35,17 @@ each visible thread in exactly one group:
   `threadId`, `projectId`, `state`, `stateSource`, `runId`, `latestRunId?`, `pendingRequest`,
   `updatedAt`, `settled`, `snoozedUntil?`, `pinned` (`null` when the server does not report it),
   `parentThreadId?`, `linkedPullRequest?`.
+- **Active queue.** Consume `actionable` (decide now: needs_intervention, unknown,
+  failed_unsettled, completed_unsettled, cancelled_unsettled) and `inFlight` (running,
+  background_pending) directly, as `{environment, threadId, group}` in that order. Settled idle
+  threads, threads snoozed until a future time and archived threads are never in them. A
+  snoozed completed thread does not come back as today's decision until its wake time. A
+  pending request, an active run or background work keeps a thread in the queue even if it is
+  settled or snoozed. The lists follow `limitPerGroup`; `counts.actionable` and
+  `counts.inFlight` count everything.
+- `archived` is listed apart and never mixed with today's work. Until a validated source of
+  archived threads exists it is `{available: false, reason: "archived_source_not_validated"}`,
+  which does not mean there are none. An unarchived thread follows the normal rules.
 - `complete: false` means an environment failed (see `environmentFailures`). Groups still hold
   what the other environments returned. An empty group then proves nothing about the failed
   environment.
@@ -42,7 +54,13 @@ each visible thread in exactly one group:
 
 The usual `t3_thread` answer already holds the conversation facts: `state`, `stateSource`,
 `activeRun`, `pendingRequests[].nextAction`, `latestResponse`. With
-`settlementContractVersion: 1` it also reads the full thread snapshot and adds `settlement`:
+`settlementContractVersion: 1` the whole answer (`latestResponse`, `pendingRequests`,
+`activeRun`, `latestRun`) is built from one validated observation of the full thread snapshot,
+and `settlement` comes from that same observation, so `expectedRunId` always matches the
+delivery you were shown. If the thread kept changing while it was read, `settlement.complete`
+is false with no `observationId` (it cannot be used for a guard) and the rest comes from the
+usual read. Unknown run, request or thread statuses and a missing snapshot sequence also make
+the observation incomplete:
 
 ```json
 {
@@ -104,7 +122,9 @@ Right before sending, the connector reads the thread again and refuses, sending 
 | `settle_observation_changed` | anything in the observation changed since you read it |
 | `settle_guard_version_unsupported` | `version` is not 1 |
 
-A refusal does not end the session and does not need reconciliation. Read the thread again and
+A refusal does not end the session and does not need reconciliation: replaying its
+`operationId` returns `state: rejected`, `sent: false`, `reconciliationRequired: false` and the
+same code. Read the thread again and
 decide again. A new decision needs a new `operationId`: reusing one with a different guard is
 `operation_conflict`.
 
@@ -113,8 +133,11 @@ After T3 acknowledges the settle, the result adds `settlement.postCheck`:
 - `verified`: a fresh read shows the thread settled and unblocked.
 - `mismatch` (`settle_postcondition_mismatch`): the read shows otherwise. The backend or another
   client may have changed the thread. It is not proof that the command had no effect.
-- `unavailable` (`settle_verification_unavailable`): the read failed or was older than the
-  receipt.
+- `unavailable` (`settle_verification_unavailable`): the read failed, or the receipt or the
+  read has no sequence showing the read is at or after the receipt.
+- `pending` (`settle_verification_pending`), on a replay only: T3 acknowledged (the `receipt`
+  is returned) but no post-check was recorded, because it is still running or the process
+  stopped before recording it. Read the thread with `t3_thread` for the current state.
 
 The connector never sends a compensating command. Repeating the same `operationId` returns the
 same receipt and post-check without sending again.

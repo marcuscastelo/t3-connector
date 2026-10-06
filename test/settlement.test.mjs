@@ -130,3 +130,62 @@ test('lerObservacao: shell em cache com lifecycle diferente do snapshot completo
   const igual = snap({ thread: { id: 'thread-1', settledAt: '2026-10-05T10:00:00Z' } });
   assert.equal((await lerObservacao({ environmentId: 'env-local', threadId: 'thread-1', lerShell: async () => shell, lerCompleto: async () => igual })).complete, true);
 });
+
+// Regressões da revisão independente de d862666.
+
+test('review P1: t3_thread opt-in não mistura entrega antiga com expectedRunId novo', async () => {
+  const d = dadosPadrao();
+  const run1 = thread({ id: 't-comum', projectId: 'proj-app-local', title: 'Comum no Local', latestRunId: 'run-1' });
+  const run2 = { ...run1, latestRunId: 'run-2', latestVisibleMessage: { id: 'msg-2' } };
+  let shells = 0;
+  const { projects, threads } = d.local.shell;
+  const outras = threads.filter((t) => t.id !== 't-comum');
+  // A primeira shell (e o bounded) ainda mostram run-1; run-2 termina antes da observação.
+  d.local.shell = () => ({ projects, threads: [shells++ === 0 ? run1 : run2, ...outras] });
+  d.local.completo = {
+    't-comum': {
+      snapshotSequence: 80,
+      projection: {
+        ...projecao({ runs: [{ id: 'run-1', ordinal: 1, status: 'completed' }, { id: 'run-2', ordinal: 2, status: 'completed' }], mensagens: [mensagem({ id: 'msg-1', runId: 'run-1', text: 'entrega 1' }), mensagem({ id: 'msg-2', runId: 'run-2', text: 'entrega 2' })] }),
+        thread: { id: 't-comum' },
+      },
+    },
+  };
+  const c = await conectarMcp(ambientesFalsos(d));
+  const r = dados(await c.callTool({ name: 't3_thread', arguments: { threadId: 't-comum', settlementContractVersion: 1 } }));
+  assert.equal(r.settlement.expectedRunId, 'run-2');
+  assert.equal(r.latestResponse.runId, 'run-2');
+  assert.equal(r.latestResponse.text, 'entrega 2');
+  assert.equal(r.latestRun.runId, 'run-2');
+  assert.equal(r.history.source, 'full_snapshot');
+});
+
+test('review P1: observação incoerente não entrega observationId junto da leitura comum', async () => {
+  const d = dadosPadrao();
+  let n = 0;
+  const base = d.local.shell;
+  d.local.shell = () => ({ ...base, threads: base.threads.map((t) => (t.id === 't-comum' ? { ...t, latestVisibleMessage: { id: `m-${n++}` } } : t)) });
+  d.local.completo = { 't-comum': { snapshotSequence: 1, projection: { ...d.local.bounded['t-comum'].projection, thread: { id: 't-comum' } } } };
+  const c = await conectarMcp(ambientesFalsos(d));
+  const r = dados(await c.callTool({ name: 't3_thread', arguments: { threadId: 't-comum', settlementContractVersion: 1 } }));
+  assert.equal(r.settlement.complete, false);
+  assert.equal(r.settlement.observationId, null);
+  assert.equal('expectedRunId' in r.settlement, false);
+  assert.notEqual(r.history.source, 'full_snapshot');
+});
+
+test('review P2: run com status desconhecido, pedido malformado ou snapshot sem sequence não ficam elegíveis', () => {
+  const casos = [
+    snap({ runs: [...runs1, { id: 'run-x', ordinal: 2, status: 'paused_by_new_server' }] }),
+    snap({ runtimeRequests: [{ id: 'req-1', status: 'weird' }] }),
+    { projection: snap().projection },
+    snap({}, -1),
+  ];
+  for (const s of casos) {
+    const o = observar({}, s);
+    assert.equal(o.complete, false);
+    assert.equal(o.eligibleMechanically, false);
+    assert.equal(avaliarGuard({ version: 1, expectedRunId: 'run-1', expectedObservationId: 'x', acceptance: { accepted: true, evidenceRef: 'r' } }, o), 'settle_observation_incomplete');
+  }
+  assert.equal(observar({ status: 'brand_new_status' }).complete, false);
+});
