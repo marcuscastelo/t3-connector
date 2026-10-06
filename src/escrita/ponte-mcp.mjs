@@ -2,7 +2,7 @@
 // privado do gate; aprovação, escopo e roteamento por environment ficam no gate.
 import {McpServer} from '@modelcontextprotocol/sdk/server/mcp.js';
 import {z} from 'zod';
-import {ACTIONS,schemaForAction,SEND_DESCRIPTION} from './adapters.mjs';
+import {ACTIONS,schemaForAction,SEND_DESCRIPTION,LAUNCH_DESCRIPTION} from './adapters.mjs';
 import {LEITURAS} from './read-guarded.mjs';
 
 export const VERSAO_ESCRITA='0.12.0';
@@ -51,6 +51,7 @@ export function criarPonteEscrita({relay,aliases=[],approvalOrigin}) {
  }));
 
  const descricaoAcao=action=>action==='thread.send'?SEND_DESCRIPTION
+  :action==='thread.launch'?LAUNCH_DESCRIPTION
   :action==='runtime-request.answer'?'Answers a pending user_input runtime request using requestId and answers keyed by question ID from t3_thread.pendingRequests; thread.send does NOT answer it.'
   :action==='runtime-request.approve'?'Responds to a pending approval runtime request using requestId and decision from t3_thread.pendingRequests; user_input requires runtime-request.answer instead.'
   :action;

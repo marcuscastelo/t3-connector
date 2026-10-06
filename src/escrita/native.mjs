@@ -159,6 +159,7 @@ const projection = async (native, authorize, threadId) => {
   await authorize([p.thread.projectId]);
   return p;
 };
+const CREATE_WORKTREE_HINT = "to create a new branch and worktree with a thread, use thread.launch (t3_escrever_thread_launch) with workspaceStrategy.type='worktree'.";
 export const NATIVE_READS = {
   t3_environment_read: {
     description: "Read this server's identity and selected environment preferences. Writing instructions are limited to 4,000 characters.",
@@ -217,7 +218,7 @@ export const NATIVE_READS = {
     },
   },
   t3_worktree_status: {
-    description: 'Report whether threadId is attached to a worktree, its branch, the project workspace root, and the environment default for starting new worktrees from origin.',
+    description: 'Report whether threadId is attached to a worktree, its branch, the project workspace root, and the environment default for starting new worktrees from origin. Read-only; ' + CREATE_WORKTREE_HINT,
     schema: z.object({ threadId: id }).strict(),
     async run({ input, native, authorize }) {
       const { thread } = await projection(native, authorize, input.threadId);
@@ -228,7 +229,7 @@ export const NATIVE_READS = {
     },
   },
   t3_worktree_list: {
-    description: "List branches/refs (with their worktree paths) of threadId's checkout: its worktree if attached, else the project root.",
+    description: "List branches/refs (with their worktree paths) of threadId's checkout: its worktree if attached, else the project root. Read-only; " + CREATE_WORKTREE_HINT,
     schema: z.object({ threadId: id, query: z.string().trim().min(1).max(256).optional(), cursor: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(200).optional(), refKind: z.enum(['all', 'local', 'remote']).optional(), includeMatchingRemoteRefs: z.boolean().optional() }).strict(),
     async run({ input, native, authorize }) {
       const { thread } = await projection(native, authorize, input.threadId);

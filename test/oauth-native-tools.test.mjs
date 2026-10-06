@@ -274,3 +274,11 @@ test('OAuth public schema and dispatch expose native runtime modes with backward
   assert.equal(r.state, 'completed');
   assert.equal(f.e.sends[0].payload.runtimeMode, 'approval-required');
 });
+
+test('OAuth tools/list points branch/worktree creation to thread.launch, from launch and from the worktree reads', async t => {
+  const f = await fixture(t);
+  const list = await f.list(), d = name => list.find(x => x.name === name).description;
+  assert.match(d('t3_escrever_thread_launch'), /canonical way to open an implementation thread on a NEW branch and worktree/);
+  assert.match(d('t3_escrever_thread_launch'), /no separate branch or worktree creation tool/);
+  for (const name of ['t3_worktree_status', 't3_worktree_list']) assert.match(d(name), /Read-only; to create a new branch and worktree with a thread, use thread\.launch \(t3_escrever_thread_launch\) with workspaceStrategy\.type='worktree'/);
+});
