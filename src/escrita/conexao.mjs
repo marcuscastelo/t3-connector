@@ -11,8 +11,7 @@ import { criarCliente, ErroT3, verificarIdentidade } from '../t3.mjs';
 import { criarTransporteSsh, criarTransporteUrl } from '../transporte.mjs';
 import { StagingRpcTransport, projectReceipt } from './transport-staging.mjs';
 import { lerOcupacao } from './project-admin.mjs';
-import { lerObservacao } from '../settlement.mjs';
-import { derivarExecucao } from '../execucao.mjs';
+import { lerExecucaoDaThread, lerObservacao } from '../settlement.mjs';
 
 export const ESCOPOS_ESCRITA = ['orchestration:operate', 'orchestration:read'];
 
@@ -156,11 +155,14 @@ export function criarConexaoEscrita(registro, {
         lerCompleto: (id) => clienteLeitura.threadCompleto(id),
       }),
       projectForThread: async (id) => (await clienteLeitura.shell()).threads?.find((t) => t.id === id && !t.deletedAt)?.projectId,
-      // Send preflight: execution snapshot from the full thread projection (one transaction).
-      executionSnapshot: async (id) => {
-        const completo = await clienteLeitura.threadCompleto(id);
-        return derivarExecucao({ projecao: completo.projection ?? {}, fonte: { kind: 'thread_full_snapshot', threadSequence: completo.snapshotSequence ?? null, historyComplete: true } });
-      },
+      // Send preflight: the same coherent acquisition as the settle guard (shell → full → shell),
+      // so usage limit, plan and the shell roster count; projection only if the thread keeps changing.
+      executionSnapshot: async (id) => (await lerExecucaoDaThread({
+        environmentId: registro.environmentId,
+        threadId: id,
+        lerShell: () => clienteLeitura.shell(),
+        lerCompleto: (i) => clienteLeitura.threadCompleto(i),
+      })).execucao,
       // Canonicalização de caminho só vale no domínio de execução: local para loopback,
       // no host SSH para environment remoto. Mesma regra nos dois: caminho canônico igual a
       // um root aprovado.

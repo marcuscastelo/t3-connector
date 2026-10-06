@@ -88,10 +88,13 @@ export function resumoSessao(projecao, thread, modeloCanonico) {
  * da projeção (outra mudança entrou entre as duas leituras). A projeção é uma transação;
  * a shell é só a primeira leitura, usada para autorização e para os campos do topo.
  */
+/** Shell lida de novo: no OAuth all, `shell` devolve o inventário da invocação (em cache). */
+export const lerShellFresca = (cliente, opcoes) => (typeof cliente.shellFresca === 'function' ? cliente.shellFresca(opcoes) : cliente.shell(opcoes));
+
 export async function lerThreadCoerente({ r, cliente, signal, threadId, tentativas = 2 }) {
   let leitura;
   for (let tentativa = 1; tentativa <= tentativas; tentativa++) {
-    const shell = await cliente.shell({ signal });
+    const shell = await (tentativa === 1 ? cliente.shell({ signal }) : lerShellFresca(cliente, { signal }));
     const thread = r.escopo.exigirThread(shell, threadId);
     const bounded = await cliente.thread(threadId, { signal });
     leitura = { shell, thread, bounded, tentativa };
@@ -455,7 +458,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
           threadId,
           // Mesma ACL da leitura: thread de projeto não autorizado não é observada.
           lerShell: async () => {
-            const atual = await cliente.shell({ signal });
+            const atual = await lerShellFresca(cliente, { signal });
             return { ...atual, threads: (atual.threads ?? []).filter((t) => r.escopo.projetoPermitido(t.projectId)) };
           },
           lerCompleto: (id) => cliente.threadCompleto(id, { signal }),

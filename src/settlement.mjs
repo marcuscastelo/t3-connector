@@ -245,17 +245,42 @@ export async function lerObservacao(args) {
  */
 export async function lerObservacaoComDados({ environmentId, threadId, lerShell, lerCompleto, tentativas = TENTATIVAS_OBSERVACAO }) {
   const achar = (shell) => (shell?.threads ?? []).find((t) => t.id === threadId && !t.deletedAt);
+  // `ultimoSnapshot`: o último snapshot completo lido, mesmo sem observação coerente; só serve a
+  // quem precisa de uma projeção (uma transação) e declara a falta da shell.
+  let ultimoSnapshot = null;
   for (let i = 0; i < tentativas; i++) {
     const antes = achar(await lerShell());
-    if (!antes) return { observacao: observarSettlement({ environmentId, thread: null, snapshot: null }), thread: null, snapshot: null, execucao: null };
+    if (!antes) return { observacao: observarSettlement({ environmentId, thread: null, snapshot: null }), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1 };
     const snapshot = await lerCompleto(threadId);
+    ultimoSnapshot = snapshot;
     const depois = achar(await lerShell());
     if (depois && marcaDaShell(antes) === marcaDaShell(depois) && lifecycleConfere(depois, snapshot?.projection?.thread)) {
       const { observacao, execucao } = observar({ environmentId, thread: depois, snapshot, attempts: i + 1 });
-      return observacao.complete ? { observacao, thread: depois, snapshot, execucao } : { observacao, thread: null, snapshot: null, execucao: null };
+      return observacao.complete
+        ? { observacao, thread: depois, snapshot, execucao, ultimoSnapshot, tentativas: i + 1 }
+        : { observacao, thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas: i + 1 };
     }
   }
-  return { observacao: incompleta(['thread_changed_during_observation']), thread: null, snapshot: null, execucao: null };
+  return { observacao: incompleta(['thread_changed_during_observation']), thread: null, snapshot: null, execucao: null, ultimoSnapshot, tentativas };
+}
+
+/**
+ * Aquisição compartilhada de `execution` para quem decide uma escrita (preflight de send, guard):
+ * a mesma observação shell → completo → shell do settlement, de onde saem limite de uso, plano e
+ * roster da shell. Se a thread não para de mudar (ou some da shell), cai para a projeção completa
+ * mais recente, sem shell: `coherence.status` diz `projection_only` e limite/plano que só a shell
+ * traz ficam de fora. Falha de leitura propaga.
+ */
+export async function lerExecucaoDaThread(args) {
+  const lido = await lerObservacaoComDados(args);
+  if (lido.execucao) return { execucao: lido.execucao, lido };
+  const snapshot = lido.ultimoSnapshot ?? (await args.lerCompleto(args.threadId));
+  if (!snapshot?.projection) throw new Error('execution_snapshot_unavailable');
+  const execucao = derivarExecucao({
+    projecao: snapshot.projection,
+    fonte: { kind: 'thread_full_snapshot', threadSequence: snapshot.snapshotSequence ?? null, historyComplete: true, attempts: lido.tentativas },
+  });
+  return { execucao, lido };
 }
 
 const RECUSA_DO_BLOQUEIO = {

@@ -66,8 +66,14 @@ export function liveReadContext(base, authority, principal) {
         const client = wrap(r, c);
         const shell = await client.shell(options);
         // Some existing handlers validate projectId before asking for the shell.
-        // Prime their private scope and reuse exactly that inventory observation.
-        const snapshotClient = new Proxy(client, { get(target, key) { return key === 'shell' ? async () => shell : target[key]; } });
+        // Prime their private scope and reuse exactly that inventory observation. `shellFresca`
+        // reads again (consent checked, scope refreshed): a coherence check (shell → full → shell)
+        // needs two real reads, not the primed one twice.
+        const snapshotClient = new Proxy(client, { get(target, key) {
+          if (key === 'shell') return async () => shell;
+          if (key === 'shellFresca') return (opts) => target.shell(opts);
+          return target[key];
+        } });
         return fn(snapshotClient, info);
       }, options);
     },

@@ -123,9 +123,12 @@ settle has its own guard. The snapshot reports facts and mechanical eligibility.
 
 ## `thread.send` preflight
 
-Before starting a run, `thread.send` with `delivery: "start_immediately"` reads the full thread
-projection and derives `execution`. If `signals.backgroundWorkHoldsThread` is true, nothing is
-sent. The answer is a result, so its structure survives the private relay:
+Before starting a run, `thread.send` with `delivery: "start_immediately"` derives `execution`
+from the same coherent acquisition as the settle guard: shell, full thread snapshot, shell again
+(`source.kind: "thread_full_snapshot"`). The shell supplies the usage limit, the proposed plan and
+its background roster. If the thread keeps changing between the reads, the latest full snapshot is
+used alone and `coherence.status` is `projection_only`. If `signals.backgroundWorkHoldsThread` is
+true, nothing is sent. The answer is a result, so its structure survives the private relay:
 
 ```json
 {"state": "rejected", "operationId": "…", "sent": false, "reconciliationRequired": false,
@@ -154,6 +157,8 @@ not refuse.
   read from the stored thread row. A change that does not advance it (if any exists) passes as
   the same version. The only cost is conservative: the shell's background list can add a task
   that has already left the roster.
+- In OAuth all-projects mode the shell of one call is cached. Coherence reads (the settlement
+  observation and the second `t3_thread` read) read it again, with the consent checked again.
 - Neither the version check nor the preflight is a compare-and-swap. Another client can change
   the thread between the read and the send.
 

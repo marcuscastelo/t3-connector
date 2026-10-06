@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- One coherent acquisition for decisions: the `thread.send` preflight now derives `execution`
+  from the settlement observation (shell → full snapshot → shell), so it sees the usage limit,
+  the proposed plan and the shell's background roster; a thread that keeps changing falls back
+  to the latest full snapshot (`coherence.status: projection_only`). In OAuth all-projects mode
+  the coherence reads of `t3_thread` read the shell again instead of the call's cached inventory,
+  so a change between the reads is detected.
 - Fix: replaying `thread.launch` or `thread.fork` with the same `operationId` now returns the
   recorded receipt (the created `threadId`), so a caller that lost the first answer recovers the
   thread without launching again. Nothing is sent on replay.
