@@ -134,7 +134,7 @@ export class Dispatcher {
   const initial={hash,state:'preparing',action,operationId,environmentId:this.environmentId,destination:this.destination};
   const owned=this.#store('reserve',key,initial);
   const old=owned?null:this.#store('get',key);
-  if(old) {if(old.hash!==hash) throw new Error('operation_conflict');if(old.target)(this.authorizeRecorded??((target)=>this.gate.check(identity,leaseId,target)))(old.target);return {state:old.state,operationId,reconciliationRequired:!['completed','failed'].includes(old.state),...((isProjectAction(action)||parsed.spec.native)&&old.receipt?{receipt:old.receipt,...(old.postCheck??{})}:{}),...(old.error?{error:old.error}:{})};}
+  if(old) {if(old.hash!==hash) throw new Error('operation_conflict');if(old.target)(this.authorizeRecorded??((target)=>this.gate.check(identity,leaseId,target)))(old.target);return this.#replay(key,old,{operationId,action,spec:parsed.spec,input:parsed.input});}
   if(!owned)throw new Error('journal_failed');
   let release=null;
   try {
@@ -164,7 +164,9 @@ export class Dispatcher {
    const payloadIds={commandId:payload.commandId,threadId:payload.threadId,messageId:payload.messageId};
    this.#store('put',key,{...initial,state:'uncertain',target,payloadIds});
    const result=await this.gate.dispatch(identity,leaseId,{environmentId:this.environmentId,destination:this.destination,projectIds:[...projects],action},()=>this.adapter.invoke(method,payload,parsed.spec.native?{nativeErrors:true}:undefined),operationId);
-   const done={...initial,state:'completed',target,payloadIds,receipt:parsed.spec.native?await this.#nativeResult(parsed.spec,{raw:result,method,payload,input:parsed.input}):this.adapter.receipt(result)};
+   // A project delete is recorded with its post-check pending: a restart before the post-check
+   // leaves that visible, and the replay takes it then.
+   const done={...initial,state:'completed',target,payloadIds,receipt:parsed.spec.native?await this.#nativeResult(parsed.spec,{raw:result,method,payload,input:parsed.input}):this.adapter.receipt(result),...(isProjectAction(action)?{postCheck:{postCheck:'pending'}}:{})};
    this.#store('put',key,done);
    if(!isProjectAction(action)) return {state:'completed',operationId,receipt:done.receipt};
    // The post-check is evidence: kept with the record so a replay returns it too.
@@ -180,12 +182,30 @@ export class Dispatcher {
     throw error;
    }
    if(record.state!=='preparing') this.gate.close();
+   // A completed record keeps its receipt (only its post-check write can fail after it).
+   if(record.state==='completed') throw new Error('reconciliation_required');
    // No blind retry even if transport or audit failed. Reconciliation is read-only.
-   this.#store('put',key,{...record,state:record.state==='preparing'?'rejected':'uncertain'});
+   // A refusal before the send keeps its known reason, so a replay explains it too.
+   const refusal=record.state==='preparing'&&RECUSAS.test(error.message)?error.message:null;
+   this.#store('put',key,{...record,state:record.state==='preparing'?'rejected':'uncertain',...(refusal&&isProjectAction(action)?{refusal}:{})});
    // Recusa antes do envio devolve o motivo conhecido (nada foi enviado); o resto é genérico.
-   if(record.state==='preparing') throw new Error(RECUSAS.test(error.message)?error.message:'dispatch_rejected');
+   if(record.state==='preparing') throw new Error(refusal??'dispatch_rejected');
    throw new Error('reconciliation_required');
   } finally {release?.();}
+ }
+ async #replay(key,old,{operationId,action,spec,input}) {
+  let record=old;
+  const project=isProjectAction(action);
+  // Completed, but the process stopped before the post-check was stored: take it now, marked as
+  // taken on replay (it observes the project later than the delete).
+  if(project&&record.state==='completed'&&record.postCheck?.postCheck==='pending') {
+   record={...record,postCheck:{...await this.#afterDelete(input.projectId,operationId),postCheckOnReplay:true}};
+   this.#store('put',key,record);
+  }
+  return {state:record.state,operationId,reconciliationRequired:!['completed','failed'].includes(record.state),
+   ...((project||spec.native)&&record.receipt?{receipt:record.receipt,...(record.postCheck??{})}:{}),
+   ...(record.error?{error:record.error}:{}),
+   ...(project&&record.state==='rejected'?{sent:false,...(record.refusal?{refusal:record.refusal}:{})}:{})};
  }
  // The native result is a projection of what T3 answered (plus a read for createNew). It cannot
  // fail the completed operation: on a projection failure the raw answer is kept.
@@ -207,6 +227,8 @@ export class Dispatcher {
    try {this.gate.audit({event:'project_delete_live_threads',operationId,projectId,liveThreads:count.total});} catch {}
    return {postCheck:'live_threads_remain',liveThreadsAfterDelete:count.total};
   }
+  // T3 answered with deletedAt, yet the shell still lists the project: evidence, not a clean result.
+  if(count.projectLive) return {postCheck:'project_still_listed',liveThreadsAfterDelete:0};
   return {postCheck:'clean',liveThreadsAfterDelete:0};
  }
  async reconcile(identity,leaseId,operationId) {

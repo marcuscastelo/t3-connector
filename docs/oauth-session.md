@@ -281,51 +281,86 @@ Not wrapped, with the reason:
 `T3_CONNECTOR_OAUTH_PROJECT_ADMIN=1` (only with `T3_CONNECTOR_OAUTH_PROJECTS=all`; any other value
 is off) adds three OAuth tools. They are listed and callable only for a session whose consent
 includes the project actions, that is, one consented after the flag is on; an older session's
-frozen action list never gains them. The lease bridge (Ponte), stdio and `ACTIONS` catalogs are
-unchanged.
+frozen action list never gains them. With the flag off, project actions and the count are refused
+even for a session whose consent lists them. The consent text names exactly the deletion offered.
+The lease bridge (Ponte), stdio and `ACTIONS` catalogs are unchanged.
 
 - `t3_contar_threads_projeto`: the full live thread count of one project: `total`, `active`,
-  `archived`, `withoutRun` (overlapping) and `busy` (active run or pending request). A malformed
-  thread row (missing id, project, status, or with an invalid field) makes it incomplete. The HTTP
-  shell carries only active threads; archived ones come from WS
+  `archived`, `withoutRun` (overlapping), `busy` and `threadsDigest` (SHA-256 of the sorted thread
+  IDs). The HTTP shell carries only active threads; archived ones come from WS
   `orchestration.getArchivedShellSnapshot`. The count is `complete` only when both reads observed
-  the same `snapshotSequence`. Otherwise it reads again (3 attempts), then answers
-  `complete:false, total:null`, never zero.
+  the same `snapshotSequence` and every part is well formed; otherwise it reads again (3 attempts),
+  then answers `complete:false, total:null`, never zero. Fail-closed rules:
+  - a thread row without a non-empty string `id`, `projectId` or `status`, or with a non-string
+    `latestRunId`, `activeRunId`, `activityRunStatus`, `archivedAt` or `deletedAt`, or a
+    non-object `pendingRuntimeRequest`, makes the count incomplete, even if the row might belong to
+    another project;
+  - a missing or malformed project list in the active read makes it incomplete; the project's own
+    liveness (`projectLive`) comes from that same read;
+  - the same thread ID attributed to two projects across the two reads makes it incomplete;
+  - `busy` counts a thread whose status is not one of `idle`, `completed`, `interrupted`, `failed`,
+    `cancelled`, `rolled_back` (so an unknown status is busy), or that has an `activeRunId`, an
+    `activityRunStatus` or a pending runtime request.
 - `t3_escrever_project_delete`: refused before sending (`project_not_empty`) unless the full count
   is 0, and always sent with `force:false`, so T3's own refusal still applies. A refusal is never
   escalated to force.
 - `t3_escrever_project_delete_force`: requires `force: true` (literal), `confirmProjectId` equal to
-  `projectId`, and `expectedThreadCount` equal to the full count taken as the last read before
-  the send, after the target validation. It is refused when a thread
-  of the project has an active run or a pending request. T3 deletes each thread (cancelling its
-  pending work), then the project.
+  `projectId`, and `expectedThreadCount` and `expectedThreadsDigest` from one count. It is refused
+  when the count (`project_count_changed`) or the set of threads (`project_threads_changed`, same
+  total, other threads) changed, or a thread is busy (`project_has_active_work`). T3 deletes each
+  thread (cancelling its pending work), then the project.
 
-Both use WS `projects.mutate` (`project.delete`) with a `commandId` derived from the operation key,
-so T3 replays the receipt of a command it already committed. The operation journal dedupes as for
-any write. Same operationId and same input returns the recorded result, including the receipt
-and the post-check; same operationId and other
-input is `operation_conflict`. The receipt is `{projectId, deletedAt}`; T3 returns no sequence or
-deleted-thread count, and the connector invents none. The project is soft-deleted, and its
-workspace directory on disk is kept. Moving threads between projects is not offered: T3 has no
-native command that changes a thread's `projectId`.
+**Final revalidation.** Both deletes take the full count as the last read before the send, after
+the target validation (the live shell reads and the workspace checks), and refuse with
+`project_gone` when that same read no longer lists the project. Between that read and the one
+outbound call there is no await: only the synchronous journal write and the final authorization.
 
-**Concurrency (backend limit).** In T3 8ed276c2, `ProjectService.deleteChildThreads` reads the
-project's threads outside the project lock, and `thread.create` neither checks the project nor
-takes that lock. So another client creating a thread during a delete can leave a live thread linked
-to a deleted project. The connector:
+**Journal.** Both use WS `projects.mutate` (`project.delete`) with a `commandId` derived from the
+operation key, so T3 replays the receipt of a command it already committed. Same operationId and
+other input is `operation_conflict`. Same operationId and same input returns the recorded result:
 
-- serializes its own project-scoped writes (`thread.launch`, `thread.fork`, the deletes) per
-  environment and project;
-- re-reads the full count right before sending;
-- after the delete, reads it again and reports `postCheck: "live_threads_remain"` with
-  `liveThreadsAfterDelete`, plus an audit event, instead of a clean result.
+- completed: the receipt `{projectId, deletedAt}` and the post-check. The completed record is
+  stored with `postCheck: "pending"` before the post-check runs; if the process stops in between,
+  the replay takes the post-check then and marks it `postCheckOnReplay: true`. A failure after the
+  receipt is stored never downgrades the record;
+- refused before the send: `state: "rejected"`, `sent: false` and the `refusal` code;
+- uncertain: `reconciliationRequired: true`, never a resend.
 
-It cannot exclude other clients (T3 UI, MCP, scheduler). Treat the guarantee as connector-local
-until T3 makes the check and the delete one transaction.
+T3 returns no sequence or deleted-thread count, and the connector invents none. The project is
+soft-deleted, and its workspace directory on disk is kept. Moving threads between projects is not
+offered: T3 has no native command that changes a thread's `projectId`.
 
-A native refusal after the send (the project gained a thread between the connector's count and
+**Post-check.** After the delete the connector counts again and reports `postCheck`: `clean`,
+`live_threads_remain` (with `liveThreadsAfterDelete`, plus an audit event
+`project_delete_live_threads`), `project_still_listed`, `incomplete` or `unavailable`.
+
+A native refusal after the send (the project gained a thread between the connector's last read and
 T3's check) is uncertain for the connector. Like any uncertain send, it fails closed: no retry,
 sessions end, and reconciliation is by `t3_reconciliar_escrita`.
+
+**Residual risk (T3 backend; not fixable in the connector).** T3 offers no compare-and-set,
+transaction or project-wide lock that covers "read the project's threads" and "commit the project
+delete" for every producer of threads. In T3 8ed276c2 the delete enumerates the children outside the
+project lock, and thread creation neither checks the project nor takes that lock. The connector
+serializes its own project-scoped writes (`thread.launch`, `thread.fork`, the deletes) per
+environment and project, and revalidates right before the send, but other clients (T3 UI, native
+MCP, scheduler, provider subagents, imports) are outside its reach. Two windows remain, both after
+the connector's last read:
+
+1. A thread created after T3 enumerates the children and before it commits the delete stays live,
+   linked to a deleted project (empty delete and force). The post-check reports it
+   (`live_threads_remain`); it cannot prevent it. Test: "residual risk: a thread created inside the
+   backend force window" and "a thread created inside the backend delete window".
+2. With force, a thread created after the connector's last read and before T3 enumerates the
+   children is deleted by the cascade although no count included it. Nothing live remains, so the
+   post-check reports `clean`; the connector cannot detect this. Test: "residual risk: a thread
+   another client creates after the final read".
+
+Classification: **UNSAFE_RESIDUAL_RISK — continue enabled** where it is already enabled. The
+count (`t3_contar_threads_projeto`) is read-only and has no such window beyond describing an instant.
+The delete tools are correct against this connector's own writers and fail closed on every
+connector-observable change; the two windows above are T3's and are accepted as known risk. This
+document and this change keep the default (off) and change no installed flag.
 
 ## 2. What ChatGPT does, and why the token lifetimes are what they are
 
