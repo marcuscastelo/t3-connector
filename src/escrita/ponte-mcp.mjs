@@ -2,8 +2,9 @@
 // privado do gate; aprovação, escopo e roteamento por environment ficam no gate.
 import {McpServer} from '@modelcontextprotocol/sdk/server/mcp.js';
 import {z} from 'zod';
-import {ACTIONS,schemaForAction,SEND_DESCRIPTION} from './adapters.mjs';
+import {ACTIONS,schemaForAction,SEND_DESCRIPTION,SETTLE_DESCRIPTION} from './adapters.mjs';
 import {LEITURAS} from './read-guarded.mjs';
+import {MENSAGENS_GUARD} from '../settlement.mjs';
 
 export const VERSAO_ESCRITA='0.11.2';
 
@@ -20,6 +21,7 @@ const MENSAGENS={
  gate_unavailable:'the approval gate on the local machine is not running',
  dispatch_rejected:'rejected while the connector prepared the request, before sending it to T3; no mutation was sent. It does not mean the model is blocked or the provider is invalid',
  reconciliation_required:'the connector tried to send to T3 but could not confirm the result (RPC, transport or acknowledgement failure); this does not prove the thread was not created nor that the model is invalid. Do not retry and do not create with another provider as a fallback; call t3_reconciliar_escrita with the same environment and operationId',
+ ...MENSAGENS_GUARD,
 };
 
 // Os códigos e campos internos do gate são os antigos; esta ponte entrega ao cliente os
@@ -51,6 +53,7 @@ export function criarPonteEscrita({relay,aliases=[],approvalOrigin}) {
  }));
 
  const descricaoAcao=action=>action==='thread.send'?SEND_DESCRIPTION
+  :action==='thread.settle'?SETTLE_DESCRIPTION
   :action==='runtime-request.answer'?'Answers a pending user_input runtime request using requestId and answers keyed by question ID from t3_thread.pendingRequests; thread.send does NOT answer it.'
   :action==='runtime-request.approve'?'Responds to a pending approval runtime request using requestId and decision from t3_thread.pendingRequests; user_input requires runtime-request.answer instead.'
   :action;
@@ -60,7 +63,7 @@ export function criarPonteEscrita({relay,aliases=[],approvalOrigin}) {
  const cursor=z.string().min(1).optional();
  const leituras={t3_projetos:{search:z.string().min(1).optional(),limit:z.number().int().min(1).optional(),cursor},t3_atencao:{},
   t3_threads:{projectId:z.string().optional(),state:z.enum(['running','needs_intervention','completed','failed','cancelled','no_run','unknown']).optional(),includeNoRun:z.boolean().optional(),search:z.string().min(1).optional(),limit:z.number().int().min(1).max(50).optional(),cursor},
-  t3_thread:{threadId:z.string().min(1),maxCharacters:z.number().int().min(200).max(6000).optional()},
+  t3_thread:{threadId:z.string().min(1),maxCharacters:z.number().int().min(200).max(6000).optional(),settlementContractVersion:z.literal(1).optional()},
   t3_mensagens:{threadId:z.string().min(1),limit:z.number().int().min(1).max(20).optional(),maxCharacters:z.number().int().min(100).max(4000).optional()}};
  for(const name of LEITURAS)registrar(name,{description:`${name}: read of the projects approved in the lease, in the chosen environment; requires an active lease and never renews it.${name==='t3_thread'?' Pending runtime requests include full public content and nextAction; thread.send does NOT answer them. Use runtime-request.answer for user_input or runtime-request.approve for approval with the requestId; unavailable detail requires inspection in T3.':''}`,forma:{leaseId:z.string(),environment,...leituras[name]},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true}},
   async({leaseId,environment:amb,...input})=>{try{return await relay({op:'read',operation:name,leaseId,ambiente:amb,input});}catch(e){return erro(e);}});

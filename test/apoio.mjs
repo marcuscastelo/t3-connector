@@ -78,6 +78,13 @@ export function ambientesFalsos(dados = dadosPadrao(), { chamadas = [] } = {}) {
         if (!d.bounded[id]) throw Object.assign(new Error('404'), { status: 404 });
         return d.bounded[id];
       },
+      // Snapshot completo (settlement); `completo[id]` pode ser função para simular mudança.
+      threadCompleto: async (id) => {
+        reg(`completo:${id}`);
+        const c = d.completo?.[id];
+        if (!c) throw Object.assign(new Error('404'), { status: 404 });
+        return typeof c === 'function' ? c() : c;
+      },
       ticketWs: async () => (reg('ticket'), 'ticket'),
     };
   };
@@ -92,8 +99,8 @@ export function ambientesFalsos(dados = dadosPadrao(), { chamadas = [] } = {}) {
   });
 }
 
-export async function conectarMcp(ambientes, opcoesBusca, opcoesProviders) {
-  const servidor = criarServidor({ ambientes, opcoesBusca, opcoesProviders });
+export async function conectarMcp(ambientes, opcoesBusca, opcoesProviders, opcoesWorkset) {
+  const servidor = criarServidor({ ambientes, opcoesBusca, opcoesProviders, opcoesWorkset });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await servidor.connect(a);
   const cliente = new Client({ name: 'teste', version: '0' });

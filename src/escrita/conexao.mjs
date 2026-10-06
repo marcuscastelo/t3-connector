@@ -11,6 +11,7 @@ import { criarCliente, ErroT3, verificarIdentidade } from '../t3.mjs';
 import { criarTransporteSsh, criarTransporteUrl } from '../transporte.mjs';
 import { StagingRpcTransport, projectReceipt } from './transport-staging.mjs';
 import { lerOcupacao } from './project-admin.mjs';
+import { lerObservacao } from '../settlement.mjs';
 
 export const ESCOPOS_ESCRITA = ['orchestration:operate', 'orchestration:read'];
 
@@ -146,6 +147,13 @@ export function criarConexaoEscrita(registro, {
         const socket = await prepararSocket();
         return lerOcupacao({ projectId, readActive: () => clienteLeitura.shell(), readArchived: () => socket.invoke('orchestration.getArchivedShellSnapshot', {}) });
       },
+      // Settlement observation for the settle guard (shell → full snapshot → shell; GETs only).
+      settlementObservation: (threadId) => lerObservacao({
+        environmentId: registro.environmentId,
+        threadId,
+        lerShell: () => clienteLeitura.shell(),
+        lerCompleto: (id) => clienteLeitura.threadCompleto(id),
+      }),
       projectForThread: async (id) => (await clienteLeitura.shell()).threads?.find((t) => t.id === id && !t.deletedAt)?.projectId,
       // Canonicalização de caminho só vale no domínio de execução: local para loopback,
       // no host SSH para environment remoto. Mesma regra nos dois: caminho canônico igual a

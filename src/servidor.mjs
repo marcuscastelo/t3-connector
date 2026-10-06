@@ -19,6 +19,8 @@ import { lerProviders, resumoProvider } from './providers.mjs';
 import { assinatura, casaBusca, comparador, CursorInvalido, normalizar, paginar } from './paginacao.mjs';
 import { Cancelada, ErroT3 } from './t3.mjs';
 import { resumirPedidosRuntime } from './pedidos-runtime.mjs';
+import { lerObservacaoComDados, SETTLEMENT_CONTRACT_VERSION } from './settlement.mjs';
+import { GRUPOS, LIMITE_PADRAO, montarWorkset, PRAZO_AMBIENTE_MS as PRAZO_WORKSET_AMBIENTE, PRAZO_TOTAL_MS as PRAZO_WORKSET_TOTAL } from './workset.mjs';
 
 export const VERSAO = '0.11.2';
 const ESTADOS = ['running', 'needs_intervention', 'completed', 'failed', 'cancelled', 'no_run', 'unknown'];
@@ -79,7 +81,7 @@ const erro = toolErrorMapper({
   fallback: (e) => `failed to query T3: ${e?.message ?? e}`,
 });
 
-export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {} }) {
+export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {}, opcoesWorkset = {} }) {
   const servidor = new McpServer({ name: 't3-connector', version: VERSAO });
   const nomes = ambientes.registros.map((r) => r.alias).join(', ');
   const campoAmbiente = z.string().min(1).optional()
@@ -304,6 +306,37 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
   );
 
   registrar(
+    't3_workset',
+    {
+      title: 'Orchestrator workset across environments',
+      description:
+        'One call to rebuild an orchestration picture after losing context: every thread of the authorized projects in every configured environment (or only `environments`) that still needs a decision, in disjoint groups by this precedence: ' +
+        `${GRUPOS.join(' > ')}. ` +
+        'needs_intervention, running, background_pending (background tasks still pending, which can outlive a settle) and unknown include settled threads; the other groups only unsettled ones; snoozed holds unsettled threads whose snoozedUntil is still in the future. Settled idle threads and threads without a run are only counted. ' +
+        '`completed` is a run outcome, not acceptance: completed_unsettled is work whose result still has to be absorbed and then continued, waited on or settled by you. ' +
+        'Each item carries references and facts only (environment alias, threadId, projectId, state/stateSource/runId, pendingRequest, updatedAt, settled, snoozedUntil, pinned (null when the server does not report it), parent thread, linked PR); no conversation text. ' +
+        'Groups are ordered by updatedAt, newest first, and cut at `limitPerGroup`; `counts` always counts every thread and `truncated` says how many were left out per group. ' +
+        'Active queue, ready to consume without filtering: `actionable` (decide now: needs_intervention, unknown, failed_unsettled, completed_unsettled, cancelled_unsettled) and `inFlight` (running, background_pending), as {environment, threadId, group} in that group order. Settled idle threads, threads snoozed until a future time and archived threads are never in them; a pending request, an active run or background work keeps a thread in the queue even if settled or snoozed; an expired snooze returns the thread to its normal group. ' +
+        '`archived` is listed apart and never mixed with today\'s work; while no validated source of archived threads exists it is {available: false, reason}, which does not mean there are none. ' +
+        `Each environment has ${PRAZO_WORKSET_AMBIENTE} ms and the call ${PRAZO_WORKSET_TOTAL} ms; environments that fail are listed in \`environmentFailures\` with \`complete: false\`, and the groups still hold what the other environments returned, so an empty group with complete=false proves nothing. ` +
+        'Next step per thread: t3_thread with that environment and threadId (add settlementContractVersion: 1 before deciding to settle). ' + CONTRATO_ESTADO + ' Read-only.',
+      shape: {
+        environments: z.array(z.string().min(1)).min(1).max(10).optional()
+          .describe(`Environments to read (alias or environmentId): ${nomes}. Omitted: every configured environment`),
+        limitPerGroup: z.number().int().min(1).max(100).optional().describe(`Maximum threads listed per group; default ${LIMITE_PADRAO}`),
+      },
+      annotations: SO_LEITURA,
+    },
+    async (args, extra) => {
+      try {
+        return resposta(await montarWorkset(ambientes, args, { ...opcoesWorkset, signal: extra?.signal, resumir: (t, p) => resumoDaThread(t, p) }));
+      } catch (e) {
+        return erro(e);
+      }
+    },
+  );
+
+  registrar(
     't3_thread',
     {
       title: 'Thread state and latest response',
@@ -312,20 +345,51 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         CONTRATO_ESTADO + ' ' +
         '`activeRun` (present while a run is active) is that run with the model it executes; `latestRun` is the newest run and, when it differs from `activeRun`, is informational. ' +
         'Model precedence: `model` is what the thread runs next; `activeRun.model` is what the active run executes (fixed when the run was requested); `providerSession` (status, model) is the provider process as last reported and is informational only: it can keep the previous model after a model change and read `ready` while a run is active, so never use it to decide the model or the state. ' +
-        'Message `streaming` flags do not decide the state either. Read-only.',
+        'Message `streaming` flags do not decide the state either. ' +
+        'With `settlementContractVersion: 1` the whole answer (latestResponse, pendingRequests, activeRun, latestRun) is built from one validated observation of the full thread snapshot, and adds `settlement` from that same observation (when it cannot be observed coherently, `settlement.complete` is false with no observationId and the rest comes from the usual read): `blockers` (pending_request, active_run, queued_work, unresolved_work, observation_incomplete), `eligibleMechanically`, `observationId`, `expectedRunId`, lifecycle fields (settledAt, settledOverride, unsettledAt, snoozedUntil, pinnedAt, autoSettleDisabledAt, linkedPullRequests) with `fieldAvailability`, and `warnings` (e.g. linked_pr_merge_can_auto_settle). ' +
+        '`eligibleMechanically: true` only means nothing objective blocks a settle; it is never acceptance of the delivered scope, which is your decision. To settle with protection pass expectedRunId and observationId in thread.settle `settleGuard`. Read-only.',
       shape: {
         environment: campoAmbiente,
         threadId: z.string().min(1),
         maxCharacters: z.number().int().min(200).max(6000).optional().describe('Maximum length of the latest response; default 1500'),
+        settlementContractVersion: z.literal(SETTLEMENT_CONTRACT_VERSION).optional()
+          .describe('Pass 1 to add the `settlement` facts (full snapshot read; heavier). Omitted: the answer is unchanged'),
       },
       annotations: SO_LEITURA,
     },
-    noAmbiente(async ({ r, cliente, signal, threadId, maxCharacters: maxCaracteres = 1500 }) => {
+    noAmbiente(async ({ r, cliente, signal, threadId, maxCharacters: maxCaracteres = 1500, settlementContractVersion }) => {
       const shell = await cliente.shell({ signal });
-      const thread = r.escopo.exigirThread(shell, threadId);
+      let thread = r.escopo.exigirThread(shell, threadId);
       const projeto = projetosPorId(shell).get(thread.projectId);
-      const bounded = await cliente.thread(threadId, { signal });
-      const projecao = bounded.projection;
+      let settlement = null;
+      let projecao = null;
+      let history = null;
+      if (settlementContractVersion) {
+        const lido = await lerObservacaoComDados({
+          environmentId: r.environmentId,
+          threadId,
+          // Mesma ACL da leitura: thread de projeto não autorizado não é observada.
+          lerShell: async () => {
+            const atual = await cliente.shell({ signal });
+            return { ...atual, threads: (atual.threads ?? []).filter((t) => r.escopo.projetoPermitido(t.projectId)) };
+          },
+          lerCompleto: (id) => cliente.threadCompleto(id, { signal }),
+        });
+        settlement = lido.observacao;
+        if (lido.thread) {
+          // O pacote inteiro (resposta, pedidos, runs, settlement) vem da mesma observação
+          // validada: expectedRunId nunca descreve um run cuja entrega não foi mostrada.
+          thread = lido.thread;
+          projecao = lido.snapshot.projection;
+          history = { complete: true, payloadBudgetExceeded: false, source: 'full_snapshot' };
+        }
+      }
+      if (!projecao) {
+        // Sem opt-in, ou observação incompleta (settlement sem observationId: não serve de guard).
+        const bounded = await cliente.thread(threadId, { signal });
+        projecao = bounded.projection;
+        history = { complete: !bounded.hasMoreHistory, payloadBudgetExceeded: Boolean(bounded.payloadBudgetExceeded) };
+      }
       const pendentes = pedidosPendentes(projecao);
       const resumo = resumoDaThread(thread, projeto, pendentes);
       const ativo = runAtivoDaShell(thread);
@@ -347,7 +411,8 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         // Último run pela shell (a mesma regra do T3); o snapshot pode não trazer todos os runs.
         latestRun: thread.latestRunId ? { runId: thread.latestRunId, ordinal: runDoUltimo?.ordinal ?? null, status: thread.status } : null,
         latestResponse: ultimaResposta(projecao, maxCaracteres),
-        history: { complete: !bounded.hasMoreHistory, payloadBudgetExceeded: Boolean(bounded.payloadBudgetExceeded) },
+        history,
+        ...(settlementContractVersion ? { settlement } : {}),
       };
     }),
   );
