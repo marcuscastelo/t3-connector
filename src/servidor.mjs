@@ -25,6 +25,7 @@ import { compararShell, derivarExecucao } from './execucao.mjs';
 import { lerShellFresca } from './busca-threads.mjs';
 import { chamar } from './ws.mjs';
 import { CONTROL_PLANE_CONTRACT_VERSION } from './control-plane.mjs';
+import { MAX_CANDIDATOS, rotear } from './rota.mjs';
 
 export { lerShellFresca };
 
@@ -164,16 +165,55 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
     {
       title: 'Configured T3 environments',
       description:
-        'Lists the T3 environments this connector can read (e.g. local = this machine, remoto = another one over SSH), with the default, the transport and whether each responds right now. Pass the alias in the `environment` parameter of the other tools. Read-only.',
+        'Lists the T3 environments this connector can read (e.g. local = this machine, remoto = another one over SSH), with the default, the transport and whether each responds right now. Pass the alias in the `environment` parameter of the other tools. ' +
+        `With controlPlaneContractVersion ${CONTROL_PLANE_CONTRACT_VERSION} and \`route\`, also recommends where to start new work: hard filters (environment allowed and answering, project authorized, provider enabled+installed+ready+authenticated with the runtime mode and the exact model/options declared; anything missing is capability_unknown), then a fixed order (workspace affinity, branch affinity, explicit preference, inFlight = running + background_pending threads, needs_intervention, unknown, environmentId). An existing front wins (continue_existing); an ambiguous or uncovered one gives choose_target/inconclusive. It only recommends: it never launches, never moves work and knows nothing about accounts or quota. Read-only.`,
       shape: {
         check: z.boolean().optional().describe('Try to connect to each environment (up to 4 s); default true'),
+        controlPlaneContractVersion: z.literal(CONTROL_PLANE_CONTRACT_VERSION).optional(),
+        route: z.strictObject({
+          candidates: z.array(z.strictObject({
+            environment: z.string().min(1),
+            projectId: z.string().min(1),
+            modelSelection: z.strictObject({ instanceId: z.string().min(1), model: z.string().min(1), options: z.array(z.strictObject({ id: z.string().min(1), value: z.union([z.string(), z.boolean()]) })).optional() }),
+            runtimeMode: z.enum(['approval-required', 'auto-accept-edits', 'auto', 'full-access']),
+          })).min(1).max(MAX_CANDIDATOS).describe('Where the work could run: one per environment, with that environment\'s own project and provider instance IDs'),
+          front: z.strictObject({
+            threadId: z.string().min(1).optional(),
+            title: z.strictObject({ value: z.string().min(1), match: z.enum(['exact', 'partial']).optional() }).optional(),
+            branch: z.string().min(1).optional(),
+            worktreePath: z.string().min(1).optional(),
+            pullRequest: z.strictObject({ host: z.string().min(1), repository: z.string().min(1), number: z.number().int().positive() }).optional(),
+            projectIds: z.array(z.strictObject({ environment: z.string().min(1), projectId: z.string().min(1) })).min(1).max(20).optional(),
+          }).optional().describe('Selector of the front this work belongs to (as in t3_thread_find_batch); searched with population all'),
+          discoveryEnvironments: z.array(z.string().min(1)).min(1).optional().describe('Where to look for the front; required with `front`'),
+          constraints: z.strictObject({
+            allowedEnvironments: z.array(z.string().min(1)).min(1).optional(),
+            requiredPlatform: z.enum(['linux', 'darwin']).nullable().optional().describe('Not observable by this connector: any value makes candidates insufficient_evidence'),
+          }).optional(),
+          affinity: z.strictObject({
+            preferredEnvironments: z.array(z.string().min(1)).min(1).optional(),
+            bindings: z.array(z.strictObject({ environment: z.string().min(1), projectId: z.string().min(1), worktreePath: z.string().min(1).optional(), branch: z.string().min(1).optional() })).max(20).optional(),
+          }).optional(),
+        }).optional().describe(`Route request; needs controlPlaneContractVersion ${CONTROL_PLANE_CONTRACT_VERSION}`),
       },
       annotations: SO_LEITURA,
     },
-    async ({ check = true }, extra) => {
+    async ({ check = true, controlPlaneContractVersion, route }, extra) => {
       try {
-        return resposta({ default: ambientes.padrao, environments: await ambientes.listar({ verificar: check, signal: extra?.signal }) });
+        if (route && controlPlaneContractVersion !== CONTROL_PLANE_CONTRACT_VERSION) throw new EntradaInvalida(`\`route\` needs controlPlaneContractVersion: ${CONTROL_PLANE_CONTRACT_VERSION}`);
+        const base = { default: ambientes.padrao, environments: await ambientes.listar({ verificar: check, signal: extra?.signal }) };
+        if (!route) return resposta(base);
+        const rota = await rotear(ambientes, route, {
+          signal: extra?.signal,
+          lerProviders: (cliente, o) => lerProviders(cliente, { ...o, ...opcoesProviders }),
+          resumir: (t, p) => resumoDaThread(t, p),
+          lerArquivadas: opcoesBusca.lerArquivadas === undefined ? lerArquivadasWs : opcoesBusca.lerArquivadas,
+          opcoesWorkset,
+          opcoesBusca,
+        });
+        return resposta({ controlPlaneContractVersion: CONTROL_PLANE_CONTRACT_VERSION, ...base, status: 'ok', complete: rota.complete, route: rota });
       } catch (e) {
+        if (e?.codigo === 'invalid_input') return erro(new EntradaInvalida(e.message));
         return erro(e);
       }
     },

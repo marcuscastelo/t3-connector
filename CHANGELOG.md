@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Control-plane v1, route: `t3_ambientes` with `controlPlaneContractVersion: 1` and `route`
+  recommends where to start new work. Hard filters: environment allowed and answering, project
+  authorized, provider enabled, installed, `ready`, authenticated, with the runtime mode and the
+  exact model/options declared (anything missing is `capability_unknown`; a required platform
+  is `insufficient_evidence`). Order: workspace affinity, branch affinity, explicit preference,
+  inFlight (running + background_pending threads from the workset), needs_intervention, unknown,
+  environmentId. An existing front wins (`continue_existing`); an ambiguous or uncovered one
+  gives `choose_target`/`inconclusive`. Recommendation only: nothing is launched or moved.
 - Control-plane v1, front lookup: `t3_thread_find_batch` with `controlPlaneContractVersion: 1`
   accepts structural selectors (title, branch, worktree path, pull request by host/repository/
   number, qualified project IDs, thread ID; all must hold), `population: "all"` (active threads
