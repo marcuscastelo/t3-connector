@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.0
+
 - Read tools: thread summaries add `woke` and `wokeAt`, the "Woke" marker of the T3 sidebar
   (a thread that woke from a snooze and was not acknowledged yet), derived from the shell with
   T3's own rule. `woke` is `null` when the server does not expose the snooze or shared visited

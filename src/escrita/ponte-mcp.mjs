@@ -5,7 +5,7 @@ import {z} from 'zod';
 import {ACTIONS,schemaForAction,SEND_DESCRIPTION} from './adapters.mjs';
 import {LEITURAS} from './read-guarded.mjs';
 
-export const VERSAO_ESCRITA='0.11.2';
+export const VERSAO_ESCRITA='0.12.0';
 
 const MENSAGENS={
  target_run_id_required:'targetRunId required: read t3_thread in the same environment and pass the active run for steer_active or restart_active; do not replace it with queue_after_active',
