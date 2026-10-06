@@ -139,21 +139,25 @@ async function consultarAmbientes(ambientes, selecionados, { signal, prazoAmbien
       if (validarAtivas && (!Array.isArray(shell.threads) || !shell.threads.every(validRow))) {
         populacaoFinal = { population: estadoPopulacao.population, complete: false, reason: 'active_source_invalid' };
       }
-      const visiveis = (Array.isArray(shell.threads) ? shell.threads : []).filter((t) => t && r.escopo.projetoPermitido(t.projectId) && !t.deletedAt);
-      // Arquivadas da mesma sequence, mesma ACL; uma thread vista nas duas leituras conta uma vez,
-      // mas só se as duas linhas concordam no que a busca lê. Divergência (projeto, título,
-      // binding, PRs) não é resolvida escolhendo uma: a população fica incompleta (revisão
-      // a8d1170, P2), como a contagem de projeto faz com projeto divergente.
-      const ativasPorId = new Map((Array.isArray(shell.threads) ? shell.threads : []).filter(Boolean).map((t) => [t.id, t]));
-      const ids = new Set(visiveis.map((t) => t.id));
-      // A linha inteira, menos o que só diz a fonte (archivedAt): lineage, binding, PRs e
-      // qualquer campo futuro entram (revisão 737d9be, P2).
+      // União por ID de TODAS as linhas lidas (ativas e arquivadas, inclusive repetidas dentro
+      // de uma fonte): a mesma thread conta uma vez só se todas as linhas concordam na linha
+      // inteira (menos o que só diz a fonte: archivedAt). Qualquer divergência não é resolvida
+      // escolhendo uma: a população fica incompleta (revisões a8d1170, 737d9be e aacaf76).
       const evidencia = (t) => estavel(Object.fromEntries(Object.entries(t).filter(([k]) => k !== 'archivedAt' && k !== '_arquivada')));
-      for (const t of arquivadas) {
-        const ativa = ativasPorId.get(t.id);
-        if (ativa && evidencia(ativa) !== evidencia(t)) populacaoFinal = { population: estadoPopulacao.population, complete: false, reason: 'population_conflict' };
-        if (!ids.has(t.id) && r.escopo.projetoPermitido(t.projectId) && !t.deletedAt) { ids.add(t.id); visiveis.push({ ...t, _arquivada: true }); }
+      const porId = new Map();
+      const linhas = [
+        ...(Array.isArray(shell.threads) ? shell.threads : []).filter(Boolean).map((t) => ({ t, arquivada: false })),
+        ...arquivadas.filter(Boolean).map((t) => ({ t, arquivada: true })),
+      ];
+      for (const { t, arquivada } of linhas) {
+        const vista = porId.get(t.id);
+        if (!vista) { porId.set(t.id, { t, arquivada, assinatura: evidencia(t) }); continue; }
+        if (vista.assinatura !== evidencia(t)) populacaoFinal = { population: estadoPopulacao.population, complete: false, reason: 'population_conflict' };
+        if (arquivada) vista.arquivada = true;
       }
+      const visiveis = [...porId.values()]
+        .filter(({ t }) => r.escopo.projetoPermitido(t.projectId) && !t.deletedAt)
+        .map(({ t, arquivada }) => (arquivada && !t.archivedAt ? { ...t, _arquivada: true } : t));
       resultados.set(r.environmentId, { ok: true, ambiente, projetos, visiveis, populacao: populacaoFinal });
     } catch (e) {
       if (signal?.aborted || e instanceof Cancelada) throw new Cancelada();
@@ -185,6 +189,18 @@ async function consultarAmbientes(ambientes, selecionados, { signal, prazoAmbien
   return { sucesso: ordem.filter((x) => x.ok), falhasAmbientes: ordem.filter((x) => !x.ok).map((x) => x.falha) };
 }
 
+/**
+ * Busca por título prova ausência só se toda linha lida tem título textual e a população do
+ * environment é íntegra; senão a resposta é inconclusiva (revisão aacaf76, P2). Vale também
+ * para as buscas legadas, que dizem `not_found`/`complete`.
+ */
+function evidenciaDoCriterio(sucesso, q) {
+  if (!sucesso.every((x) => x.populacao.complete)) return false;
+  if (q.search === undefined) return true;
+  const casa = criterio(q).casa;
+  return sucesso.every((x) => x.visiveis.every((t) => casa(t) || typeof t.title === 'string'));
+}
+
 /** Itens de um environment que casam o critério, já no formato público. */
 function casados(x, casa, resumir) {
   return x.visiveis.filter(casa).map((t) => {
@@ -210,11 +226,12 @@ export async function buscarThreads(ambientes, args, {
   validar(args);
   const { casa, partes } = criterio(args);
   const selecionados = ordenarSelecionados(args.environment !== undefined ? [ambientes.resolver(args.environment)] : [...ambientes.registros]);
-  const { sucesso, falhasAmbientes } = await consultarAmbientes(ambientes, selecionados, { signal, prazoAmbienteMs, prazoTotalMs, concorrencia });
+  const { sucesso, falhasAmbientes } = await consultarAmbientes(ambientes, selecionados, { signal, prazoAmbienteMs, prazoTotalMs, concorrencia, validarAtivas: true });
 
   const porAmbiente = sucesso.map((x) => ({ ambiente: x.ambiente, threads: casados(x, casa, resumir) }));
   const comparar = comparador();
   const itens = porAmbiente.flatMap((x) => x.threads).sort((a, b) => comparar(chaveItem(a), chaveItem(b)));
+  const evidenciaCompleta = evidenciaDoCriterio(sucesso, args);
 
   const filtro = args.environment !== undefined ? selecionados[0].environmentId : null;
   const consulta = assinatura(['t3_buscar_threads', ...partes, filtro, selecionados.map((r) => r.environmentId), sucesso.map((x) => x.ambiente.environmentId)]);
@@ -232,7 +249,8 @@ export async function buscarThreads(ambientes, args, {
     ...(args.search !== undefined ? { search: args.search, match: args.match ?? 'partial' } : { threadId: args.threadId }),
     returned: pagina.pagina.length,
     truncated: pagina.truncado,
-    complete: falhasAmbientes.length === 0,
+    complete: falhasAmbientes.length === 0 && evidenciaCompleta,
+    ...(evidenciaCompleta ? {} : { evidenceIncomplete: true }),
     ...(pagina.proximoCursor ? { nextCursor: pagina.proximoCursor } : {}),
     queriedEnvironments: porAmbiente.map((x) => ({ ...x.ambiente, found: x.threads.length })),
     environmentFailures: falhasAmbientes,
@@ -283,7 +301,7 @@ async function buscarThreadsEmLoteLegado(ambientes, args, {
   if (filtrados && !args.environments.length) throw new EntradaInvalida('`environments` is empty; omit it to search every configured environment');
   const porId = new Map((filtrados ? args.environments.map((e) => ambientes.resolver(e)) : ambientes.registros).map((r) => [r.environmentId, r]));
   const selecionados = ordenarSelecionados([...porId.values()]);
-  const { sucesso, falhasAmbientes } = await consultarAmbientes(ambientes, selecionados, { signal, prazoAmbienteMs, prazoTotalMs, concorrencia });
+  const { sucesso, falhasAmbientes } = await consultarAmbientes(ambientes, selecionados, { signal, prazoAmbienteMs, prazoTotalMs, concorrencia, validarAtivas: true });
 
   const completo = falhasAmbientes.length === 0;
   const comparar = comparador();
@@ -311,8 +329,9 @@ async function buscarThreadsEmLoteLegado(ambientes, args, {
           : { code: 'cursor_invalid', message: e.message },
       };
     }
+    const coberto = completo && evidenciaDoCriterio(sucesso, q);
     const resolution = itens.length > 1 ? 'ambiguous'
-      : !completo ? 'inconclusive'
+      : !coberto ? 'inconclusive'
         : itens.length === 1 ? 'resolved' : 'not_found';
     return {
       ...base,
@@ -322,7 +341,7 @@ async function buscarThreadsEmLoteLegado(ambientes, args, {
       returned: pagina.pagina.length,
       truncated: pagina.truncado,
       ...(pagina.proximoCursor ? { nextCursor: pagina.proximoCursor } : {}),
-      complete: completo,
+      complete: coberto,
       queriedEnvironments: porAmbiente.map((x) => ({ ...x.ambiente, found: x.threads.length })),
       environmentFailures: falhasAmbientes,
       candidates: pagina.pagina,

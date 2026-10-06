@@ -87,11 +87,14 @@ test('linha ativa sem projectId (ou malformada) torna a população incompleta, 
     assert.equal(q.coverage.populationComplete, false);
     assert.ok(q.reasons.some((x) => x.code === 'active_source_invalid' && x.environmentId === REMOTO.environmentId));
   }
-  // Sem a versão do control-plane, a busca legada continua igual.
+  // A busca legada também não afirma cobertura completa sobre dado malformado (revisão
+  // aacaf76, P2); com dado bem formado a resposta legada não muda (testes de busca-lote).
   const d = dadosPadrao();
   d.remoto.shell.threads.push({ ...thread({ id: 'sem-projeto' }), projectId: undefined });
   const legado = await lote({ queries: [{ key: 'c', threadId: 't-comum' }] }, { d });
-  assert.equal(legado.results[0].complete, true);
+  assert.equal(legado.results[0].resolution, 'ambiguous');
+  assert.equal(legado.results[0].complete, false);
+  assert.equal('coverage' in legado.results[0], false);
 });
 
 test('título ausente ou nulo (ativa ou arquivada) não prova ausência; ativa e arquivada divergentes também não (revisão a8d1170 P2)', async () => {

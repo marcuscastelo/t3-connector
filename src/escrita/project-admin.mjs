@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
+import { nsIso } from '../instante.mjs';
 
 // Project administration over the native T3 project service (commit 8ed276c2):
 // - WS `projects.mutate` with ProjectMutation `project.delete` {commandId, projectId, force?}
@@ -46,12 +47,15 @@ const busy = t => !IDLE.has(t.status) || Boolean(t.activeRunId) || Boolean(t.act
 // Every row must carry what the count reads; one malformed row makes the whole count incomplete
 // (a row that cannot be attributed could belong to the project).
 const nullableString = v => v === null || v === undefined || typeof v === 'string';
+// Campo que exclui a linha (apagada, arquivada) só vale como instante válido: texto qualquer
+// não prova exclusão (revisão aacaf76, P2).
+const nullableInstant = v => v === null || v === undefined || nsIso(v) !== null;
 const isObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 export const validRow = t => isObject(t) && typeof t.id === 'string' && t.id !== '' && typeof t.projectId === 'string' && t.projectId !== ''
   && typeof t.status === 'string' && t.status !== '' && nullableString(t.latestRunId) && nullableString(t.activeRunId) && nullableString(t.activityRunStatus)
-  && nullableString(t.archivedAt) && nullableString(t.deletedAt)
+  && nullableInstant(t.archivedAt) && nullableInstant(t.deletedAt)
   && (t.pendingRuntimeRequest === null || t.pendingRuntimeRequest === undefined || isObject(t.pendingRuntimeRequest));
-const validProject = p => isObject(p) && typeof p.id === 'string' && p.id !== '' && nullableString(p.deletedAt);
+const validProject = p => isObject(p) && typeof p.id === 'string' && p.id !== '' && nullableInstant(p.deletedAt);
 
 /** Digest of the exact set of live thread IDs: binds a force delete to the threads that were counted. */
 export const threadsDigest = ids => createHash('sha256').update(JSON.stringify([...ids].sort())).digest('hex');

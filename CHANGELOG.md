@@ -15,7 +15,13 @@
   lineage) keeps a lookup inconclusive, for `selector` and for v1 `search`; the same thread in
   the active and the archived snapshot with any differing field is `population_conflict`.
   `execution_idle` without a valid projection instant waits the full quiet period, and batch
-  `snoozedUntil` refuses impossible calendar dates.
+  `snoozedUntil` refuses impossible calendar dates. Instants compare exactly (nanoseconds, own
+  calendar arithmetic, years 0000–9999); `deletedAt`/`archivedAt` must be valid instants for a
+  row to count as deleted or archived; every row with the same thread ID, also within one
+  source, must agree or the population is incomplete; background work seen in several sources
+  keeps the evidence that holds the thread; the legacy lookups (`t3_buscar_threads`,
+  `t3_thread_find_batch` without the version) no longer report `not_found`/`complete` over rows
+  without a text title or malformed rows (well-formed answers are unchanged).
 - Control-plane v1, live validation fixes: an absent or empty `supportedRuntimeModes` now counts
   as every mode supported, which is T3's own runtime rule (codex and claudeAgent instances do
   not declare the list); a declared list without the mode is still refused. On the write side

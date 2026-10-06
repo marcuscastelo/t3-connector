@@ -26,7 +26,7 @@
 //
 // Tudo aqui é puro: não faz I/O, não lê journal, não envia nada.
 
-import { msIso } from './instante.mjs';
+import { msIso, nsIso } from './instante.mjs';
 
 export const EXECUTION_CONTRACT_VERSION = 1;
 
@@ -109,9 +109,18 @@ export function trabalhoEmSegundoPlano(projecao, { historicoCompleto, shellThrea
   const rolledBack = new Set((projecao.runs ?? []).filter((r) => r.status === 'rolled_back').map((r) => r.id));
   const doTurnAtivo = (runId) => runId != null && runsAtivos.has(runId);
   const descartado = (runId) => runId != null && rolledBack.has(runId);
+  // Mesma tarefa em várias fontes (roster, turn item, subagent): nenhuma evidência que segura a
+  // thread é descartada por ter chegado depois; a entrada fica com o kind/fonte que segura e
+  // registra as outras fontes (revisão aacaf76, P1).
   const adicionar = (taskId, dados) => {
-    if (!taskId || pendentes.has(taskId)) return;
-    pendentes.set(taskId, { taskId, ...dados, holdsThread: seguraAThread(dados.kind) });
+    if (!taskId) return;
+    const novo = { taskId, ...dados, holdsThread: seguraAThread(dados.kind) };
+    const atual = pendentes.get(taskId);
+    if (!atual) { pendentes.set(taskId, novo); return; }
+    const base = novo.holdsThread && !atual.holdsThread ? novo : atual;
+    const outra = base === novo ? atual : novo;
+    const fontes = [...new Set([...(atual.alsoSeenIn ?? []), outra.source])].filter((f) => f !== base.source);
+    pendentes.set(taskId, { ...base, ...(fontes.length ? { alsoSeenIn: fontes } : {}) });
   };
 
   if (temRoster) {
@@ -290,8 +299,9 @@ export function compararShell(shellThread, projecao) {
   const atualizadaEm = projecao.updatedAt ?? projecao.thread?.updatedAt ?? null;
   // Mesma versão só com prova positiva: os dois instantes presentes, válidos e iguais. Ausente ou
   // inválido não "confere" (dois inválidos virariam null === null), é versão não comprovada.
-  const msShell = ms(shellThread.updatedAt);
-  const msProjecao = ms(atualizadaEm);
+  // Igualdade exata (nanossegundos, BigInt): instantes distintos nunca comparam iguais.
+  const msShell = nsIso(shellThread.updatedAt);
+  const msProjecao = nsIso(atualizadaEm);
   const mesmaVersao = msShell !== null && msProjecao !== null && msShell === msProjecao;
   if (msShell === null || msProjecao === null) {
     motivos.push({ code: 'thread_version_unproven', shellUpdatedAt: shellThread.updatedAt ?? null, projectionUpdatedAt: atualizadaEm });
