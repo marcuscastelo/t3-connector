@@ -10,7 +10,7 @@ import { Cancelada, ErroT3 } from './t3.mjs';
 import { assinar } from './ws.mjs';
 import { motivoDoPedido, runAtivoDaShell, ultimaResposta } from './estado.mjs';
 import { aplicarItens, derivarExecucao } from './execucao.mjs';
-import { EntradaInvalida } from './busca-threads.mjs';
+import { EntradaInvalida, lerShellFresca } from './busca-threads.mjs';
 
 export const TETO_MS = 5000;
 // Modo execution_idle: a thread precisa ficar parada este tempo antes de ser declarada
@@ -244,11 +244,16 @@ async function aguardarExecucao(ambientes, entrada, { signal, agora = Date.now, 
   // snapshot ocioso seguido de run.created no próximo lote não pode virar execution_idle.
   let sincronizado = false;
 
-  const derivar = () => derivarExecucao({
+  const derivar = (shellThread = null) => derivarExecucao({
     projecao: estado.projecao,
+    threadId,
     fonte: { kind: 'thread_subscription', threadSequence: estado.sequencia, historyComplete: estado.historicoCompleto, observedAt: observadoEm },
-    limitRecovery: threadShell.limitRecovery ?? null,
+    ...(shellThread ? { shellThread } : { limitRecovery: threadShell.limitRecovery ?? null }),
   });
+  // Versão local da projeção: muda a cada lote recebido, para descartar uma confirmação que
+  // terminou depois de um evento novo.
+  let versao = 0;
+  let ociosaConfirmada = false;
   const resultado = (motivoRetorno, timedOut) => {
     const runs = execucao?.runs;
     const run = runs ? (runs.active ?? runs.latestExecuted ?? runs.latest) : null;
@@ -264,8 +269,9 @@ async function aguardarExecucao(ambientes, entrada, { signal, agora = Date.now, 
       statusRun: status,
       state: execucao?.signals.pendingIntervention && !pedido ? 'needs_intervention' : estadoDoRun(status, pedido),
       terminal: TERMINAIS.has(status),
-      // Sem `synchronized` a projeção ainda é do catch-up: ociosidade não é afirmada.
-      executionIdle: sincronizado ? (execucao?.signals.operationallyIdle ?? null) : null,
+      // Sem `synchronized` a projeção ainda é do catch-up, e sem a shell da mesma versão a
+      // ociosidade não está confirmada: nos dois casos não é afirmada (null).
+      executionIdle: !sincronizado || !execucao ? null : execucao.signals.operationallyIdle === false ? false : ociosaConfirmada ? true : null,
       synchronized: sincronizado,
       timedOut,
       returnReason: motivoRetorno,
@@ -303,10 +309,31 @@ async function aguardarExecucao(ambientes, entrada, { signal, agora = Date.now, 
     // Sem instante válido da projeção, o período quieto conta a partir de agora: nunca zero.
     const desde = msIso(execucao.source.projectionUpdatedAt);
     const falta = desde === null ? QUIETO_MS : desde + QUIETO_MS - agora();
-    if (falta <= 0) return concluir('execution_idle');
-    quieto = setTimeout(() => concluir('execution_idle'), falta);
+    if (falta <= 0) return confirmarOciosa();
+    quieto = setTimeout(confirmarOciosa, falta);
+  };
+  // A subscription não traz o plano acionável nem o limite de uso, que só a shell tem: a
+  // ociosidade só é afirmada com a linha da shell lida agora, na mesma versão da projeção
+  // (revisão R7, P1). Shell atrasada, ilegível ou que bloqueia: volta a esperar e confere de novo.
+  const confirmarOciosa = async () => {
+    const minha = versao;
+    let linha = null;
+    try {
+      linha = r.escopo.exigirThread(await lerShellFresca(cliente, { signal: sinal }), threadId);
+    } catch {
+      linha = null;
+    }
+    if (minha !== versao || sinal.aborted) return;
+    if (linha) {
+      const confirmada = derivar(linha);
+      execucao = confirmada;
+      if (confirmada.signals.pendingIntervention) return concluir('needs_intervention');
+      if (confirmada.signals.operationallyIdle && confirmada.coherence.status === 'coherent') { threadShell = linha; ociosaConfirmada = true; return concluir('execution_idle'); }
+    }
+    quieto = setTimeout(() => { if (minha === versao) confirmarOciosa(); }, QUIETO_MS);
   };
   const aoReceber = (itens) => {
+    versao++;
     aplicarItens(estado, itens);
     observadoEm = new Date(agora()).toISOString();
     if (itens.some((i) => i.kind === 'synchronized')) sincronizado = true;

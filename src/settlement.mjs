@@ -26,6 +26,7 @@ import { estadoDaThread, pedidosPendentes, runAtivoDaShell } from './estado.mjs'
 import { compararShell, derivarExecucao, seguraAThread } from './execucao.mjs';
 import { nsIso } from './instante.mjs';
 import { linhaUnica } from './linhas.mjs';
+import { problemasDaLinha } from './validacao.mjs';
 
 export const SETTLEMENT_CONTRACT_VERSION = 1;
 // v2: bloqueios projetados de `execution.continuation.blockers` (mesmos códigos), fundo
@@ -183,6 +184,7 @@ export function execucaoDoSnapshot({ thread, snapshot, attempts = 1 }) {
   return derivarExecucao({
     projecao: snapshot.projection,
     shellThread: thread,
+    threadId: thread.id,
     fonte: { kind: 'thread_full_snapshot', threadSequence: snapshot.snapshotSequence ?? null, historyComplete: true, attempts },
   });
 }
@@ -192,19 +194,6 @@ export function execucaoDoSnapshot({ thread, snapshot, attempts = 1 }) {
  * `{snapshotSequence, projection}` da mesma thread. Nunca lança: entrada inconsistente
  * vira complete=false com bloqueio `observation_incomplete`.
  */
-/** Linha da shell que decide bloqueios: tipos do contrato, ou a lista do que está fora dele. */
-function problemasDaLinha(thread) {
-  const problemas = [];
-  const obj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
-  if (!STATUS_THREAD.has(thread.status)) problemas.push('thread_status_unknown');
-  if (thread.pendingRuntimeRequest != null && !(obj(thread.pendingRuntimeRequest) && typeof thread.pendingRuntimeRequest.id === 'string' && thread.pendingRuntimeRequest.id)) problemas.push('shell_pending_request_invalid');
-  if (thread.limitRecovery != null && !obj(thread.limitRecovery)) problemas.push('shell_limit_recovery_invalid');
-  if (thread.pendingBackgroundTasks != null && !(Array.isArray(thread.pendingBackgroundTasks) && thread.pendingBackgroundTasks.every((t) => obj(t) && typeof t.taskId === 'string' && t.taskId.trim()))) problemas.push('shell_background_roster_invalid');
-  if (thread.hasActionableProposedPlan !== undefined && typeof thread.hasActionableProposedPlan !== 'boolean') problemas.push('shell_plan_flag_invalid');
-  if (thread.activeRunId != null && typeof thread.activeRunId !== 'string') problemas.push('shell_active_run_invalid');
-  return problemas;
-}
-
 export function observarSettlement(args) {
   return observar(args).observacao;
 }
@@ -386,12 +375,11 @@ export async function lerExecucaoDaThread(args) {
   // Só a corrida (thread mudando, ou fora da shell) vira "só projeção". Dado inválido que a
   // observação viu (linhas em conflito, linha da shell malformada, snapshot de outra thread)
   // continua inválido sem a shell (revisões R5 e R6, P1), e o snapshot tem de ser do alvo.
-  const evidenciaInvalida = [...lido.evidenciaInvalida];
-  if (snapshot.projection.thread?.id !== args.threadId && !evidenciaInvalida.includes('snapshot_of_another_thread')) evidenciaInvalida.push('snapshot_of_another_thread');
   const execucao = derivarExecucao({
     projecao: snapshot.projection,
+    threadId: args.threadId,
     fonte: { kind: 'thread_full_snapshot', threadSequence: snapshot.snapshotSequence ?? null, historyComplete: true, attempts: lido.tentativas },
-    evidenciaInvalida,
+    evidenciaInvalida: lido.evidenciaInvalida,
   });
   return { execucao, lido };
 }

@@ -350,7 +350,8 @@ or lock, and never interrupts the run.
 
 `until: "execution_idle"` waits for the thread's real work rather than one run. It returns
 when no run is active or queued, no intervention is pending, and no background work holds
-the thread, after 1.5 s without changes. It subscribes to the full projection, applies
+the thread, after 1.5 s without changes, confirmed by a fresh shell row of the same version
+(`executionIdle` is `null` while unconfirmed). It subscribes to the full projection, applies
 events in order of `sequence`, returns `execution` with the same contract as `t3_thread`,
 and lists in `backgroundClearedDuringWait` the tasks that left the provider roster during
 the wait. `runId` does not apply in this mode.

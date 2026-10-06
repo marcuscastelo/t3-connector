@@ -104,7 +104,14 @@ test('aguardar execution_idle: o fim do run não encerra a espera; o fim do obse
   ];
   const inicio = Date.now();
   const reg = {};
-  const r = await aguardarThread(ambientesFalsos(shellDoIncidente()), { environment: 'local', threadId: 't-comum', timeoutMs: 5000, until: 'execution_idle' }, { assinarImpl: assinaturaFalsa(lotes, reg) });
+  // A shell acompanha a projeção: depois do último evento descreve run-2 falho, sem roster.
+  const d = shellDoIncidente();
+  const base = d.local.shell;
+  let atual = base.threads.find((t) => t.id === 't-comum');
+  const final = thread({ id: 't-comum', projectId: LOCAL.projeto, latestRunId: 'run-2', status: 'failed', updatedAt: iso(60), activeProviderThreadId: PT, pendingBackgroundTasks: [] });
+  setTimeout(() => { atual = final; }, 60);
+  d.local.shell = () => ({ ...base, threads: [atual, ...base.threads.filter((t) => t.id !== 't-comum')] });
+  const r = await aguardarThread(ambientesFalsos(d), { environment: 'local', threadId: 't-comum', timeoutMs: 5000, until: 'execution_idle' }, { assinarImpl: assinaturaFalsa(lotes, reg) });
   assert.deepEqual(reg.payload, { threadId: 't-comum', requestCompletionMarker: true }, 'projeção completa: a janela não prova ausência');
   assert.equal(r.returnReason, 'execution_idle');
   assert.equal(r.timedOut, false);
@@ -164,13 +171,14 @@ test('aguardar execution_idle: nada decide antes de synchronized (snapshot ocios
   assert.equal(sem.synchronized, false);
 });
 
-test('aguardar execution_idle: sem instante válido da projeção o período quieto não é zerado', async () => {
+test('aguardar execution_idle: sem instante válido da projeção a versão da shell não é provada; nunca ociosa', async () => {
   for (const updatedAt of [undefined, '2026-02-30T07:05:00-03:00']) {
     const ocioso = { kind: 'snapshot', snapshotSequence: 10, projection: { ...projecao({ runs: [run(1, 'completed')], roster: [], updatedAt }), updatedAt } };
-    const inicio = Date.now();
-    const r = await aguardarThread(ambientesFalsos(shellDoIncidente()), { environment: 'local', threadId: 't-comum', timeoutMs: 4000, until: 'execution_idle' }, { assinarImpl: assinaturaFalsa([[5, [ocioso, { kind: 'synchronized' }]]]) });
-    assert.equal(r.returnReason, 'execution_idle', String(updatedAt));
-    assert.ok(Date.now() - inicio >= 1400, `declarou ociosa sem esperar o período quieto (${String(updatedAt)})`);
+    const d = shellDoIncidente();
+    d.local.shell.threads = d.local.shell.threads.map((t) => (t.id === 't-comum' ? { ...t, updatedAt, pendingBackgroundTasks: [] } : t));
+    const r = await aguardarThread(ambientesFalsos(d), { environment: 'local', threadId: 't-comum', timeoutMs: 2000, until: 'execution_idle' }, { assinarImpl: assinaturaFalsa([[5, [ocioso, { kind: 'synchronized' }]]]) });
+    assert.equal(r.returnReason, 'timeout', String(updatedAt));
+    assert.equal(r.executionIdle, null, 'ociosidade não confirmada pela shell não é afirmada');
   }
 });
 

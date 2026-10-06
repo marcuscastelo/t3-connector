@@ -122,6 +122,7 @@ export function execucaoDaLeitura({ thread, bounded, tentativa }) {
   return derivarExecucao({
     projecao: bounded.projection ?? {},
     shellThread: thread,
+    threadId: thread.id,
     fonte: {
       kind: 'thread_snapshot',
       threadSequence: bounded.snapshotSequence ?? null,

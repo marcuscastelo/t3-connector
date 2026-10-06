@@ -27,7 +27,7 @@
 // Tudo aqui é puro: não faz I/O, não lê journal, não envia nada.
 
 import { msIso, nsIso } from './instante.mjs';
-import { problemasDaProjecao } from './validacao.mjs';
+import { problemasDaLeitura, problemasDaProjecao } from './validacao.mjs';
 
 export const EXECUTION_CONTRACT_VERSION = 1;
 
@@ -356,10 +356,11 @@ export function compararShell(shellThread, projecao) {
  *
  * @param projecao projection do /bounded, do snapshot completo ou da subscription
  * @param shellThread linha da shell ou null
+ * @param threadId o alvo: a projeção e a linha da shell têm de ser dele
  * @param fonte {kind, threadSequence, historyComplete, attempts, observedAt}
  */
-export function derivarExecucao({ projecao, shellThread = null, fonte = {}, limitRecovery = shellThread?.limitRecovery ?? null, evidenciaInvalida = [] }) {
-  const problemas = [...problemasDaProjecao(projecao), ...evidenciaInvalida];
+export function derivarExecucao({ projecao, shellThread = null, threadId, fonte = {}, limitRecovery = shellThread?.limitRecovery ?? null, evidenciaInvalida = [] }) {
+  const problemas = [...new Set([...problemasDaProjecao(projecao), ...problemasDaLeitura({ projecao, shellThread, threadId, fonte }), ...evidenciaInvalida])];
   if (!projecao || typeof projecao !== 'object') projecao = {};
   const comparacao = shellThread ? compararShell(shellThread, projecao) : null;
   const shellConcorda = Boolean(comparacao && comparacao.motivos.length === 0);

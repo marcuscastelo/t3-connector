@@ -89,11 +89,14 @@ because they wake the agent.
   `background_work_active`, `background_work_unknown` and `execution_evidence_invalid`.
 - `execution_evidence_invalid` means the projection does not follow the V2 contract (a run,
   request, subagent, plan or turn item with an unknown status, kind or type, a duplicate ID, a
-  roster task without `taskId`, an active provider thread missing from the roster, a missing
-  `runs`, `runtimeRequests`, `turnItems`, `subagents` or `plans` list) or the shell has
-  conflicting or malformed rows for the thread. When the shell keeps changing and `execution`
-  falls back to the projection alone (`coherence.status: projection_only`), anything invalid
-  the observation saw stays here, and the projection must belong to the thread.
+  roster task without `taskId` or a roster that is `null`, an active provider thread missing
+  from the roster, a missing `runs`, `runtimeRequests`, `turnItems`, `subagents` or `plans`
+  list), the read is not of the thread (`snapshot_of_another_thread`) or has no valid
+  `snapshotSequence`, or the shell has conflicting or malformed rows for the thread (including
+  a missing `hasActionableProposedPlan`, `pendingRuntimeRequest` or `activeRunId`, which the
+  contract requires). These checks run in the derivation itself, so every reader applies them.
+  When the shell keeps changing and `execution` falls back to the projection alone
+  (`coherence.status: projection_only`), anything invalid the observation saw stays here.
   `evidence.problems` lists what failed. Nothing is proven
   from such a read: settle refuses (`settle_observation_incomplete`), the dispatch preflight
   refuses, `execution_idle` never returns, and `thread.send` `start_immediately` refuses with
@@ -124,7 +127,10 @@ settle has its own guard. The snapshot reports facts and mechanical eligibility.
 4. Never derive state from response text. A message saying work is running is history.
 5. To wait for real work, use `t3_aguardar_thread` with `until: "execution_idle"`. It subscribes
    to the full projection and applies events in order of `sequence`. It returns
-   `execution_idle` once nothing holds the thread and the thread has been quiet for 1.5 s. The
+   `execution_idle` once nothing holds the thread, the thread has been quiet for 1.5 s and a
+   fresh shell row of the same version confirms it (the shell carries the actionable plan and
+   the usage limit, which the subscription does not). A lagging shell keeps the wait going;
+   `executionIdle` is `null` while idleness is unconfirmed. The
    quiet period keeps a wake run, which the provider opens right after a background task ends,
    from being taken for the end of work. Quiet time is measured against the backend clock
    (`projection.updatedAt`), and the call deadline bounds it. The wait returns

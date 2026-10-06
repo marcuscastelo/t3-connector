@@ -41,7 +41,13 @@
   the shell shows it. Catalog lookups (projects, provider instances, models, option
   descriptors; native project reads) no longer pick the first of repeated, diverging rows:
   route and preflight answer `project_unavailable` / `capability_unknown` with
-  `reason: catalog_conflict`, native reads `project_conflict`.
+  `reason: catalog_conflict`, native reads `project_conflict`. The derivation itself checks the
+  read behind it (the projection is of the target thread, `snapshotSequence` is a valid
+  sequence, the shell row is of the target and has the contract's required
+  `hasActionableProposedPlan`, `pendingRuntimeRequest` and `activeRunId`), so the wait, the
+  fallback, settlement and `t3_thread` cannot skip a check; a `null` roster is invalid, not
+  empty. `execution_idle` is returned only after a fresh shell row of the same version confirms
+  it (plan and usage limit come from the shell); `executionIdle` is `null` while unconfirmed.
 - Control-plane v1, live validation fixes: an absent or empty `supportedRuntimeModes` now counts
   as every mode supported, which is T3's own runtime rule (codex and claudeAgent instances do
   not declare the list); a declared list without the mode is still refused. On the write side

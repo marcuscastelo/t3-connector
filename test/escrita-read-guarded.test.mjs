@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {leituraProtegida,clienteFiltrado} from '../src/escrita/read-guarded.mjs';
 
-const cliente={shell:async()=>({projects:[{id:'one',title:'one',workspaceRoot:'/one'},{id:'two',title:'two',workspaceRoot:'/two'},{id:'future',title:'f',workspaceRoot:'/f'}],threads:[{id:'t',projectId:'one',title:'t',status:'completed',latestRunId:'r',updatedAt:'2026-10-03T10:05:00.000Z'},{id:'hidden',projectId:'future',title:'h',status:'completed',latestRunId:'r'}]}),thread:async()=>({projection:{messages:[],runs:[]}})};
+const cliente={shell:async()=>({projects:[{id:'one',title:'one',workspaceRoot:'/one'},{id:'two',title:'two',workspaceRoot:'/two'},{id:'future',title:'f',workspaceRoot:'/f'}],threads:[{id:'t',projectId:'one',title:'t',status:'completed',latestRunId:'r',activeRunId:null,pendingRuntimeRequest:null,hasActionableProposedPlan:false,updatedAt:'2026-10-03T10:05:00.000Z'},{id:'hidden',projectId:'future',title:'h',status:'completed',latestRunId:'r'}]}),thread:async()=>({projection:{messages:[],runs:[]}})};
 const ambiente={alias:'remoto',environmentId:'env-s'};
 const grant={readProjectIds:['one','two']};
 
