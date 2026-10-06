@@ -324,3 +324,34 @@ test('all local consent: effective scopes, offered actions and configured idle/m
     }
   }
 });
+
+// Production incident (06/10/2026, Sirius): four typed OrchestrationV2DispatchCommandError answers
+// each ended every OAuth session (manual Reconnect + passkey). A typed answer leaves the operation
+// uncertain (never resent) but costs no session.
+test('all: a typed T3 answer keeps every session alive: uncertain with T3 message, replay and reconcile carry it, nothing resent', async t => {
+  const { NativeRpcError } = await import('../src/escrita/native.mjs');
+  const f = await fixture(t); const id = f.add('local'); const a = (await f.c.signIn()).tokens, b = (await f.c.signIn()).tokens;
+  const original = f.connections[0].adapter.invoke, reserve = f.journal.reserve; let key;
+  f.journal.reserve = (k, v) => { key = k; return reserve(k, v); };
+  f.connections[0].adapter.invoke = async (method, payload, opts) => {
+    f.connections[0].calls.push({ method, payload }); assert.deepEqual(opts, { nativeErrors: true });
+    throw new NativeRpcError('OrchestrationV2DispatchCommandError', 'This thread still needs attention. Resolve or interrupt it first, then try again.', { commandId: payload.commandId, commandType: 'message.dispatch' });
+  };
+  const result = await f.send(a.access_token, 'local', id);
+  assert.equal(result.data.result.isError, true);
+  assert.match(result.data.result.content[0].text, /^reconciliation_required: .*t3_reconciliar_escrita.* T3 answered OrchestrationV2DispatchCommandError: This thread still needs attention/);
+  assert.equal(invokes(f.connections[0]), 1);
+  const record = f.journal.get(key);
+  assert.equal(record.state, 'uncertain'); assert.equal(record.error.code, 'OrchestrationV2DispatchCommandError'); assert.equal(record.receipt, undefined);
+  assert.equal((await f.c.mcp(b.access_token, 'tools/list')).status, 200);
+  assert.ok(f.c.connector.authority.list().every(s => s.state === 'active'));
+  const replay = await f.send(a.access_token, 'local', id);
+  assert.notEqual(replay.data.result.isError, true);
+  assert.equal(body(replay).state, 'uncertain'); assert.equal(body(replay).reconciliationRequired, true); assert.equal(body(replay).error.code, 'OrchestrationV2DispatchCommandError');
+  assert.equal(invokes(f.connections[0]), 1, 'a replay never resends');
+  const rec = body(await f.c.callTool(a.access_token, 't3_reconciliar_escrita', { environment: 'local', operationId: `op-local-${id}` }));
+  assert.equal(rec.state, 'uncertain'); assert.equal(rec.error.code, 'OrchestrationV2DispatchCommandError'); assert.equal(invokes(f.connections[0]), 1);
+  f.connections[0].adapter.invoke = original;
+  assert.equal(body(await f.send(a.access_token, 'local', id, 'after-typed-answer')).state, 'completed');
+  assert.ok(f.c.connector.authority.list().every(s => s.state === 'active'));
+});
