@@ -1,4 +1,5 @@
 import { brandOf } from './brand.mjs';
+import { issuerParts } from './issuer.mjs';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { OAuthError } from './token-store.mjs';
 import { json, html, redirect, readBody, cookies, page, esc, redact } from './http.mjs';
@@ -43,6 +44,11 @@ export function authorizationServer({ issuer, resource, localOrigin, loginMode =
   if (!LOGIN_MODES.includes(loginMode)) throw new Error('invalid_login_mode');
   if (loginMode === 'public' && !issuer.startsWith('https://')) throw new Error('public_login_https_required');
   const COOKIE = transactionCookie(issuer, brand), BRAND = brandOf(brand);
+  // Endpoints live under the issuer's mount path ('' for a bare origin); discovery uses RFC 8414
+  // path insertion, plus the OIDC suffix form and the alias at the default resource path.
+  const mount = issuerParts(issuer)?.mount;
+  if (mount === undefined) throw new Error('issuer_invalid');
+  const DISCOVERY = new Set([`/.well-known/oauth-authorization-server${mount}`, `/.well-known/openid-configuration${mount}`, `${mount}/.well-known/openid-configuration`, `/.well-known/oauth-authorization-server${mount}/mcp`]);
   const secureCookie = issuer.startsWith('https://') ? '; Secure' : '';
   const setCookie = (v, maxAge) => `${COOKIE}=${v}; HttpOnly${secureCookie}; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
   const errorPage = (res, status, message) => html(res, status, n => page('Sign-in error', `<h1>Sign-in failed</h1><p>${esc(message)}</p><p class="muted">Start the connection again from the client app.</p>`, n));
@@ -96,7 +102,7 @@ export function authorizationServer({ issuer, resource, localOrigin, loginMode =
 ${loginMode === 'button' ? `<p>Approve this sign-in with your passkey on the local control panel of <b>this computer</b>.</p><p><a class="btn" href="${esc(localUrl)}">Open local control (localhost)</a></p>` : ''}
 <p class="muted">${loginMode === 'button' ? 'If the button does not work: ' : ''}open <code>${esc(localOrigin)}/login</code> in a browser on this computer and enter the code <span class="big">${esc(tx.oob)}</span>. Keep this page open; it continues by itself.</p>
 <p id="s" class="muted"></p>
-<script nonce="${n}">const id=${JSON.stringify(tx.statusId)};async function poll(){try{const r=await fetch('/authorize/status?tx='+encodeURIComponent(id),{credentials:'same-origin'});const v=await r.json();if(v.approved){location.replace('/resume?tx='+encodeURIComponent(id));return;}if(v.error){document.getElementById('s').textContent='Sign-in expired. Start again from the client app.';return;}}catch(e){}setTimeout(poll,1500);}poll();</script>`, n), headers);
+<script nonce="${n}">const id=${JSON.stringify(tx.statusId)};async function poll(){try{const r=await fetch('${mount}/authorize/status?tx='+encodeURIComponent(id),{credentials:'same-origin'});const v=await r.json();if(v.approved){location.replace('${mount}/resume?tx='+encodeURIComponent(id));return;}if(v.error){document.getElementById('s').textContent='Sign-in expired. Start again from the client app.';return;}}catch(e){}setTimeout(poll,1500);}poll();</script>`, n), headers);
   }
 
   function status(req, res, url) {
@@ -162,11 +168,12 @@ ${loginMode === 'button' ? `<p>Approve this sign-in with your passkey on the loc
 
   // Returns true when the route was handled.
   return async function handle(req, res, url) {
-    const p = url.pathname;
-    if (p === '/.well-known/oauth-authorization-server' || p === '/.well-known/openid-configuration' || p === '/.well-known/oauth-authorization-server/mcp') {
-      audit({ event: 'discovery', path: p });
+    if (DISCOVERY.has(url.pathname)) {
+      audit({ event: 'discovery', path: url.pathname });
       json(res, 200, asMetadata({ issuer })); return true;
     }
+    if (!url.pathname.startsWith(`${mount}/`)) return false;
+    const p = url.pathname.slice(mount.length);
     if (p === '/authorize' && req.method === 'GET') { await authorize(req, res, url); return true; }
     if (p === '/authorize/status' && req.method === 'GET') { status(req, res, url); return true; }
     if (p === '/resume' && req.method === 'GET') { resume(req, res, url); return true; }
