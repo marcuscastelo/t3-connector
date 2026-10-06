@@ -24,6 +24,7 @@
 import { createHash } from 'node:crypto';
 import { estadoDaThread, pedidosPendentes, runAtivoDaShell } from './estado.mjs';
 import { compararShell, derivarExecucao, seguraAThread } from './execucao.mjs';
+import { msIso } from './instante.mjs';
 
 export const SETTLEMENT_CONTRACT_VERSION = 1;
 // v2: bloqueios projetados de `execution.continuation.blockers` (mesmos códigos), fundo
@@ -77,7 +78,8 @@ function marcaDaShell(t) {
 // all), então esta é a checagem que ainda liga as duas leituras ao mesmo estado.
 const LIFECYCLE = ['settledAt', 'settledOverride', 'unsettledAt', 'pinnedAt', 'archivedAt', 'snoozedUntil', 'projectId', 'worktreePath', 'branch'];
 // Instantes comparados por valor: as duas fontes podem formatar o mesmo instante de outro jeito.
-const instante = (v) => (typeof v === 'string' && /^\d{4}-\d\d-\d\dT/.test(v) && !Number.isNaN(Date.parse(v)) ? Date.parse(v) : ou(v));
+// Instante válido (ISO estrito) compara por valor; qualquer outro texto compara como texto.
+const instante = (v) => { const n = msIso(v); return n !== null ? n : ou(v); };
 function lifecycleConfere(shellThread, appThread) {
   if (!appThread) return true;
   return LIFECYCLE.every((k) => !(k in appThread) || instante(appThread[k]) === instante(shellThread[k]));

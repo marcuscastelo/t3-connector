@@ -119,6 +119,38 @@ test('título ausente ou nulo (ativa ou arquivada) não prova ausência; ativa e
   assert.equal(igual.total, 1);
 });
 
+test('evidência malformada não prova ausência: PR sem URL, branch não textual, search v1 sem título, lineage divergente (revisão 737d9be P2)', async () => {
+  const todos = (d, queries, extra = {}) => lote({ ...V, population: 'all', queries }, { d, lerArquivadas: arquivadas(extra) });
+  // PR que não dá para atribuir (URL inválida, sem número).
+  const pr = { pullRequest: { host: 'github.com', repository: 'owner/repo', number: 12 } };
+  for (const link of [{ url: 'bad' }, { number: 12 }, {}, 'texto']) {
+    const d = comSequencia(dadosPadrao());
+    d.local.shell.threads.push(thread({ id: 'pr', projectId: LOCAL.projeto, linkedPullRequest: link }));
+    const q = (await todos(d, [{ key: 'p', selector: pr }])).results[0];
+    assert.equal(q.launchDisposition, 'inconclusive', JSON.stringify(link));
+    assert.equal(q.coverage.selectorEvidenceComplete, false);
+  }
+  // E lógico: branch desconhecida continua desconhecida mesmo com o PR casando.
+  assert.equal(casarSeletor(thread({ linkedPullRequest: { url: 'https://github.com/owner/repo/pull/12' }, branch: 7 }), { ...pr, branch: 'feat/x' }, 'e'), 'unknown');
+  assert.equal(casarSeletor(thread({ branch: 7 }), { branch: 'feat/x' }, 'e'), 'unknown');
+  // search/threadId v1 seguem a mesma regra de evidência.
+  for (const match of ['exact', 'partial']) {
+    const d = comSequencia(dadosPadrao());
+    d.local.shell.threads.push(thread({ id: 'sem-titulo', projectId: LOCAL.projeto, title: null }));
+    const q = (await todos(d, [{ key: 's', search: 'Front X', match }])).results[0];
+    assert.equal(q.launchDisposition, 'inconclusive', match);
+    assert.equal(q.coverage.selectorEvidenceComplete, false);
+  }
+  // Mesma filha ativa (sem pai) e arquivada (pai = root): conflito, árvore não completa.
+  const d = comSequencia(dadosPadrao());
+  for (const amb of ['local', 'remoto']) d[amb].shell.threads = d[amb].shell.threads.map((t) => ({ ...t, lineage: {} }));
+  d.local.shell.threads.push(thread({ id: 'root', projectId: LOCAL.projeto, title: 'Raiz', lineage: {} }), thread({ id: 'child', projectId: LOCAL.projeto, title: 'Filha', lineage: {} }));
+  const r = (await todos(d, [{ key: 'r', selector: { threadId: 'root' }, relations: { direction: 'children' } }], { local: [thread({ id: 'child', projectId: LOCAL.projeto, title: 'Filha', lineage: { parentThreadId: 'root' }, archivedAt: '2026-10-01T00:00:00.000Z' })] })).results[0];
+  assert.equal(r.coverage.populationComplete, false);
+  assert.ok(r.reasons.some((x) => x.code === 'population_conflict'));
+  assert.equal(r.relations.complete, false);
+});
+
 test('campo do seletor ausente na shell não prova nada: selector_evidence_unavailable', async () => {
   const d = comSequencia(dadosPadrao());
   for (const amb of ['local', 'remoto']) d[amb].shell.threads = d[amb].shell.threads.map(({ branch, ...t }) => t);
@@ -169,6 +201,11 @@ test('relações: BFS por lineage, profundidade, teto, ciclo e lineage ausente',
   const sem = relacoesDe('raiz', [thread({ id: 'raiz' })], 'env-a');
   assert.equal(sem.complete, false);
   assert.equal(sem.reason, 'lineage_unavailable');
+  // Lineage malformado também não prova "sem filhos".
+  for (const lineage of [null, 'raiz', [], { parentThreadId: 7 }]) {
+    const r = relacoesDe('raiz', [l('raiz'), thread({ id: 'x', lineage })], 'env-a');
+    assert.equal(r.complete, false, JSON.stringify(lineage));
+  }
 });
 
 test('relações pela tool: árvore por candidato, no environment do candidato', async () => {

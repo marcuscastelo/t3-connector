@@ -26,6 +26,9 @@ export class CoberturaMudou extends CursorInvalido {
   }
 }
 
+/** JSON com chaves ordenadas em todos os níveis, para comparar linhas de fontes diferentes. */
+const estavel = (v) => JSON.stringify(v, (_k, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x));
+
 /** Shell lida de novo: no OAuth all, `shell` devolve o inventário da invocação (em cache). */
 export const lerShellFresca = (cliente, opcoes) => (typeof cliente.shellFresca === 'function' ? cliente.shellFresca(opcoes) : cliente.shell(opcoes));
 
@@ -143,7 +146,9 @@ async function consultarAmbientes(ambientes, selecionados, { signal, prazoAmbien
       // a8d1170, P2), como a contagem de projeto faz com projeto divergente.
       const ativasPorId = new Map((Array.isArray(shell.threads) ? shell.threads : []).filter(Boolean).map((t) => [t.id, t]));
       const ids = new Set(visiveis.map((t) => t.id));
-      const evidencia = (t) => JSON.stringify([t.projectId, t.title ?? null, t.branch ?? null, t.worktreePath ?? null, t.linkedPullRequest ?? null, t.pullRequests ?? null, Boolean(t.deletedAt)]);
+      // A linha inteira, menos o que só diz a fonte (archivedAt): lineage, binding, PRs e
+      // qualquer campo futuro entram (revisão 737d9be, P2).
+      const evidencia = (t) => estavel(Object.fromEntries(Object.entries(t).filter(([k]) => k !== 'archivedAt' && k !== '_arquivada')));
       for (const t of arquivadas) {
         const ativa = ativasPorId.get(t.id);
         if (ativa && evidencia(ativa) !== evidencia(t)) populacaoFinal = { population: estadoPopulacao.population, complete: false, reason: 'population_conflict' };
@@ -396,23 +401,33 @@ export function casarSeletor(t, sel, environmentId, projetosAlvo) {
     }
   }
   if (projetosAlvo && !projetosAlvo.has(`${environmentId}\u0000${t.projectId}`)) return 'no';
+  // Evidência estrutural: campo ausente ou malformado (tipo errado, PR sem URL atribuível) é
+  // desconhecido; só um valor bem formado e diferente exclui (revisão 737d9be, P2).
   for (const campo of ['branch', 'worktreePath']) {
     if (sel[campo] === undefined) continue;
-    if (!(campo in t)) desconhecido = true;
-    else if (t[campo] !== sel[campo]) return 'no';
+    const v = t[campo];
+    if (!(campo in t) || (v !== null && typeof v !== 'string')) desconhecido = true;
+    else if (v !== sel[campo]) return 'no';
   }
   if (sel.pullRequest !== undefined) {
-    if (!('linkedPullRequest' in t) && !('pullRequests' in t)) desconhecido = true;
+    const temLink = 'linkedPullRequest' in t;
+    const temLista = 'pullRequests' in t;
+    if ((!temLink && !temLista) || (temLista && t.pullRequests !== null && !Array.isArray(t.pullRequests))) desconhecido = true;
     else {
-      const links = [...(t.linkedPullRequest ? [t.linkedPullRequest] : []), ...(Array.isArray(t.pullRequests) ? t.pullRequests : [])];
+      const links = [...(t.linkedPullRequest != null ? [t.linkedPullRequest] : []), ...(Array.isArray(t.pullRequests) ? t.pullRequests : [])];
       const alvo = { host: sel.pullRequest.host.toLowerCase(), repository: sel.pullRequest.repository.toLowerCase(), number: sel.pullRequest.number };
       let achou = false;
+      let linkDesconhecido = false;
       for (const l of links) {
-        const pr = l?.url ? prDaUrl(l.url) : null;
-        if (!pr) { if (l?.number === alvo.number) desconhecido = true; continue; }
+        const pr = typeof l?.url === 'string' ? prDaUrl(l.url) : null;
+        // Link que não dá para atribuir a host/repositório/número pode ser o PR procurado.
+        if (!pr) { linkDesconhecido = true; continue; }
         if (pr.host === alvo.host && pr.repository === alvo.repository && pr.number === alvo.number) achou = true;
       }
-      if (!achou) { if (!desconhecido) return 'no'; }
+      if (!achou) {
+        if (!linkDesconhecido) return 'no';
+        desconhecido = true;
+      }
     }
   }
   return desconhecido ? 'unknown' : 'match';
@@ -422,7 +437,9 @@ export function casarSeletor(t, sel, environmentId, projetosAlvo) {
 export function relacoesDe(raiz, linhas, environmentId, { direction = 'children', maxDepth, limit = 20 } = {}) {
   const profundidade = Math.min(maxDepth ?? (direction === 'children' ? 1 : 2), direction === 'children' ? 1 : RELACOES_MAX_PROFUNDIDADE);
   const teto = Math.min(limit, RELACOES_MAX_NOS);
-  const semLinhagem = linhas.some((t) => !('lineage' in t));
+  // Lineage ausente ou malformado (não objeto, pai não textual) não prova "sem filhos".
+  const semLinhagem = linhas.some((t) => !('lineage' in t) || t.lineage === null || typeof t.lineage !== 'object' || Array.isArray(t.lineage)
+    || (t.lineage.parentThreadId != null && typeof t.lineage.parentThreadId !== 'string'));
   const filhos = new Map();
   for (const t of linhas) {
     const pai = t.lineage?.parentThreadId;
@@ -505,7 +522,16 @@ export async function buscarFrentes(ambientes, args, {
           if (r === 'unknown') evidenciaCompleta = false;
           return r === 'match';
         });
-      } else linhas = x.visiveis.filter(criterio(q).casa);
+      } else {
+        // `search`/`threadId` no v1 seguem a mesma regra de evidência: sem título textual, uma
+        // busca por título não exclui a linha (revisão 737d9be, P2).
+        const casa = criterio(q).casa;
+        linhas = x.visiveis.filter((t) => {
+          if (casa(t)) return true;
+          if (q.search !== undefined && typeof t.title !== 'string') evidenciaCompleta = false;
+          return false;
+        });
+      }
       return { x, linhas, threads: linhas.map((t) => { const item = resumir(t, x.projetos.get(t.projectId)); return { threadId: item.threadId, title: item.title, environment: x.ambiente, ...item, archived: Boolean(t.archivedAt || t._arquivada) }; }) };
     });
     const itens = porAmbiente.flatMap((a) => a.threads).sort((a, b) => comparar(chaveItem(a), chaveItem(b)));

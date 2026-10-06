@@ -164,6 +164,16 @@ test('aguardar execution_idle: nada decide antes de synchronized (snapshot ocios
   assert.equal(sem.synchronized, false);
 });
 
+test('aguardar execution_idle: sem instante válido da projeção o período quieto não é zerado', async () => {
+  for (const updatedAt of [undefined, '2026-02-30T07:05:00-03:00']) {
+    const ocioso = { kind: 'snapshot', snapshotSequence: 10, projection: { ...projecao({ runs: [run(1, 'completed')], roster: [], updatedAt }), updatedAt } };
+    const inicio = Date.now();
+    const r = await aguardarThread(ambientesFalsos(shellDoIncidente()), { environment: 'local', threadId: 't-comum', timeoutMs: 4000, until: 'execution_idle' }, { assinarImpl: assinaturaFalsa([[5, [ocioso, { kind: 'synchronized' }]]]) });
+    assert.equal(r.returnReason, 'execution_idle', String(updatedAt));
+    assert.ok(Date.now() - inicio >= 1400, `declarou ociosa sem esperar o período quieto (${String(updatedAt)})`);
+  }
+});
+
 test('aguardar execution_idle: runId é recusado (segue a thread inteira)', async () => {
   await assert.rejects(
     aguardarThread(ambientesFalsos(), { environment: 'local', threadId: 't-comum', timeoutMs: 100, until: 'execution_idle', runId: 'run-1' }),

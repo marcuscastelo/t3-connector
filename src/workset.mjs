@@ -29,6 +29,7 @@ import { Cancelada } from './t3.mjs';
 import { correrComSinal, falhaSanitizada } from './busca-threads.mjs';
 import { resumoModelo } from './estado.mjs';
 import { seguraAThread } from './execucao.mjs';
+import { msIso } from './instante.mjs';
 import { assinatura, comparador, CursorInvalido, paginar, VERSAO_CURSOR } from './paginacao.mjs';
 import { CONTROL_PLANE_CONTRACT_VERSION } from './control-plane.mjs';
 
@@ -72,7 +73,7 @@ function grupoDa(item, agora) {
   if (item.backgroundHoldsThread) return 'background_pending';
   if (item.state === 'unknown') return 'unknown';
   if (item.settled) return null;
-  if (item.snoozedUntil && Date.parse(item.snoozedUntil) > agora) return 'snoozed';
+  if (item.snoozedUntil && (msIso(item.snoozedUntil) ?? -Infinity) > agora) return 'snoozed';
   if (item.state === 'failed') return 'failed_unsettled';
   if (item.state === 'completed') return 'completed_unsettled';
   if (item.state === 'cancelled') return 'cancelled_unsettled';

@@ -26,6 +26,8 @@
 //
 // Tudo aqui é puro: não faz I/O, não lê journal, não envia nada.
 
+import { msIso } from './instante.mjs';
+
 export const EXECUTION_CONTRACT_VERSION = 1;
 
 const TERMINAIS = new Set(['completed', 'failed', 'cancelled', 'interrupted', 'rolled_back']);
@@ -37,10 +39,8 @@ const TIPOS_DE_FUNDO = new Set(['command_execution', 'dynamic_tool', 'subagent']
 const DESFECHOS = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
 const ENTREGA_PENDENTE = new Set(['pending', 'claimed']);
 
-const ms = (iso) => {
-  const n = Date.parse(iso ?? '');
-  return Number.isNaN(n) ? null : n;
-};
+// Instante estrito: data impossível ou formato solto é null, nunca uma versão comprovada.
+const ms = (iso) => msIso(iso);
 const depoisDe = (a, b) => ms(a) !== null && ms(b) !== null && ms(a) > ms(b);
 const maiorOrdinal = (runs) => runs.reduce((m, r) => (!m || r.ordinal > m.ordinal ? r : m), null);
 

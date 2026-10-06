@@ -11,6 +11,7 @@
 //
 // There is no transaction across threads and no noop shortcut: every admitted item is dispatched.
 
+import { msIso } from '../instante.mjs';
 import { digest } from './gate.mjs';
 
 // Public action name -> internal action ID (grant and journal keep the internal one).
@@ -26,8 +27,10 @@ export class LoteInvalido extends Error {
 // converted to the same instant in UTC before the hash, the journal and the send.
 const INSTANTE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
 function instanteUtc(valor, key) {
-  const ms = INSTANTE.test(valor) ? Date.parse(valor) : NaN;
-  if (Number.isNaN(ms)) throw new LoteInvalido('snoozed_until_invalid', key);
+  // Calendário estrito: 30/02 é recusado, nunca normalizado para outro dia (Date.parse faria).
+  const comSegundos = typeof valor === 'string' && INSTANTE.test(valor) ? valor.replace(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(Z|[+-])/, '$1:00$2') : null;
+  const ms = comSegundos === null ? null : msIso(comSegundos);
+  if (ms === null) throw new LoteInvalido('snoozed_until_invalid', key);
   return new Date(ms).toISOString();
 }
 

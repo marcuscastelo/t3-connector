@@ -5,6 +5,7 @@
 // resultado (timedOut), não erro; nenhuma mutação, claim ou lease; cancelar ou
 // terminar só encerra a própria subscription.
 
+import { msIso } from './instante.mjs';
 import { Cancelada, ErroT3 } from './t3.mjs';
 import { assinar } from './ws.mjs';
 import { motivoDoPedido, runAtivoDaShell, ultimaResposta } from './estado.mjs';
@@ -299,8 +300,9 @@ async function aguardarExecucao(ambientes, entrada, { signal, agora = Date.now, 
     if (execucao.signals.pendingIntervention) return concluir('needs_intervention');
     if (!execucao.signals.operationallyIdle) return;
     // Ocioso: só conta depois de QUIETO_MS sem mudança da thread.
-    const desde = Date.parse(execucao.source.projectionUpdatedAt ?? '');
-    const falta = Number.isNaN(desde) ? 0 : desde + QUIETO_MS - agora();
+    // Sem instante válido da projeção, o período quieto conta a partir de agora: nunca zero.
+    const desde = msIso(execucao.source.projectionUpdatedAt);
+    const falta = desde === null ? QUIETO_MS : desde + QUIETO_MS - agora();
     if (falta <= 0) return concluir('execution_idle');
     quieto = setTimeout(() => concluir('execution_idle'), falta);
   };

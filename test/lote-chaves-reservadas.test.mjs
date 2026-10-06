@@ -50,3 +50,10 @@ test('batch: chave reservada sem resultado gravado nunca herda do protótipo (qu
   assert.deepEqual(r.items.map((i) => [i.key, i.status]), [['a', 'replayed'], ['constructor', 'not_started'], ['__proto__', 'not_started']]);
   assert.equal(r.inProgress, true);
 });
+
+test('batch: snoozedUntil com data impossível é recusado, nunca normalizado para outro dia', () => {
+  const r = (e) => ({ alias: e, environmentId: `env-${e}`, destination: `t3://env-${e}` });
+  const item = (snoozedUntil) => ({ batchId: 'b', action: 'snooze', items: [{ key: 'k', environment: 'local', threadId: 't', expectedProjectId: 'p', operationId: 'o', snoozedUntil }] });
+  for (const v of ['2026-02-30T10:00:00Z', '2025-02-29T10:00Z', '2026-10-03T25:00:00Z']) assert.throws(() => admitirLote(item(v), r), /snoozed_until_invalid/, v);
+  assert.equal(admitirLote(item('2026-10-03T07:05-03:00'), r).itens[0].snoozedUntil, '2026-10-03T10:05:00.000Z');
+});

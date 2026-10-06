@@ -9,7 +9,13 @@
   worktree or an edited message refuses the guard); batch results survive item keys such as
   `__proto__` or `constructor`; route/preflight check option values by descriptor type
   (`select`, `boolean`; any other type is `capability_unknown`); the front lookup treats a
-  malformed active row as incomplete coverage (`active_source_invalid`).
+  malformed active row as incomplete coverage (`active_source_invalid`). Thread versions are
+  proven only by two strict, valid and equal ISO instants (an impossible date never proves
+  one); selector evidence that is missing or malformed (title, branch, worktree, pull request,
+  lineage) keeps a lookup inconclusive, for `selector` and for v1 `search`; the same thread in
+  the active and the archived snapshot with any differing field is `population_conflict`.
+  `execution_idle` without a valid projection instant waits the full quiet period, and batch
+  `snoozedUntil` refuses impossible calendar dates.
 - Control-plane v1, live validation fixes: an absent or empty `supportedRuntimeModes` now counts
   as every mode supported, which is T3's own runtime rule (codex and claudeAgent instances do
   not declare the list); a declared list without the mode is still refused. On the write side
