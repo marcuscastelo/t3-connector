@@ -63,6 +63,8 @@ test('settle: trabalho de fundo só na projeção completa bloqueia; comando em 
   assert.equal(avaliarGuard(guard(monitor), monitor), 'settle_unresolved_work');
   const devServer = observar({}, roster([{ taskId: 'cmd-1', kind: 'command', description: 'npm run dev' }]));
   assert.deepEqual(devServer.blockers, []);
+  // O roster da shell segue a mesma regra: comando não bloqueia, monitor bloqueia.
+  assert.deepEqual(observar({ pendingBackgroundTasks: [{ kind: 'command', taskId: 'cmd-9' }] }).blockers, []);
   assert.equal(devServer.eligibleMechanically, true);
   assert.equal(devServer.warnings.some((w) => w.code === 'background_work_unknown'), false);
   // O roster entra no observationId: a mesma thread com o monitor encerrado é outra observação.

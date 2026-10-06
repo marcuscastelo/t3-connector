@@ -147,12 +147,8 @@ export class Dispatcher {
   const initial={hash,state:'preparing',action,operationId,environmentId:this.environmentId,destination:this.destination};
   const owned=this.#store('reserve',key,initial);
   const old=owned?null:this.#store('get',key);
-  // A replay reports the recorded outcome and never sends again. A settle guard refusal is a known
-  // result (refused by the connector before the send): nothing to reconcile; so is a background
-  // preflight refusal (recorded with its refusal). Other rejections keep
-  // the conservative contract (e.g. a journal failure right before the send).
-  const guardRefusal=old?.state==='rejected'&&/^settle_[a-z_]+$/.test(old.error??'');
-  if(old) {if(old.hash!==hash) throw new Error('operation_conflict');if(old.target)(this.authorizeRecorded??((target)=>this.gate.check(identity,leaseId,target)))(old.target);if(old.refusal)return {state:old.state,operationId,sent:false,reconciliationRequired:false,refusal:old.refusal};return {state:old.state,operationId,reconciliationRequired:!guardRefusal&&!['completed','failed'].includes(old.state),...(guardRefusal?{sent:false}:{}),...((isProjectAction(action)||parsed.spec.native)&&old.receipt?{receipt:old.receipt,...(old.postCheck??{})}:{}),...(guard&&old.receipt?{receipt:old.receipt,settlement:old.settlement??Dispatcher.#verificationPending()}:{}),...(old.error?{error:old.error}:{})};}
+  // A replay reports the recorded outcome and never sends again (see #replay).
+  if(old) {if(old.hash!==hash) throw new Error('operation_conflict');if(old.target)(this.authorizeRecorded??((target)=>this.gate.check(identity,leaseId,target)))(old.target);return this.#replay(key,old,{operationId,action,spec:parsed.spec,input:parsed.input,guard});}
   if(!owned)throw new Error('journal_failed');
   let release=null;
   try {
@@ -188,7 +184,9 @@ export class Dispatcher {
    const payloadIds={commandId:payload.commandId,threadId:payload.threadId,messageId:payload.messageId};
    this.#store('put',key,{...initial,state:'uncertain',target,payloadIds});
    const result=await this.gate.dispatch(identity,leaseId,{environmentId:this.environmentId,destination:this.destination,projectIds:[...projects],action},()=>this.adapter.invoke(method,payload,parsed.spec.native?{nativeErrors:true}:undefined),operationId);
-   const done={...initial,state:'completed',target,payloadIds,receipt:parsed.spec.native?await this.#nativeResult(parsed.spec,{raw:result,method,payload,input:parsed.input}):this.adapter.receipt(result)};
+   // A project delete is recorded with its post-check pending: a restart before the post-check
+   // leaves that visible, and the replay takes it then.
+   const done={...initial,state:'completed',target,payloadIds,receipt:parsed.spec.native?await this.#nativeResult(parsed.spec,{raw:result,method,payload,input:parsed.input}):this.adapter.receipt(result),...(isProjectAction(action)?{postCheck:{postCheck:'pending'}}:{})};
    this.#store('put',key,done);
    if(guard) {
     // Like the delete post-check: evidence kept with the record, so a replay returns it too.
@@ -210,11 +208,15 @@ export class Dispatcher {
     throw error;
    }
    if(record.state!=='preparing') this.gate.close();
+   // A completed record keeps its receipt (only its post-check write can fail after it).
+   if(record.state==='completed') throw new Error('reconciliation_required');
    // No blind retry even if transport or audit failed. Reconciliation is read-only.
-   // A settle guard refusal keeps its code, so a replay of the operationId reports it too.
-   this.#store('put',key,{...record,state:record.state==='preparing'?'rejected':'uncertain',...(record.state==='preparing'&&/^settle_[a-z_]+$/.test(error.message)?{error:error.message}:{})});
+   // A refusal before the send keeps its known reason, so a replay explains it too: a project
+   // action records it as `refusal`, a settle guard refusal as `error` (its settle_* code).
+   const refusal=record.state==='preparing'&&RECUSAS.test(error.message)?error.message:null;
+   this.#store('put',key,{...record,state:record.state==='preparing'?'rejected':'uncertain',...(refusal&&isProjectAction(action)?{refusal}:{}),...(refusal&&/^settle_[a-z_]+$/.test(refusal)?{error:refusal}:{})});
    // Recusa antes do envio devolve o motivo conhecido (nada foi enviado); o resto é genérico.
-   if(record.state==='preparing') throw new Error(RECUSAS.test(error.message)?error.message:'dispatch_rejected');
+   if(record.state==='preparing') throw new Error(refusal??'dispatch_rejected');
    throw new Error('reconciliation_required');
   } finally {release?.();}
  }
@@ -227,6 +229,28 @@ export class Dispatcher {
   if(execution?.signals?.backgroundWorkHoldsThread!==true)return null;
   const tasks=execution.background.pending.filter(t=>t.holdsThread).map(t=>`${t.kind} ${t.taskId}`).join(', ');
   return {code:'background_work_active',message:`provider background work still holds the thread (${tasks}); nothing was sent. Wait with t3_aguardar_thread until=execution_idle, then send with a new clientRequestId, or pass onBackgroundWork=send.`,execution};
+ }
+ // A replay never sends again. Known refusals are final (nothing to reconcile): a background
+ // preflight refusal of thread.send (recorded with {code,message}), a settle guard refusal
+ // (settle_* code). A project action reports `sent:false` and its refusal; other rejections keep
+ // the conservative contract (e.g. a journal failure right before the send).
+ async #replay(key,old,{operationId,action,spec,input,guard}) {
+  let record=old;
+  const project=isProjectAction(action);
+  // Completed, but the process stopped before the post-check was stored: take it now, marked as
+  // taken on replay (it observes the project later than the delete).
+  if(project&&record.state==='completed'&&record.postCheck?.postCheck==='pending') {
+   record={...record,postCheck:{...await this.#afterDelete(input.projectId,operationId),postCheckOnReplay:true}};
+   this.#store('put',key,record);
+  }
+  if(action==='thread.send'&&record.refusal) return {state:record.state,operationId,sent:false,reconciliationRequired:false,refusal:record.refusal};
+  const guardRefusal=record.state==='rejected'&&/^settle_[a-z_]+$/.test(record.error??'');
+  return {state:record.state,operationId,reconciliationRequired:!guardRefusal&&!['completed','failed'].includes(record.state),
+   ...(guardRefusal?{sent:false}:{}),
+   ...((project||spec.native)&&record.receipt?{receipt:record.receipt,...(record.postCheck??{})}:{}),
+   ...(guard&&record.receipt?{receipt:record.receipt,settlement:record.settlement??Dispatcher.#verificationPending()}:{}),
+   ...(record.error?{error:record.error}:{}),
+   ...(project&&record.state==='rejected'?{sent:false,...(record.refusal?{refusal:record.refusal}:{})}:{})};
  }
  // The native result is a projection of what T3 answered (plus a read for createNew). It cannot
  // fail the completed operation: on a projection failure the raw answer is kept.
@@ -271,6 +295,8 @@ export class Dispatcher {
    try {this.gate.audit({event:'project_delete_live_threads',operationId,projectId,liveThreads:count.total});} catch {}
    return {postCheck:'live_threads_remain',liveThreadsAfterDelete:count.total};
   }
+  // T3 answered with deletedAt, yet the shell still lists the project: evidence, not a clean result.
+  if(count.projectLive) return {postCheck:'project_still_listed',liveThreadsAfterDelete:0};
   return {postCheck:'clean',liveThreadsAfterDelete:0};
  }
  async reconcile(identity,leaseId,operationId) {

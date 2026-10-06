@@ -63,6 +63,20 @@
   `batchId` makes repeating the same call return the recorded results without resending. Existing
   tools are unchanged. `t3_buscar_threads` now shares its per-environment read with the batch
   search, with the same output.
+- Project deletion (opt-in, `T3_CONNECTOR_OAUTH_PROJECT_ADMIN=1`): the connector-side risk is
+  reduced; the T3 backend window stays documented as residual risk.
+  - The count validates more of each row (`activeRunId`, `activityRunStatus`, object-only
+    `pendingRuntimeRequest`), requires a well-formed project list in the same read, and refuses a
+    thread attributed to two projects. It reports `projectLive` and `threadsDigest`.
+  - `busy` also counts an active run ID, an activity status and any unknown status.
+  - `project.delete-force` requires `expectedThreadsDigest` from the count: the same total with other
+    threads is refused (`project_threads_changed`). Both deletes refuse a project the final read no
+    longer lists (`project_gone`).
+  - Journal: the completed record carries `postCheck: "pending"` until the post-check is stored; a
+    replay after a restart takes it (`postCheckOnReplay`). A refusal before the send is replayed with
+    `sent: false` and its `refusal` code. A completed record is never downgraded.
+  - With the flag off, project actions and the count are refused even for a consent that lists them.
+    Consent text names empty-only deletion when force is not offered.
 
 ## 0.11.2
 

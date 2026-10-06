@@ -7,7 +7,7 @@ import { identidadeSessaoOAuth, exigirIdentidade } from '../escrita/identidade.m
 import { resolverAmbiente } from '../escrita/config.mjs';
 import { consentAll, consented } from './project-policy.mjs';
 import { redact } from './http.mjs';
-import { PROJECT_ACTIONS } from '../escrita/project-admin.mjs';
+import { PROJECT_ACTIONS, isProjectAction } from '../escrita/project-admin.mjs';
 import { NATIVE_WRITES, NATIVE_WRITE_ACTIONS, NATIVE_READS, ENV_SCOPED } from '../escrita/native.mjs';
 import { admitirLote, executarLote, itemDoJournal, INBOX_ACTIONS, LoteInvalido, MAX_ITENS, PRAZO_LOTE_MS } from '../escrita/lote-inbox.mjs';
 import { ForaDoEscopo } from '../ambientes.mjs';
@@ -76,13 +76,15 @@ const MESSAGES = {
   project_count_incomplete: 'could not obtain a complete thread count for the project (active and archived); nothing was sent',
   project_count_unavailable: 'this environment cannot count project threads; nothing was sent',
   project_count_changed: 'the live thread count differs from expectedThreadCount; nothing was sent. Count again and confirm',
+  project_threads_changed: 'the set of live threads differs from expectedThreadsDigest (same total, other threads); nothing was sent. Count again and confirm',
+  project_gone: 'the project is no longer live in T3 (deleted or missing in the same read as the count); nothing was sent',
   project_confirmation_mismatch: 'confirmProjectId must repeat the exact projectId; nothing was sent',
   project_has_active_work: 'a thread of the project has an active run or a pending request; nothing was sent. Interrupt or finish it first',
   ...MENSAGENS_GUARD,
 };
 const PROJECT_DESCRIPTIONS = {
   'project.delete': 'Deletes an EMPTY project (no active or archived threads) from T3. Refused if any thread exists; never escalates to force. The workspace directory on disk is kept.',
-  'project.delete-force': 'Deletes a project AND all its threads (active and archived), cancelling their pending work. Only on an explicit request to delete the project with its threads: requires force=true, confirmProjectId equal to projectId and expectedThreadCount from t3_contar_threads_projeto; refused if the count changed or a thread has an active run. The workspace directory on disk is kept.',
+  'project.delete-force': 'Deletes a project AND all its threads (active and archived), cancelling their pending work. Only on an explicit request to delete the project with its threads: requires force=true, confirmProjectId equal to projectId, and expectedThreadCount and expectedThreadsDigest from one t3_contar_threads_projeto call; refused if the count or the set of threads changed, or a thread has an active run or a pending request. The workspace directory on disk is kept.',
 };
 // Batch-only texts: the singular tools keep their messages unchanged.
 const BATCH_MESSAGES = {
@@ -169,6 +171,8 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     if (!env.actions.includes(action)) fail('scope_denied');
   }
   async function dispatch(principal, { environment, action, operationId, input }) {
+    // Project actions exist only while the flag is on, whatever an older consent recorded.
+    if (isProjectAction(action) && !projectAdmin) fail('scope_denied');
     const c = resolve(environment);
     if (!all) {
       await precheck(principal, c, action, input);
@@ -263,6 +267,7 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
   // Read-only full count of one project's threads, for the consented session.
   async function countThreads(principal, { environment, projectId }) {
     const c = resolve(environment);
+    if (!projectAdmin) fail('scope_denied');
     const s = consented(authority, principal, c.registro);
     // The count belongs to project administration: only sessions consented with it.
     if (!s.grants.environments.find(e => e.alias === c.registro.alias)?.actions.some(a => PROJECT_ACTIONS.includes(a))) fail('scope_denied');
@@ -271,6 +276,7 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     if (!c.adapter.occupancy) fail('project_count_unavailable');
     let count;
     try { count = await c.adapter.occupancy(projectId); } catch { fail('project_count_incomplete'); }
+    if (count?.complete && !count.projectLive) fail('scope_denied');
     consented(authority, principal, c.registro);
     return { environment: { alias: c.registro.alias, environmentId: c.registro.environmentId }, ...count };
   }
@@ -420,7 +426,7 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
       annotations: { readOnlyHint: true, destructiveHint: false },
     }, ({ environment: env, operationId }) => result(() => reconcile(principal, { environment: env, operationId })));
     if (granted.length) server.registerTool('t3_contar_threads_projeto', {
-      description: 'Counts every live thread of one project: active, archived, without a run, and busy (active run or pending request). complete=false (total null) when the active and archived reads did not agree; never reported as zero.',
+      description: 'Counts every live thread of one project: active, archived, without a run, and busy (active run or pending request). threadsDigest identifies the exact set of threads counted; a force delete must pass it with the total. complete=false (total null) when the reads did not agree or a row was malformed; never reported as zero.',
       inputSchema: z.strictObject({ environment, projectId: z.string().min(1) }),
       annotations: { readOnlyHint: true, destructiveHint: false },
     }, ({ environment: env, projectId }) => result(() => countThreads(principal, { environment: env, projectId })));

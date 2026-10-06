@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 
 // Project administration over the native T3 project service (commit 8ed276c2):
 // - WS `projects.mutate` with ProjectMutation `project.delete` {commandId, projectId, force?}
@@ -17,7 +18,9 @@ import { z } from 'zod';
 // lock, and thread.create (orchestration-v2/Orchestrator.ts:2028) neither checks the project nor
 // takes that lock. A thread created by another client between that read and the project commit
 // stays live, linked to a deleted project. The connector serializes its own project-scoped writes
-// and checks for live threads after the delete, but it cannot exclude other clients.
+// and checks for live threads after the delete, but it cannot exclude other clients. Likewise a
+// thread created by another client after the connector's last read and before T3's own read is
+// deleted by a force cascade although no count included it. See docs/oauth-session.md.
 
 export const PROJECT_ACTIONS = Object.freeze(['project.delete', 'project.delete-force']);
 export const isProjectAction = action => PROJECT_ACTIONS.includes(action);
@@ -30,43 +33,64 @@ export const PROJECT_SCHEMAS = Object.freeze({
     force: z.literal(true, { error: 'force must be the literal true' }),
     confirmProjectId: id.describe('Repeat the exact projectId to confirm which project is deleted with its threads.'),
     expectedThreadCount: z.number().int().min(1).describe('Total from t3_contar_threads_projeto right before this call; the delete is refused if the live count differs.'),
+    expectedThreadsDigest: z.string().regex(/^[0-9a-f]{64}$/, 'expectedThreadsDigest must be the threadsDigest from t3_contar_threads_projeto').describe('threadsDigest from the same t3_contar_threads_projeto call; the delete is refused if the set of threads changed, even with the same total.'),
   }).strict(),
 });
 
-// Statuses of a run that is still doing or waiting for work (OrchestrationV2RunStatus).
-const BUSY = new Set(['preparing', 'queued', 'starting', 'running', 'waiting']);
+// Shell thread statuses (OrchestrationV2ShellThreadStatus) with no work in progress. Every other
+// status (preparing, queued, starting, running, waiting, or one this connector does not know) is
+// busy, as is an active run or a pending request: an unknown state never lets force cancel work.
+const IDLE = new Set(['idle', 'completed', 'interrupted', 'failed', 'cancelled', 'rolled_back']);
+const busy = t => !IDLE.has(t.status) || Boolean(t.activeRunId) || Boolean(t.activityRunStatus) || Boolean(t.pendingRuntimeRequest);
 
 // Every row must carry what the count reads; one malformed row makes the whole count incomplete
 // (a row that cannot be attributed could belong to the project).
 const nullableString = v => v === null || v === undefined || typeof v === 'string';
-const validRow = t => t && typeof t === 'object' && typeof t.id === 'string' && t.id !== '' && typeof t.projectId === 'string' && t.projectId !== ''
-  && typeof t.status === 'string' && nullableString(t.latestRunId) && nullableString(t.archivedAt) && nullableString(t.deletedAt)
-  && (t.pendingRuntimeRequest === null || t.pendingRuntimeRequest === undefined || typeof t.pendingRuntimeRequest === 'object');
+const isObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+const validRow = t => isObject(t) && typeof t.id === 'string' && t.id !== '' && typeof t.projectId === 'string' && t.projectId !== ''
+  && typeof t.status === 'string' && t.status !== '' && nullableString(t.latestRunId) && nullableString(t.activeRunId) && nullableString(t.activityRunStatus)
+  && nullableString(t.archivedAt) && nullableString(t.deletedAt)
+  && (t.pendingRuntimeRequest === null || t.pendingRuntimeRequest === undefined || isObject(t.pendingRuntimeRequest));
+const validProject = p => isObject(p) && typeof p.id === 'string' && p.id !== '' && nullableString(p.deletedAt);
 
-/** Pure count over an active shell snapshot and an archived shell snapshot. */
+/** Digest of the exact set of live thread IDs: binds a force delete to the threads that were counted. */
+export const threadsDigest = ids => createHash('sha256').update(JSON.stringify([...ids].sort())).digest('hex');
+
+/**
+ * Pure count over an active shell snapshot (with its projects) and an archived shell snapshot.
+ * Fails closed: any malformed or inconsistent part makes it incomplete, never a zero.
+ */
 export function contarOcupacao(active, archived, projectId) {
   const sequence = active?.snapshotSequence;
   const incomplete = { projectId, complete: false, total: null };
-  if (!Number.isInteger(sequence) || sequence !== archived?.snapshotSequence || !Array.isArray(active?.threads) || !Array.isArray(archived?.threads)) return incomplete;
+  if (!Number.isInteger(sequence) || sequence < 0 || sequence !== archived?.snapshotSequence || !Array.isArray(active?.threads) || !Array.isArray(archived?.threads)) return incomplete;
   if (active.archivedThreads !== undefined && !Array.isArray(active.archivedThreads)) return incomplete;
+  // The project itself is read from the same snapshot as its threads: the guard never deletes a
+  // project the count did not see live.
+  if (!Array.isArray(active.projects) || !active.projects.every(validProject)) return incomplete;
   if (![...active.threads, ...(active.archivedThreads ?? []), ...archived.threads].every(validRow)) return incomplete;
   const seen = new Map();
   for (const [where, list] of [['active', active.threads], ['active', active.archivedThreads ?? []], ['archived', archived.threads]]) {
     for (const t of list) {
-      if (t?.projectId !== projectId || t.deletedAt) continue;
+      const prior = seen.get(t.id);
+      // The same thread in two projects across the two reads cannot be attributed.
+      if (prior && prior.t.projectId !== t.projectId) return incomplete;
       const kind = t.archivedAt ? 'archived' : where;
-      if (!seen.has(t.id)) seen.set(t.id, { kind, t });
-      else if (kind === 'archived') seen.get(t.id).kind = 'archived';
+      // Live if any read shows it live; busy if any read shows it busy.
+      if (!prior) seen.set(t.id, { kind, t, busy: busy(t), deleted: Boolean(t.deletedAt) });
+      else { if (kind === 'archived') prior.kind = 'archived'; prior.busy ||= busy(t); prior.deleted &&= Boolean(t.deletedAt); }
     }
   }
-  const rows = [...seen.values()];
+  const rows = [...seen.values()].filter(r => r.t.projectId === projectId && !r.deleted);
   return {
     projectId, complete: true, sequence,
+    projectLive: active.projects.some(p => p.id === projectId && !p.deletedAt),
     total: rows.length,
     active: rows.filter(r => r.kind === 'active').length,
     archived: rows.filter(r => r.kind === 'archived').length,
     withoutRun: rows.filter(r => !r.t.latestRunId).length,
-    busy: rows.filter(r => BUSY.has(r.t.status) || r.t.pendingRuntimeRequest).length,
+    busy: rows.filter(r => r.busy).length,
+    threadsDigest: threadsDigest(rows.map(r => r.t.id)),
   };
 }
 
@@ -83,12 +107,14 @@ export async function lerOcupacao({ readActive, readArchived, projectId, attempt
 /** Refusals before sending, from a fresh count. Never escalates a refusal into force. */
 export function guardProjectDelete(action, input, count) {
   if (!count?.complete) throw new Error('project_count_incomplete');
+  if (count.projectLive !== true) throw new Error('project_gone');
   if (action === 'project.delete') {
     if (count.total !== 0) throw new Error('project_not_empty');
     return;
   }
   if (input.confirmProjectId !== input.projectId) throw new Error('project_confirmation_mismatch');
   if (count.total !== input.expectedThreadCount) throw new Error('project_count_changed');
+  if (count.threadsDigest !== input.expectedThreadsDigest) throw new Error('project_threads_changed');
   if (count.busy > 0) throw new Error('project_has_active_work');
 }
 
