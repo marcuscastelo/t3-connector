@@ -22,8 +22,11 @@
   send instead of letting T3 queue it. Steps reuse `thread.model-selection.set` and `thread.send`
   `start_immediately` through the existing dispatch (journal, scope, stable commandId, fail-closed
   uncertainty) under `<clientRequestId>:model-selection` and `<clientRequestId>:send`. A manifest in
-  the same journal records every observation and step: retries replay it (only
-  `precondition_pending` is re-evaluated), concurrent duplicates share one execution, and the
+  the same journal records every observation and step. Each step's state is read from the write
+  journal of its operationId (a step another call still holds, or one without acknowledgement, is
+  `uncertain`, never "not sent"); retries never send twice, re-evaluate `precondition_pending` and
+  `uncertain`, and replay a final answer only while the journal agrees with it. Concurrent
+  duplicates share one execution, and the
   result states `precondition_pending | precondition_failed | failed | uncertain | completed`, with
   `delivery.deliveredAs` from the run T3 created. No new consented action; existing tools unchanged.
 

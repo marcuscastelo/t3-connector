@@ -505,13 +505,17 @@ optional `waitMs` (0–10000) to wait for R to end inside the call.
   (`thread.model-selection.set`) and `<clientRequestId>:send` (`thread.send`
   `start_immediately`); each can be reconciled with `t3_reconciliar_escrita`. The lease (or
   OAuth consent) must include those actions; no new action is consented.
-- Retrying the same request replays the recorded result and never sends twice; only
-  `precondition_pending` (nothing sent) is evaluated again. Concurrent duplicates share one
-  execution.
+- Retrying the same request never sends twice. A step's state is always read from the write
+  journal of its operationId, never assumed: `precondition_pending` and `uncertain` are evaluated
+  again on retry, and a final answer is replayed only while the journal still agrees with its
+  steps. Concurrent duplicates in one process share one execution.
 - `state`: `precondition_pending` (R still active), `precondition_failed` (`reason`
   `other_run_active`, `run_superseded`, `run_unknown`; terminal, nothing sent), `failed`
-  (`failedStep` refused before sending; earlier steps stay applied and are listed),
-  `uncertain` (reconcile `failedStep`; do not retry) or `completed`. The result keeps every
+  (`failedStep` refused before sending, proven by the journal; earlier steps stay applied and
+  are listed), `uncertain` (`failedOperationId` may have been or may still be sent:
+  `step_in_progress` while another call holds it, `reconciliation_required` without an
+  acknowledgement, `step_changed_after_result`; never resend under another id, reconcile or
+  retry the same `clientRequestId`) or `completed`. The result keeps every
   observation and step; `delivery` reports the run T3 created for the message
   (`deliveredAs: started | queued_behind_active`, `runModelMatches`): T3 can still queue it
   if a run started after the last check, and that is reported, not hidden.
