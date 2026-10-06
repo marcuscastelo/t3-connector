@@ -23,7 +23,7 @@
 //                         queued it (a run that appeared after the last check), with the run's model.
 import { z } from 'zod';
 import { digest } from './gate.mjs';
-import { chaveOperacao } from './adapters.mjs';
+import { chaveOperacao, parseAction } from './adapters.mjs';
 import { runAtivoDaShell } from '../estado.mjs';
 
 export const CONDITIONAL_SEND = 'thread.conditional-send';
@@ -112,6 +112,20 @@ async function run(host, key, input, { sleep, now }) {
   }
   record.attempts++;
   const save = () => store('put', key, record);
+  // The Dispatcher commits a step before the manifest records it. Adopt every step its journal
+  // already holds before any precondition is evaluated, so a resumed request never answers
+  // "nothing sent" for a step T3 received, and never decides a new send from a shell that shows
+  // the request's own run.
+  const inputs = stepInputs(input, ids);
+  const recovered = inputs.flatMap(({ action, operationId, stepInput }) => {
+    if (record.steps.some(x => x.operationId === operationId)) return [];
+    const durable = store('get', chaveOperacao({ ...host.environment, caller: host.caller, operationId }));
+    if (!durable) return [];
+    // Same rule as the Dispatcher: an operationId used for another input is a conflict.
+    if (durable.hash !== digest([action, parseAction(action, stepInput).input])) throw new Error('operation_conflict');
+    return [stepFromDispatcher(durable, operationId, at())];
+  });
+  if (recovered.length) { record.steps = [...record.steps, ...recovered]; save(); }
   const finish = (state, extra = {}) => {
     Object.assign(record, { state, finishedAt: at(), ...extra });
     save();
@@ -127,7 +141,8 @@ async function run(host, key, input, { sleep, now }) {
     return { thread, evaluation };
   };
   const step = async (action, operationId, stepInput) => {
-    const done = record.steps.find(s => s.operationId === operationId && s.state === 'completed');
+    // A recorded step (completed, refused or uncertain) is the outcome; it is never dispatched again.
+    const done = record.steps.find(s => s.operationId === operationId);
     if (done) return done;
     const entry = { action, operationId, startedAt: at() };
     try {
@@ -167,7 +182,7 @@ async function run(host, key, input, { sleep, now }) {
 
   // 2. Model selection through the existing write action.
   if (input.modelSelection) {
-    const s = await step('thread.model-selection.set', ids.model, { threadId: input.threadId, modelSelection: input.modelSelection });
+    const s = await step('thread.model-selection.set', ids.model, inputs[0].stepInput);
     if (s.state === 'uncertain') return finish('uncertain', { failedStep: s.action, reason: 'reconciliation_required' });
     if (s.state !== 'completed') return finish('failed', { failedStep: s.action, reason: s.error ?? 'step_rejected', ...(s.detail ? { detail: s.detail } : {}) });
   }
@@ -187,10 +202,27 @@ async function run(host, key, input, { sleep, now }) {
   }
 
   // 4. The send, as start_immediately: never queue_after_active, steer or restart.
-  const s = await step('thread.send', ids.send, { threadId: input.threadId, clientRequestId: ids.send, text: input.text, delivery: 'start_immediately' });
+  const s = await step('thread.send', ids.send, inputs.at(-1).stepInput);
   if (s.state === 'uncertain') return finish('uncertain', { failedStep: s.action, reason: 'reconciliation_required' });
   if (s.state !== 'completed') return finish('failed', { failedStep: s.action, reason: s.error ?? 'step_rejected', ...(s.detail ? { detail: s.detail } : {}), sent: false });
   return finish('completed', { delivery: await postCheck(host, input, ids.send) });
+}
+
+// The existing writes this request is made of, in order.
+const stepInputs = (input, ids) => [
+  ...(input.modelSelection ? [{ action: 'thread.model-selection.set', operationId: ids.model, stepInput: { threadId: input.threadId, modelSelection: input.modelSelection } }] : []),
+  { action: 'thread.send', operationId: ids.send, stepInput: { threadId: input.threadId, clientRequestId: ids.send, text: input.text, delivery: 'start_immediately' } },
+];
+
+// A step as the Dispatcher's journal holds it. `preparing` was never sent (the Dispatcher marks a
+// step uncertain before the outbound call) but its operationId can no longer be dispatched.
+function stepFromDispatcher(durable, operationId, at) {
+  const action = durable.action;
+  const base = { action, operationId, recovered: true, finishedAt: at };
+  if (durable.state === 'completed') return { ...base, state: 'completed', ...(durable.receipt ? { receipt: durable.receipt } : {}) };
+  if (durable.state === 'rejected' || durable.state === 'failed') return { ...base, state: 'rejected', error: 'dispatch_rejected' };
+  if (durable.state === 'preparing') return { ...base, state: 'rejected', error: 'interrupted_before_send' };
+  return { ...base, state: 'uncertain' };
 }
 
 // What T3 did with the message: the run whose userMessageId is the send's stable messageId.

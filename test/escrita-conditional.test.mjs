@@ -49,17 +49,18 @@ function fakeT3({status='completed',active=null,model=OPUS}={}) {
  return t3;
 }
 
-async function leaseHarness(t3,{acoes=['thread.send','thread.model-selection.set','run.interrupt'],projetos}={}) {
- const s=setup(),audit=[],journal={...memoryJournal(),audit:e=>audit.push(e)};
+async function leaseHarness(t3,{acoes=['thread.send','thread.model-selection.set','run.interrupt'],projetos,journal:base=memoryJournal()}={}) {
+ const s=setup(),audit=[],journal={...base,audit:e=>audit.push(e)};
+ const inventory={projetos};
  const conexao={registro:{alias:'local',environmentId:'env-p',destination:'t3://env-p',acoes},
-  inventario:async()=>projetos??[{id:'app',name:'app',directory:'/w/app'},{id:'other',name:'other',directory:'/w/other'}],
+  inventario:async()=>inventory.projetos??[{id:'app',name:'app',directory:'/w/app'},{id:'other',name:'other',directory:'/w/other'}],
   cliente:t3.cliente,adapter:t3.adapter,fechar(){}};
  const c=controller({conexoes:[conexao],passkeys:s.passkeys,journal,organization:'my-org',tunnelId:'tunnel_fixture'});
  let counter=0;
  const aprovar=async()=>{const r=await c.relay(c.capability,{op:'request'});const ch=c.gate.challenge(r.requestId,ORIGIN);return c.gate.approve(r.requestId,{response:s.auth.assertion(ch,{counter:++counter}),origin:ORIGIN});};
  const lease=await aprovar();
  const call=(input,{leaseId=lease.leaseId,operationId=input.clientRequestId}={})=>c.relay(c.capability,{op:'conditional-send',ambiente:'local',leaseId,operationId,input});
- return {c,s,journal,audit,lease,aprovar,call};
+ return {c,s,journal,audit,lease,aprovar,call,inventory};
 }
 const req=(over={})=>({threadId:'thread',clientRequestId:'cs-1',afterRunId:'r1',modelSelection:FAST,text:'review the diff',...over});
 
@@ -183,6 +184,49 @@ test('uncertain send: fails closed, never resent; retry under a new lease replay
  const replay=await h.call(req(),{leaseId:lease.leaseId});
  assert.equal(replay.state,'uncertain');assert.equal(replay.replayed,true);
  assert.deepEqual(t3.calls,['thread.model-selection.set','message.dispatch']);
+});
+
+// Serializes like FileJournal: a failed put leaves the stored record as it was.
+function durableJournal() {
+ const m=new Map();
+ return {get:k=>m.has(k)?JSON.parse(m.get(k)):undefined,reserve:(k,v)=>{if(m.has(k))return false;m.set(k,JSON.stringify(v));return true;},put:(k,v)=>{if(!m.has(k))throw new Error('operation_not_reserved');m.set(k,JSON.stringify(v));}};
+}
+// The Dispatcher commits a step before the manifest records it. An interruption in between must
+// not make the resumed request deny a send that T3 already received.
+for(const modelSelection of [FAST,undefined])test(`interrupted after a step committed but before the manifest saved it (${modelSelection?'with':'without'} model): resume reports the durable step, never 'nothing sent'`,async()=>{
+ const t3=fakeT3(),mem=durableJournal();let interrupt=true;
+ const journal={...mem,put(k,v){if(interrupt&&v.kind==='thread.conditional-send'&&v.steps.some(x=>x.action==='thread.send'&&x.state==='completed')){interrupt=false;throw new Error('interrupted');}return mem.put(k,v);}};
+ const h=await leaseHarness(t3,{journal});
+ await assert.rejects(h.call(req({modelSelection})),/journal_failed/);
+ assert.equal(t3.calls.filter(c=>c==='message.dispatch').length,1);
+ const lease=await h.aprovar();// the journal failure closed the lease
+ const resumed=await h.call(req({modelSelection}),{leaseId:lease.leaseId});
+ assert.equal(resumed.state,'completed');
+ assert.equal(resumed.steps.find(x=>x.action==='thread.send').state,'completed');
+ assert.ok(!('sent' in resumed)||resumed.sent!==false);
+ assert.equal(t3.calls.filter(c=>c==='message.dispatch').length,1,'never sent twice');
+ const rec=await h.c.relay(h.c.capability,{op:'reconcile',ambiente:'local',leaseId:lease.leaseId,operationId:'cs-1:send'});
+ assert.equal(rec.state,'completed');
+});
+
+test('a separate write that reused a step operationId is a conflict, never adopted as the step',async()=>{
+ const t3=fakeT3(),h=await leaseHarness(t3);
+ await h.c.relay(h.c.capability,{op:'dispatch',ambiente:'local',leaseId:h.lease.leaseId,action:'thread.send',operationId:'cs-1:send',input:{threadId:'thread',clientRequestId:'cs-1:send',text:'something else',delivery:'start_immediately'}});
+ await assert.rejects(h.call(req({modelSelection:undefined})),/operation_conflict/);
+ assert.equal(t3.calls.length,1);
+});
+
+test('interrupted after the model step committed: resume adopts it and does not apply it twice',async()=>{
+ const t3=fakeT3(),mem=durableJournal();let interrupt=true;
+ const journal={...mem,put(k,v){if(interrupt&&v.kind==='thread.conditional-send'&&v.steps.some(x=>x.action==='thread.model-selection.set')){interrupt=false;throw new Error('interrupted');}return mem.put(k,v);}};
+ const h=await leaseHarness(t3,{journal});
+ await assert.rejects(h.call(req()),/journal_failed/);
+ assert.deepEqual(t3.calls,['thread.model-selection.set']);
+ const lease=await h.aprovar();
+ const resumed=await h.call(req(),{leaseId:lease.leaseId});
+ assert.equal(resumed.state,'completed');
+ assert.deepEqual(t3.calls,['thread.model-selection.set','message.dispatch']);
+ assert.deepEqual(resumed.steps.map(x=>[x.operationId,x.state]),[['cs-1:model-selection','completed'],['cs-1:send','completed']]);
 });
 
 // Engine-level cases with a controlled clock and host.
