@@ -22,6 +22,21 @@ import { resumirPedidosRuntime } from './pedidos-runtime.mjs';
 import { lerObservacaoComDados, SETTLEMENT_CONTRACT_VERSIONS } from './settlement.mjs';
 import { GRUPOS, LIMITE_PADRAO, montarWorkset, PRAZO_AMBIENTE_MS as PRAZO_WORKSET_AMBIENTE, PRAZO_TOTAL_MS as PRAZO_WORKSET_TOTAL } from './workset.mjs';
 import { compararShell, derivarExecucao } from './execucao.mjs';
+import { lerShellFresca } from './busca-threads.mjs';
+import { chamar } from './ws.mjs';
+import { CONTROL_PLANE_CONTRACT_VERSION } from './control-plane.mjs';
+
+export { lerShellFresca };
+
+/**
+ * Arquivadas pelo snapshot WS que a contagem de projeto já usa. O escopo exigido com o token de
+ * leitura não foi validado ao vivo: recusa ou erro vira `archived_source_unavailable`, nunca
+ * população completa.
+ */
+export async function lerArquivadasWs(cliente, _r, { signal } = {}) {
+  const ticket = await cliente.ticketWs({ signal });
+  return chamar({ baseUrl: cliente.base, ticket, tag: 'orchestration.getArchivedShellSnapshot', payload: {}, signal });
+}
 
 export const VERSAO = '0.11.2';
 const ESTADOS = ['running', 'needs_intervention', 'completed', 'failed', 'cancelled', 'no_run', 'unknown'];
@@ -88,9 +103,6 @@ export function resumoSessao(projecao, thread, modeloCanonico) {
  * da projeção (outra mudança entrou entre as duas leituras). A projeção é uma transação;
  * a shell é só a primeira leitura, usada para autorização e para os campos do topo.
  */
-/** Shell lida de novo: no OAuth all, `shell` devolve o inventário da invocação (em cache). */
-export const lerShellFresca = (cliente, opcoes) => (typeof cliente.shellFresca === 'function' ? cliente.shellFresca(opcoes) : cliente.shell(opcoes));
-
 export async function lerThreadCoerente({ r, cliente, signal, threadId, tentativas = 2 }) {
   let leitura;
   for (let tentativa = 1; tentativa <= tentativas; tentativa++) {
@@ -314,7 +326,9 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         'Never pick a candidate of an ambiguous or inconclusive query on your own: show the candidates (environment, project, title, state) and ask the user. A resolved query gives the exact `environment.alias`, `threadId` and `project.projectId` to pass to write tools such as t3_thread_inbox_update_batch. ' +
         `Each environment has ${PRAZO_AMBIENTE_MS} ms and the whole call ${PRAZO_TOTAL_MS} ms; failures appear in \`environmentFailures\` (per query and for the call) and \`complete\` is false. ` +
         'Searches the threads each environment lists as live; deleted threads never appear and archived threads may be missing, so `not_found` only covers that universe. An invalid query (both or neither of search/threadId, `match` with threadId, repeated key) rejects the whole call before reading; an invalid cursor fails only its query (`status: "error"`). ' +
-        'Candidates are ordered by environmentId and threadId. ' + CONTRATO_ESTADO + ' Read-only.',
+        'Candidates are ordered by environmentId and threadId. ' +
+        `With controlPlaneContractVersion ${CONTROL_PLANE_CONTRACT_VERSION} (front lookup): queries may use a structural \`selector\` (title, branch, worktreePath, pullRequest, qualified projectIds, threadId; all must hold) and \`relations\` (lineage children/descendants); \`population: "all"\` adds archived threads; each result adds \`coverage\`, \`reasons\` and \`launchDisposition\` (continue_existing, choose_target, candidate_new only with population all fully covered, inconclusive). A missing field never proves absence. candidate_new does not authorize a launch. ` +
+        CONTRATO_ESTADO + ' Read-only.',
       shape: {
         queries: z.array(z.union([
           z.strictObject({
@@ -330,14 +344,34 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
             limit: campoLimiteLote,
             cursor: campoCursorLote,
           }),
-        ])).min(1).max(MAX_CONSULTAS).describe('One entry per reference to resolve: `{key, search, match?}` or `{key, threadId}`'),
+          z.strictObject({
+            key: campoChave,
+            selector: z.strictObject({
+              threadId: z.string().min(1).optional(),
+              title: z.strictObject({ value: z.string().min(1), match: z.enum(['exact', 'partial']).optional() }).optional().describe('Thread title; exact (default) or partial, ignoring case and accents'),
+              branch: z.string().min(1).optional().describe('Branch bound to the thread, compared literally'),
+              worktreePath: z.string().min(1).optional().describe('Worktree path bound to the thread, compared literally (metadata, not a filesystem check)'),
+              pullRequest: z.strictObject({ host: z.string().min(1), repository: z.string().min(1).describe('owner/repo (GitHub) or group/project (GitLab)'), number: z.number().int().positive() }).optional(),
+              projectIds: z.array(z.strictObject({ environment: z.string().min(1), projectId: z.string().min(1) })).min(1).max(20).optional(),
+            }).describe(`Structural selector (all conditions must hold; controlPlaneContractVersion ${CONTROL_PLANE_CONTRACT_VERSION}); needs at least one of threadId, title, branch, worktreePath, pullRequest`),
+            relations: z.strictObject({
+              direction: z.enum(['children', 'descendants']).optional(),
+              maxDepth: z.number().int().min(1).max(4).optional(),
+              limit: z.number().int().min(1).max(50).optional(),
+            }).optional().describe('Also return the lineage of each candidate (shell lineage, same environment)'),
+            limit: campoLimiteLote,
+            cursor: campoCursorLote,
+          }),
+        ])).min(1).max(MAX_CONSULTAS).describe('One entry per reference to resolve: `{key, search, match?}`, `{key, threadId}` or, with controlPlaneContractVersion, `{key, selector, relations?}`'),
         environments: z.array(z.string().min(1)).min(1).optional().describe(`Restrict every query to these environments (alias or environmentId): ${nomes}. Omitted: every configured environment`),
+        controlPlaneContractVersion: z.literal(CONTROL_PLANE_CONTRACT_VERSION).optional().describe('Pass 1 for structural selectors, population, relations, coverage and launchDisposition. Omitted: the legacy answer'),
+        population: z.enum(['active', 'all']).optional().describe('With controlPlaneContractVersion: active (default) or all (active + archived; complete only when the archived snapshot matches the active one). Only `all` can prove a front is absent'),
       },
       annotations: SO_LEITURA,
     },
     async (args, extra) => {
       try {
-        return resposta(await buscarThreadsEmLote(ambientes, args, { ...opcoesBusca, signal: extra?.signal, resumir: (t, p) => resumoDaThread(t, p) }));
+        return resposta(await buscarThreadsEmLote(ambientes, args, { lerArquivadas: lerArquivadasWs, ...opcoesBusca, signal: extra?.signal, resumir: (t, p) => resumoDaThread(t, p) }));
       } catch (e) {
         return erro(e);
       }

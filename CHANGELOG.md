@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Control-plane v1, front lookup: `t3_thread_find_batch` with `controlPlaneContractVersion: 1`
+  accepts structural selectors (title, branch, worktree path, pull request by host/repository/
+  number, qualified project IDs, thread ID; all must hold), `population: "all"` (active threads
+  plus the archived snapshot of the same sequence) and lineage `relations` (children or
+  descendants, cycles reported). Each result adds `coverage`, `reasons` and `launchDisposition`;
+  `candidate_new` needs zero matches with every environment, the whole population and every
+  selector field covered. A field the shell does not carry is `selector_evidence_unavailable`,
+  never a non-match. Without the version the answer is unchanged.
 - Settlement and settle guard version 2 (`t3_thread` `settlementContractVersion: 2`,
   `thread.settle` `settleGuard.version: 2`): blockers are the codes of
   `execution.continuation.blockers` from the same full snapshot (the shell can only add one),

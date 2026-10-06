@@ -47,7 +47,7 @@ const busy = t => !IDLE.has(t.status) || Boolean(t.activeRunId) || Boolean(t.act
 // (a row that cannot be attributed could belong to the project).
 const nullableString = v => v === null || v === undefined || typeof v === 'string';
 const isObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
-const validRow = t => isObject(t) && typeof t.id === 'string' && t.id !== '' && typeof t.projectId === 'string' && t.projectId !== ''
+export const validRow = t => isObject(t) && typeof t.id === 'string' && t.id !== '' && typeof t.projectId === 'string' && t.projectId !== ''
   && typeof t.status === 'string' && t.status !== '' && nullableString(t.latestRunId) && nullableString(t.activeRunId) && nullableString(t.activityRunStatus)
   && nullableString(t.archivedAt) && nullableString(t.deletedAt)
   && (t.pendingRuntimeRequest === null || t.pendingRuntimeRequest === undefined || isObject(t.pendingRuntimeRequest));
