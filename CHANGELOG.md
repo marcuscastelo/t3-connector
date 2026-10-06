@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.13.0
+
 - Tool descriptions: `t3_escrever_thread_launch` now states that it is the canonical path to open
   a thread on a new branch and worktree (`workspaceStrategy.type: 'worktree'` creates both in one
   call) and that no separate creation tool exists; `t3_worktree_status` and `t3_worktree_list` say
