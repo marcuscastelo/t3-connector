@@ -1,6 +1,6 @@
 # Spike: ChatGPT as OAuth MCP client — re-login after `invalid_grant`, passkey on localhost
 
-Status: **ChatGPT rehearsal done on 2026-10-04; verdict GO with caveat.** One sub-step (tool resuming after Reconnect in the natural-idle scenario) is not confirmed; see H1.
+Status: **Closed on 2026-10-05. Final verdict: GO with caveat.** One sub-step (tool resuming after Reconnect in the natural-idle scenario) was not confirmed and will not be repeated: the spike was superseded by the later OAuth session implementation work. See H1 and Teardown.
 
 Validates only the two unchecked blockers of `ARQUITETURA-SESSAO.md` (§1, §3, §8, §9, §13):
 
@@ -143,4 +143,9 @@ Limits of this evidence:
 - no write tool and no ChatGPT write-confirmation dialog were exercised (the tools were read-only);
 - AT/RT behaviour across a browser restart, a long (1 h) real idle, and concurrent conversations was not tested.
 
-Teardown: run `./run.sh down`, delete the test app in ChatGPT, and delete the `oauth-spike` passkey (RP `localhost`) from Bitwarden.
+## Teardown (2026-10-05)
+
+- `./run.sh down` run; `run.sh status` reports harness and tunnel down, no harness, tunnel or watcher process remains, and ports 7533/7534 have no listener. The processes had already stopped before the command; the quick-tunnel hostname is no longer served.
+- Local state in `.state/` (redacted event log, test passkey public key) stays gitignored on this machine only.
+- Natural-idle recovery was not repeated, by decision: the spike was superseded by the later OAuth session implementation, whose own E2E covers it.
+- **Non-blocking external cleanup (manual):** delete the `OAuth spike (test)` app in ChatGPT and the `oauth-spike` passkey (RP `localhost`) in Bitwarden. Neither can reach anything: the endpoint is gone and the passkey only works on the spike's local origin.
