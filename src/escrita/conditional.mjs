@@ -86,20 +86,26 @@ const inflight = new Map();
  * @param host.audit(event)
  * @param host.failClosed()  called when the journal fails
  */
-export function conditionalSend(host, operationId, rawInput, { sleep = ms => new Promise(r => setTimeout(r, ms)), now = Date.now } = {}) {
+export async function conditionalSend(host, operationId, rawInput, { sleep = ms => new Promise(r => setTimeout(r, ms)), now = Date.now } = {}) {
   const input = conditionalSchema.parse(rawInput);
   if (input.clientRequestId !== operationId) throw new Error('request_id_mismatch');
   const key = manifestKey({ ...host.environment, caller: host.caller, clientRequestId: input.clientRequestId });
-  // Concurrent duplicates in this process share one execution and one result.
-  if (inflight.has(key)) return inflight.get(key).then(result => { host.authorize(requiredActions(input), result.projectId); return structuredClone(result); });
-  const running = run(host, key, input, { sleep, now }).finally(() => inflight.delete(key));
-  inflight.set(key, running);
+  const hash = digest([CONDITIONAL_SEND, input]);
+  // Every call authorizes with its own lease/session before anything else, joined or not.
+  host.authorize(requiredActions(input));
+  // Concurrent duplicates in this process share one execution and one result; a different input
+  // under the same clientRequestId is a conflict, as it is against the journal.
+  const current = inflight.get(key);
+  if (current) {
+    if (current.hash !== hash) throw new Error('operation_conflict');
+    return current.running.then(result => { host.authorize(requiredActions(input), result.projectId); return structuredClone(result); });
+  }
+  const running = run(host, key, input, hash, { sleep, now }).finally(() => inflight.delete(key));
+  inflight.set(key, { hash, running });
   return running;
 }
 
-async function run(host, key, input, { sleep, now }) {
-  host.authorize(requiredActions(input));
-  const hash = digest([CONDITIONAL_SEND, input]);
+async function run(host, key, input, hash, { sleep, now }) {
   // A journal failure fails closed like the Dispatcher's: the host ends its leases/sessions.
   const store = (method, ...args) => { try { return host.journal[method](...args); } catch { host.failClosed(); throw new Error('journal_failed'); } };
   const at = () => new Date(now()).toISOString();

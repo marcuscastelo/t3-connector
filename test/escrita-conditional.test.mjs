@@ -254,6 +254,29 @@ test('OAuth restricted: replay requires the project in this session grant, not o
  assert.equal((await w.conditional({sid:wide,sub},{environment:'local',operationId:'cs-1',input:req({modelSelection:undefined})})).replayed,true);
 });
 
+test('race: a concurrent call with the same clientRequestId but another input is a conflict, not a shared result',async()=>{
+ const t3=fakeT3();let release;const gate=new Promise(r=>{release=r;});
+ const host=engineHost(t3),observe=host.observe;host.observe=async id=>{await gate;return observe(id);};
+ const a=conditionalSend(host,'same',req({clientRequestId:'same',modelSelection:undefined,text:'first'}),clock());
+ await assert.rejects(conditionalSend(host,'same',req({clientRequestId:'same',modelSelection:undefined,text:'DIFFERENT'}),clock()),/operation_conflict/);
+ const denied={...host,authorize(){throw new Error('lease_closed');}};
+ await assert.rejects(conditionalSend(denied,'same',req({clientRequestId:'same',modelSelection:undefined,text:'first'}),clock()),/lease_closed/);
+ const joined=conditionalSend(host,'same',req({clientRequestId:'same',modelSelection:undefined,text:'first'}),clock());
+ release();
+ const [ra,rb]=await Promise.all([a,joined]);
+ assert.deepEqual(ra,rb);assert.deepEqual(t3.calls,['message.dispatch']);
+});
+
+test('race: a joined call whose session no longer covers the project gets scope_denied, not the shared result',async()=>{
+ const t3=fakeT3();let release;const gate=new Promise(r=>{release=r;});
+ const host=engineHost(t3),observe=host.observe;host.observe=async id=>{await gate;return observe(id);};
+ const a=conditionalSend(host,'p',req({clientRequestId:'p',modelSelection:undefined}),clock());
+ const narrow={...host,authorize(_actions,projectId){if(projectId==='app')throw new Error('scope_denied');}};
+ const b=conditionalSend(narrow,'p',req({clientRequestId:'p',modelSelection:undefined}),clock());
+ release();
+ assert.equal((await a).state,'completed');await assert.rejects(b,/scope_denied/);
+});
+
 // Engine-level cases with a controlled clock and host.
 function engineHost(t3,{journal=memoryJournal(),dispatchLog=[]}={}) {
  return {caller:'caller',environment:{environmentId:'e',destination:'t3://e'},journal,audit(){},failClosed(){},authorize(){},
