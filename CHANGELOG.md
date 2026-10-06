@@ -14,6 +14,33 @@
   value was enough, so an assertion naming two servers authenticated at both. Assertions with a single
   audience, or with several that all name this server, work as before.
 
+## 0.12.1
+
+- Writes: a typed answer from T3 to a sent canonical action (`OrchestrationV2DispatchCommandError`,
+  `OrchestrationV2ThreadLaunchError`, `EnvironmentAuthorizationError`) no longer ends every OAuth
+  session (or lease). The operation is journaled `uncertain` with T3's code and message, the tool
+  answers `reconciliation_required: ... T3 answered <ErrorTag>: <message>`, a replay and
+  `t3_reconciliar_escrita` return the error, and nothing is resent. Before, canonical actions asked
+  the transport for untyped errors only, so T3 refusing a command (e.g. `thread.send` to a thread
+  that still needs attention) looked like a lost transport and every OAuth session was revoked
+  (`write_path_failure`), which cost ChatGPT a manual Reconnect and a passkey sign-in: 4 of the 6
+  reconnects in production on 05-06/10/2026. A typed answer is not journaled `failed`, because T3
+  may answer it after a commit (e.g. the post-steps of `queue.resume`, or a launch whose thread
+  exists). Lost transport, malformed frames, timeouts and journal failures still end every session.
+- Writes: typed T3 errors are sanitized at the transport: the tag must be an identifier, `cause`
+  (T3's defect chain) and nested fields never leave the frame, `code`/`message` cannot be overridden
+  by the payload, strings are clipped to 2000 characters. The lease relay and the stdio bridge carry
+  T3's typed code and message.
+
+## 0.12.0
+
+- Read tools: thread summaries add `woke` and `wokeAt`, the "Woke" marker of the T3 sidebar
+  (a thread that woke from a snooze and was not acknowledged yet), derived from the shell with
+  T3's own rule. `woke` is `null` when the server does not expose the snooze or shared visited
+  state. `t3_threads` (and its read under a write lease) accepts an optional `woke` filter.
+  Additive: existing fields, `state`, cursors without the filter and other tools' selection are
+  unchanged. Reading never acknowledges the marker. Unrelated to delegated task `completionWake`.
+
 ## 0.11.2
 
 - Read tools: one source-of-truth contract for thread state and model. `state` now gives an

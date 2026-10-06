@@ -7,6 +7,7 @@ import { jsonResult, strictRegistrar, toolErrorMapper } from 'mcp-connector-kit'
 import { z } from 'zod';
 import {
   estadoDaThread,
+  marcadorWoke,
   pedidosPendentes,
   resumoModelo,
   runAtivoDaShell,
@@ -20,7 +21,7 @@ import { assinatura, casaBusca, comparador, CursorInvalido, normalizar, paginar 
 import { Cancelada, ErroT3 } from './t3.mjs';
 import { resumirPedidosRuntime } from './pedidos-runtime.mjs';
 
-export const VERSAO = '0.11.2';
+export const VERSAO = '0.12.1';
 const ESTADOS = ['running', 'needs_intervention', 'completed', 'failed', 'cancelled', 'no_run', 'unknown'];
 const SO_LEITURA = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
@@ -34,11 +35,18 @@ const CONTRATO_ESTADO =
   '`latestRunId`/`latestRunStatus` appear only when the newest run is not the one `state` describes: they are informational, and a cancelled newest run (a queued message promoted to steer or a cancelled queued run) does not mean the thread stopped. ' +
   '`model` is the thread\'s configured model and is canonical.';
 
+// Marcador Woke: ortogonal ao `state`, derivado como no T3 (ver marcadorWoke em estado.mjs).
+const CONTRATO_WOKE =
+  'Woke contract: `woke: true` means the thread woke from a snooze (its snooze time passed, or it raised its hand early: pending request, fresh failure, or a run completed after the snooze) and nobody has acknowledged it yet, matching the "Woke" marker in the T3 sidebar. ' +
+  '`wokeAt` is when it woke and can stay set after acknowledgement; null when the thread never snoozed or is still snoozed. ' +
+  '`woke: null` means this T3 server does not expose enough shared state (snooze or visited watermark) to decide. ' +
+  '`woke` is independent of `state` and of `settled`, it is unrelated to the `completionWake` policy of delegated tasks, and reading never acknowledges it.';
+
 function projetosPorId(shell) {
   return new Map((shell.projects ?? []).map((p) => [p.id, p]));
 }
 
-export function resumoDaThread(thread, projeto, pendentes = []) {
+export function resumoDaThread(thread, projeto, pendentes = [], agora = new Date().toISOString()) {
   return {
     threadId: thread.id,
     title: thread.title,
@@ -50,6 +58,7 @@ export function resumoDaThread(thread, projeto, pendentes = []) {
     ...estadoDaThread(thread, pendentes),
     updatedAt: thread.updatedAt,
     settled: Boolean(thread.settledAt),
+    ...marcadorWoke(thread, agora),
   };
 }
 
@@ -181,34 +190,44 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
     {
       title: 'T3 threads',
       description:
-        'Lists threads of the authorized projects of an environment with project, directory, model and state (running, needs_intervention, completed, failed, cancelled, no_run, unknown), most recently updated first. ' + CONTRATO_ESTADO + ' To find a thread by name use `search` (part of the title or threadId): `total` counts every match, not just the page. When `truncated: true`, repeat the call with `cursor` = `nextCursor` for the next page. Threads without a V2 run (imported history) only appear with includeNoRun; `hiddenNoRun` says how many were left out. Read-only.',
+        'Lists threads of the authorized projects of an environment with project, directory, model and state (running, needs_intervention, completed, failed, cancelled, no_run, unknown), most recently updated first. ' + CONTRATO_ESTADO + ' ' + CONTRATO_WOKE + ' Use `woke: true` to list only woke threads; the filter is evaluated at read time, so a snooze expiring or an acknowledgement can change the selection between pages without changing `updatedAt`. To find a thread by name use `search` (part of the title or threadId): `total` counts every match, not just the page. When `truncated: true`, repeat the call with `cursor` = `nextCursor` for the next page. Threads without a V2 run (imported history) only appear with includeNoRun; `hiddenNoRun` says how many were left out. Read-only.',
       shape: {
         environment: campoAmbiente,
         projectId: z.string().optional().describe('Restrict to one authorized project of this environment'),
         state: z.enum(ESTADOS).optional().describe('Filter by state'),
         includeNoRun: z.boolean().optional().describe('Include threads without a V2 run; default false'),
+        woke: z.boolean().optional().describe('Filter by the Woke marker: true = only woke threads, false = only threads not woke; omitted: no filter. Refused when the server cannot decide the marker for a matching thread'),
         search: z.string().min(1).optional().describe('Filter by part of the title or threadId, ignoring case and accents'),
         limit: z.number().int().min(1).max(50).optional().describe('Maximum threads per page; default 20'),
         cursor: campoCursor,
       },
       annotations: SO_LEITURA,
     },
-    noAmbiente(async ({ r, cliente, signal, projectId, state: estado, includeNoRun: incluirSemExecucao = false, search: busca, limit: limite = 20, cursor }) => {
+    noAmbiente(async ({ r, cliente, signal, projectId, state: estado, includeNoRun: incluirSemExecucao = false, woke, search: busca, limit: limite = 20, cursor }) => {
       if (projectId) r.escopo.exigirProjeto(projectId);
       const shell = await cliente.shell({ signal });
       const projetos = projetosPorId(shell);
+      // Um só instante por chamada: o marcador Woke depende do relógio.
+      const agora = new Date().toISOString();
       const candidatas = r.escopo
         .threadsVisiveis(shell)
         .filter((t) => !projectId || t.projectId === projectId)
         .filter((t) => casaBusca(busca, t.title, t.id))
-        .map((t) => resumoDaThread(t, projetos.get(t.projectId)));
-      const lista = candidatas.filter((t) => (estado ? t.state === estado : incluirSemExecucao || t.state !== 'no_run'));
-      const ocultas = estado || incluirSemExecucao ? 0 : candidatas.length - lista.length;
+        .map((t) => resumoDaThread(t, projetos.get(t.projectId), [], agora));
+      const passaEstado = (t) => (estado ? t.state === estado : incluirSemExecucao || t.state !== 'no_run');
+      // Recusa em vez de devolver uma lista que pareceria completa sem as indecidíveis.
+      if (woke !== undefined && candidatas.some((t) => t.woke === null && passaEstado(t))) {
+        throw new EntradaInvalida('the woke filter is unavailable here: this T3 server does not expose the snooze or visited state needed to decide the Woke marker; repeat without `woke`');
+      }
+      const porWoke = woke === undefined ? candidatas : candidatas.filter((t) => t.woke === woke);
+      const lista = porWoke.filter(passaEstado);
+      const ocultas = estado || incluirSemExecucao ? 0 : porWoke.length - lista.length;
       const chave = (t) => [t.updatedAt ?? '', t.threadId];
       const comparar = comparador([true, false]);
       const { pagina, truncado, proximoCursor, alterados } = paginar({
         itens: lista.sort((a, b) => comparar(chave(a), chave(b))),
-        consulta: assinatura(['t3_threads', r.environmentId, projectId ?? null, estado ?? null, incluirSemExecucao, normalizar(busca ?? '')]),
+        // Sem `woke` a assinatura é a anterior: cursores já emitidos continuam válidos.
+        consulta: assinatura(['t3_threads', r.environmentId, projectId ?? null, estado ?? null, incluirSemExecucao, normalizar(busca ?? ''), ...(woke === undefined ? [] : [{ woke }])]),
         cursor,
         limite,
         chave,
@@ -309,7 +328,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       title: 'Thread state and latest response',
       description:
         'Detailed state of an authorized thread, latest response and pending runtime requests. pendingRequests includes requestId, responseCapability, nextAction and content: user_input questions with IDs/options/field constraints, or approval prompt/options. Follow nextAction: answer questions with runtime-request.answer (answers keyed by question ID); approvals use runtime-request.approve (decision). thread.send does NOT answer a pending runtime request and can remain queued behind the blocked run. If contentAvailable is false, do not infer an answer: inspect the request in T3. Pass the thread environment. ' +
-        CONTRATO_ESTADO + ' ' +
+        CONTRATO_ESTADO + ' ' + CONTRATO_WOKE + ' ' +
         '`activeRun` (present while a run is active) is that run with the model it executes; `latestRun` is the newest run and, when it differs from `activeRun`, is informational. ' +
         'Model precedence: `model` is what the thread runs next; `activeRun.model` is what the active run executes (fixed when the run was requested); `providerSession` (status, model) is the provider process as last reported and is informational only: it can keep the previous model after a model change and read `ready` while a run is active, so never use it to decide the model or the state. ' +
         'Message `streaming` flags do not decide the state either. Read-only.',

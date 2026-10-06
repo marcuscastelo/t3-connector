@@ -16,7 +16,7 @@ export class NativeToolError extends Error {
 }
 /** A typed failure answered by T3 (Effect RPC Exit Failure with a tagged error). */
 export class NativeRpcError extends Error {
-  constructor(tag, message, fields = {}) { super('t3_error'); this.native = { code: tag, message, ...fields }; }
+  constructor(tag, message, fields = {}) { super('t3_error'); this.native = { ...fields, code: tag, message }; }
 }
 
 const str = z.string().trim().min(1);
