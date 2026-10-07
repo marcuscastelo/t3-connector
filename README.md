@@ -718,7 +718,8 @@ t3-connector-ops <env> query <name> [--input JSON | < JSON]
 - **Idempotency of `act`**: ops is stateless (no journal). The commandId, and the messageId of
   `thread.send`, the threadId of `thread.launch` and the targetThreadId of `thread.fork`, derive
   from (namespace, environmentId, action, operationId), so repeating an operation makes T3 replay
-  its receipt instead of applying it again. `thread.send` takes `clientRequestId` as the
+  its receipt instead of applying it again. Message ids (`thread.send` messageId/commandId, the
+  `thread.launch` brief) are `<namespace>:<hash>` like `send` and `create`; other ids are UUIDs. `thread.send` takes `clientRequestId` as the
   operationId. Native writes that T3 accepts without a commandId (`idempotent: false` in
   `actions`: clone, preferences, scheduled task update/delete/run, project create from a title,
   preview close) repeat their effect. A typed T3 answer is `t3_refused` with `details.native`

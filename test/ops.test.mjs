@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { after, before, beforeEach, test } from 'node:test';
-import { buildModelSelection, createOps, deriveUuid, findProject, OPS_WAIT_MAX_MS, opsActions, QUERY_NAMES, refusal, resolveEnvironment, selectInterruptRun, validateOpsConfig } from '../src/ops.mjs';
+import { buildModelSelection, createOps, deriveId, deriveUuid, findProject, OPS_WAIT_MAX_MS, opsActions, QUERY_NAMES, refusal, resolveEnvironment, selectInterruptRun, validateOpsConfig } from '../src/ops.mjs';
 import { ALL_ACTIONS, ACTIONS } from '../src/escrita/adapters.mjs';
 import { NATIVE_READ_TOOLS, NATIVE_WRITE_ACTIONS, OPS_NATIVE_READ_TOOLS } from '../src/escrita/native.mjs';
 import { PROJECT_ACTIONS } from '../src/escrita/project-admin.mjs';
@@ -261,6 +261,10 @@ test('act thread.launch / thread.fork: thread and message ids derive from the op
   const launch = calls.find((c) => c.tag === 'orchestration.launchThread').payload;
   assert.equal(launch.threadId, deriveUuid('t3-connector-ops', ENV_ID, 'thread.launch', 'launch-1', 'thread'));
   assert.equal(launch.initialMessage.messageId, r.ids.messageId);
+  assert.equal(launch.initialMessage.messageId, deriveId('t3-connector-ops', ENV_ID, 'thread.launch', 'launch-1', 'message'));
+  assert.match(launch.initialMessage.messageId, /^t3-connector-ops:[0-9a-f]{32}$/);
+  await o.act('thread.launch', { ...input, title: 'L2' }, { operationId: 'launch-2', namespace: 't3-remoto' });
+  assert.match(calls.filter((c) => c.tag === 'orchestration.launchThread')[1].payload.initialMessage.messageId, /^t3-remoto:[0-9a-f]{32}$/);
   assert.deepEqual(r.result, { threadId: launch.threadId, resumed: false });
   await o.act('thread.fork', { sourceThreadId: 't-idle', sourcePoint: { type: 'latest_stable' } }, { operationId: 'f-1' });
   const fork = dispatched('thread.fork')[0];
@@ -306,6 +310,9 @@ test('act thread.send: steer needs targetRunId, queue needs explicit intent, mes
   assert.deepEqual(d.dispatchMode, { type: 'steer_active', targetRunId: 'run-9' });
   assert.equal(d.messageId, d.commandId);
   assert.equal(r.ids.messageId, r.commandId);
+  assert.equal(d.messageId, deriveId('t3-connector-ops', ENV_ID, 'thread.send', 's-4'));
+  await o.act('thread.send', { threadId: 't-run', text: 'again', clientRequestId: 's-5', delivery: 'restart_active', targetRunId: 'run-9' }, { namespace: 't3-remoto' });
+  assert.match(dispatched('message.dispatch')[1].messageId, /^t3-remoto:[0-9a-f]{32}$/);
   assert.equal(r.operationId, 's-4');
   o.close();
 });

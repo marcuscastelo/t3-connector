@@ -577,7 +577,9 @@ export function createOps(environment, {
      * environmentId, action, operationId): the same operation repeated is replayed by T3, not
      * applied again. A typed T3 refusal is OpsError t3_refused (details.native); a lost transport
      * after the send is `uncertain` (read before repeating; repeating the same operationId is safe
-     * where T3 accepts a commandId). Returns {action, operationId, commandId, ids?, result}.
+     * where T3 accepts a commandId). The messageId (and commandId) of thread.send and the
+     * initialMessage.messageId of thread.launch use deriveId (`<namespace>:<hash>`); other ids are
+     * UUID-shaped. Returns {action, operationId, commandId, ids?, result}.
      */
     async act(action, input = {}, { operationId, namespace = 't3-connector-ops' } = {}) {
       if (!ALL_ACTIONS.includes(action)) throw new OpsError('action_unknown', `unknown action: ${action}`, { known: ALL_ACTIONS });
@@ -600,10 +602,12 @@ export function createOps(environment, {
         if (spec.native) ({ method, payload } = await spec.build({ input: data, native, commandId }));
         else {
           payload = { ...spec.encode(data), commandId };
-          if (action === 'thread.send') payload.messageId = ids.messageId = commandId;
+          // Message ids carry the namespace (`<namespace>:<hash>`, as send and create do): watchers
+          // recognize the messages that started a run by that prefix.
+          if (action === 'thread.send') payload.commandId = payload.messageId = ids.messageId = deriveId(namespace, environmentId, action, operationId);
           if (action === 'thread.launch') {
             payload.threadId = ids.threadId = derive('thread');
-            if (payload.initialMessage) payload.initialMessage = { ...payload.initialMessage, messageId: ids.messageId = derive('message') };
+            if (payload.initialMessage) payload.initialMessage = { ...payload.initialMessage, messageId: ids.messageId = deriveId(namespace, environmentId, action, operationId, 'message') };
           }
           if (action === 'thread.fork') payload.targetThreadId = ids.targetThreadId = derive('thread');
         }

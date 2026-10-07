@@ -13,7 +13,9 @@
   reads and the MCP reads by stable names (`thread`, `pending_requests`, `messages`, `search`,
   `threads`, `projects`, `providers`, `attention`, `control_plane`, `wait`, `read_batch`) through
   the same code as the MCP tools. ops stays stateless: ids derive from (namespace, environmentId,
-  action, operationId), so a repeated operation is replayed by T3. CLI: `<env> actions`,
+  action, operationId), so a repeated operation is replayed by T3; the message ids of
+  `thread.send` (also its commandId) and of the `thread.launch` brief are `<namespace>:<hash>`,
+  as in `send`/`create`, so watchers can recognize them by prefix. CLI: `<env> actions`,
   `<env> act`, `<env> query`. Unwrapped native tools are listed with the reason in `OPS_OMITTED`.
 - Operator-only actions, absent from every MCP catalog and consent: `t3_thread_configure`
   (change account/instance, model and effort: `thread.model-selection.set` on the same instance,
