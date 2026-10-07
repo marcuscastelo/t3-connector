@@ -6,7 +6,8 @@
 
 - New operator core `src/ops.mjs` and CLI `t3-connector-ops`: list, read, timeline (with
   history pages), projects, providers, send, create, settle and snooze threads in any configured
-  environment with the operator's own `orchestration:operate` token, without the passkey lease
+  environment with the operator's own token (`orchestration:read` for reads,
+  `orchestration:operate` for anything sent), without the passkey lease
   (local automation only; the MCP write plugin is unchanged). `create` takes the project by id,
   workspace root or unique title, checks instance, model, effort and options against
   `server.getConfig`, sends the brief as the first message and is idempotent by

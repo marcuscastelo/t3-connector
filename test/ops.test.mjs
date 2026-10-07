@@ -79,6 +79,8 @@ test('config: aliases resolve, repeats and missing fields fail', () => {
   assert.throws(() => resolveEnvironment(environments, 'vega'), /unknown environment: vega/);
   assert.throws(() => validateOpsConfig({ environments: { mac: { url: 'https://h.example', tokenFile: 't', aliases: ['mac'] } } }), /alias repeated/);
   assert.throws(() => validateOpsConfig({ environments: { mac: { tokenFile: 't' } } }), /exactly one/);
+  assert.throws(() => validateOpsConfig({ environments: { s: { url: 'http://s.example.ts.net:3773', tokenFile: 't' } } }), /HTTPS or loopback/);
+  assert.equal(validateOpsConfig({ environments: { s: { url: 'http://s.example.ts.net:3773', tokenFile: 't', insecureHttp: true } } }).environments[0].insecureHttp, true);
 });
 
 test('list hides settled threads; read keeps conversation order, since and last', async () => {
@@ -91,11 +93,19 @@ test('list hides settled threads; read keeps conversation order, since and last'
   o.close();
 });
 
-test('token without operate is refused before anything else', async () => {
+test('read-only token reads; mutations are refused before anything is sent', async () => {
   state.scopes = ['orchestration:read'];
   const o = ops();
-  await assert.rejects(o.list(), { code: 'token_scope_missing' });
-  o.close();
+  assert.equal((await o.list()).length, 3);
+  assert.equal((await o.timeline('t-idle', { messageIds: ['m3'] })).length, 4);
+  await assert.rejects(o.send('t-idle', { text: 'x', messageId: 'x:9' }), { code: 'token_scope_missing' });
+  await assert.rejects(o.create({ project: 'Fleet', title: 'x', instanceId: 'claudeAgent', model: 'opus', clientRequestId: 'r' }), { code: 'token_scope_missing' });
+  assert.deepEqual((await o.settle(['t-idle']))[0].error, 'token_scope_missing');
+  assert.deepEqual(calls, []);
+  state.scopes = [];
+  const p = ops();
+  await assert.rejects(p.list(), { code: 'token_scope_missing' });
+  o.close(); p.close();
 });
 
 test('settle and snooze refuse running or asking threads, confirm the rest, same commandId on repeat', async () => {

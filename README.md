@@ -669,9 +669,12 @@ t3-connector-ops <env> snooze <threadId> <ISO datetime with offset>
 - **Environments**: `~/.config/t3-connector/ops.json` (or `T3_CONNECTOR_OPS_CONFIG`), or the same
   JSON in `T3_CONNECTOR_OPS_ENVIRONMENTS`: `{"environments": {"mac": {"url": "https://…",
   "tokenFile": "…", "aliases": ["laptop"], "environmentId": "…"}}}`. Each entry has `url` or
-  `ssh`, a `tokenFile` (mode 600, private directory) whose token has at least
-  `orchestration:read` and `orchestration:operate`, optional extra `aliases` and an optional
-  `environmentId` that the server descriptor must match.
+  `ssh`, a `tokenFile` (mode 600, private directory) whose token has
+  `orchestration:read` (enough for list, thread, read, timeline and projects) and, for send,
+  create, settle, snooze and providers, `orchestration:operate`; optional extra `aliases` and an optional
+  `environmentId` that the server descriptor must match. `url` is HTTPS or loopback HTTP;
+  `"insecureHttp": true` allows plain HTTP to another host, only for a network that encrypts
+  by itself (for example a tailnet).
 - **Idempotency**: `send` uses `--message-id` as commandId and messageId; `create` derives the
   thread id from `--client-request-id` and returns the existing thread (`created: false`) on a
   repeat; settle and snooze derive their commandId from the thread (and date). Importers can

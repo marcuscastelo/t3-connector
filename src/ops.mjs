@@ -8,6 +8,9 @@
 // Every mutation carries a commandId derived from the caller's request id, so repeating a
 // call does not repeat its effect, and is confirmed by reading the server afterwards.
 //
+// Reads (list, thread, read, timeline, projects) need a token with orchestration:read; send,
+// create, settle, snooze and providers also need orchestration:operate.
+//
 // Config (T3_CONNECTOR_OPS_CONFIG, default ~/.config/t3-connector/ops.json), or the same
 // object as JSON in T3_CONNECTOR_OPS_ENVIRONMENTS:
 // {
@@ -28,7 +31,10 @@ import { StagingRpcTransport } from './escrita/transport-staging.mjs';
 import { problemasModelSelection } from './escrita/model-selection.mjs';
 
 export const OPS_CONFIG = '~/.config/t3-connector/ops.json';
-export const OPS_SCOPES = Object.freeze(['orchestration:read', 'orchestration:operate']);
+// Reads need orchestration:read; anything sent over the socket also needs orchestration:operate,
+// so a read-only pairing still lists, reads and walks the timeline.
+export const READ_SCOPE = 'orchestration:read';
+export const OPERATE_SCOPE = 'orchestration:operate';
 export const ACTIVE_STATUSES = new Set(['preparing', 'queued', 'starting', 'running', 'waiting']);
 export const DELIVERIES = Object.freeze(['queue_after_active', 'start_immediately']);
 const RUNTIME_MODES = ['approval-required', 'auto-accept-edits', 'auto', 'full-access'];
@@ -56,12 +62,15 @@ export function validateOpsConfig(raw) {
   for (const [alias, e] of Object.entries(list)) {
     if (!/^[a-z0-9-]+$/.test(alias)) fail(`alias "${alias}" invalid (use a-z, 0-9, -)`);
     if (Boolean(e.url) === Boolean(e.ssh)) fail(`${alias}: give exactly one of "url" or "ssh"`);
-    if (e.url) validarUrl(e.url);
+    // Plain HTTP beyond loopback only when the entry says so, for a network that encrypts by
+    // itself (for example a tailnet); the read client still refuses it otherwise.
+    if (e.insecureHttp !== undefined && typeof e.insecureHttp !== 'boolean') fail(`${alias}: insecureHttp must be true or false`);
+    if (e.url && !(e.insecureHttp && new URL(e.url).protocol === 'http:')) validarUrl(e.url);
     if (e.ssh && !e.ssh.host) fail(`${alias}: ssh.host required`);
     if (!e.tokenFile) fail(`${alias}: missing tokenFile`);
     const aliases = e.aliases ?? [];
     if (!Array.isArray(aliases) || aliases.some((a) => typeof a !== 'string' || !/^[a-z0-9-]+$/.test(a))) fail(`${alias}: aliases must be a list of names`);
-    envs.push({ alias, aliases, environmentId: e.environmentId ?? null, url: e.url ?? null, ssh: sshConfig(e.ssh, fail, `${alias}: `), tokenFile: expandir(e.tokenFile) });
+    envs.push({ alias, aliases, environmentId: e.environmentId ?? null, url: e.url ?? null, insecureHttp: Boolean(e.insecureHttp), ssh: sshConfig(e.ssh, fail, `${alias}: `), tokenFile: expandir(e.tokenFile) });
   }
   if (!envs.length) fail('no environment');
   const names = envs.flatMap((e) => [e.alias, ...e.aliases]);
@@ -147,22 +156,22 @@ export function createOps(environment, {
   async function open() {
     if (session) return session;
     const base = await transport.baseUrl({ signal: AbortSignal.timeout(20000) });
-    const client = criarCliente({ url: base, token: readToken(environment.tokenFile), timeoutMs: 20000 });
+    const client = criarCliente({ url: base, token: readToken(environment.tokenFile), timeoutMs: 20000, allowInsecureHttp: environment.insecureHttp });
     const desc = await client.ambiente();
     if (desc.orchestrationProtocolVersion !== 2) throw new OpsError('protocol_unsupported', `T3 server with protocol ${desc.orchestrationProtocolVersion}; 2 is required`);
     if (environment.environmentId && desc.environmentId !== environment.environmentId) {
       throw new OpsError('environment_mismatch', `endpoint of ${environment.alias} answered as ${desc.environmentId}; expected ${environment.environmentId}`);
     }
     const scopes = (await client.sessao()).scopes ?? [];
-    const missing = OPS_SCOPES.filter((s) => !scopes.includes(s));
-    if (missing.length) throw new OpsError('token_scope_missing', `token of ${environment.alias} lacks ${missing.join(', ')}`);
-    session = { client, base, environmentId: desc.environmentId, label: desc.label };
+    if (!scopes.includes(READ_SCOPE)) throw new OpsError('token_scope_missing', `token of ${environment.alias} lacks ${READ_SCOPE}`);
+    session = { client, base, environmentId: desc.environmentId, label: desc.label, scopes };
     return session;
   }
 
   async function socket() {
     if (rpc?.available) return rpc;
-    const { client, base } = await open();
+    const { client, base, scopes } = await open();
+    if (!scopes.includes(OPERATE_SCOPE)) throw new OpsError('token_scope_missing', `token of ${environment.alias} lacks ${OPERATE_SCOPE} (read-only pairing)`);
     const ticket = await client.ticketWs();
     const url = new URL('/ws', base);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -181,8 +190,9 @@ export function createOps(environment, {
 
   // A typed T3 refusal comes back as NativeRpcError; anything else on the socket is uncertain.
   async function invoke(method, payload) {
+    const transport = await socket();
     try {
-      return await (await socket()).invoke(method, payload, { nativeErrors: true });
+      return await transport.invoke(method, payload, { nativeErrors: true });
     } catch (e) {
       if (e.native) throw new OpsError('t3_refused', `${e.native.code}: ${e.native.message}`, { native: e.native });
       throw new OpsError('uncertain', `${method}: ${e.message}; the effect may or may not have happened, read before repeating`);
