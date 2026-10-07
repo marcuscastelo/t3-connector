@@ -6,7 +6,7 @@ import {ACTIONS,schemaForAction,SEND_DESCRIPTION,LAUNCH_DESCRIPTION} from './ada
 import {LEITURAS} from './read-guarded.mjs';
 import {CONDITIONAL_TOOL,CONDITIONAL_DESCRIPTION,conditionalSchema} from './conditional.mjs';
 
-export const VERSAO_ESCRITA='0.13.0';
+export const VERSAO_ESCRITA='0.14.0';
 
 const MENSAGENS={
  target_run_id_required:'targetRunId required: read t3_thread in the same environment and pass the active run for steer_active or restart_active; do not replace it with queue_after_active',

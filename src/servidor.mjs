@@ -27,7 +27,7 @@ import { resumirPedidosRuntime } from './pedidos-runtime.mjs';
 import { lerThreadsEmLote, MAX_ALVOS, PRAZO_MAX_MS, PRAZO_PADRAO_MS } from './leitura-lote.mjs';
 import { LIMITE_MAXIMO, LIMITE_PADRAO, snapshotPlanoControle } from './plano-controle.mjs';
 
-export const VERSAO = '0.13.0';
+export const VERSAO = '0.14.0';
 const ESTADOS = ['running', 'needs_intervention', 'completed', 'failed', 'cancelled', 'no_run', 'unknown'];
 const SO_LEITURA = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 

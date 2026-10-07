@@ -53,8 +53,10 @@ export function sinalCom(signal, timeoutMs) {
   return signal ? AbortSignal.any([signal, limite]) : limite;
 }
 
-export function criarCliente({ url, token, timeoutMs = 15000, fetchImpl = fetch }) {
-  const base = validarUrl(url);
+export function criarCliente({ url, token, timeoutMs = 15000, fetchImpl = fetch, allowInsecureHttp = false }) {
+  // allowInsecureHttp: plain HTTP to a non-loopback host, only for the operator core (ops.mjs)
+  // when its config opts in for a self-encrypting network.
+  const base = allowInsecureHttp && new URL(url).protocol === 'http:' ? new URL(url) : validarUrl(url);
 
   async function pedir(caminho, { orquestracao = false, metodo = 'GET', signal } = {}) {
     const headers = { authorization: `Bearer ${token}` };
@@ -88,6 +90,9 @@ export function criarCliente({ url, token, timeoutMs = 15000, fetchImpl = fetch 
     threadCompleto: (threadId, o) => pedir(`/api/orchestration/threads/${encodeURIComponent(threadId)}`, { ...o, orquestracao: true }),
     thread: (threadId, o) =>
       pedir(`/api/orchestration/threads/${encodeURIComponent(threadId)}/bounded`, { ...o, orquestracao: true }),
+    // Older timeline pages of the bounded projection (historyCursor / nextCursor).
+    historico: (threadId, cursor, o) =>
+      pedir(`/api/orchestration/threads/${encodeURIComponent(threadId)}/history?cursor=${encodeURIComponent(cursor)}`, { ...o, orquestracao: true }),
     ticketWs: async (o) => (await pedir('/api/auth/websocket-ticket', { ...o, metodo: 'POST' })).ticket,
   };
 }
