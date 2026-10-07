@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- OAuth native tools: `t3_project_ensure` checks out and registers one Git repository as a project
+  in each listed environment (e.g. both hosts) and verifies that every registration resolves to the
+  same `canonicalKey`. It composes discovery, `vcs.listRefs`, `t3_project_clone`,
+  `t3_project_create` and, for an empty registration it created with the wrong repository,
+  `project.delete` (never force; folder kept). Existing checkouts are never cloned over; divergent
+  remotes and "Repository not found" (missing repository or no access from that host) are explicit
+  per-environment blockers. Sub-operations are journaled under the caller's `operationId`; a
+  repeated call replays or reconciles them instead of resending.
+- Writes: a synchronous `sourceControl.cloneRepository` waits up to 130 seconds (T3 bounds it at
+  120) instead of the 10-second default. Before, a clone longer than 10 seconds was treated as a
+  lost transport, which ends every OAuth session.
 - `mcp-connector-kit` 0.3.0: the OAuth issuer may carry a mount path (`https://host/fleet`), so
   several connectors share one host behind a path-routing ingress. Discovery uses RFC 8414 path
   insertion, endpoints and pages live under the mount, WebAuthn uses the bare origin, and the root

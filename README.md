@@ -502,6 +502,11 @@ The default `restricted` project policy preserves the sandbox read ACL and write
 `T3_CONNECTOR_OAUTH_WRITE_PROJECTS` is available only in that mode and conflicts with `all`.
 See [`examples/oauth-all-projects.env`](examples/oauth-all-projects.env) for configuration.
 
+With `T3_CONNECTOR_OAUTH_NATIVE_TOOLS=1`, `t3_project_ensure` sets up one existing Git repository
+as a project in several environments at once (clone if missing, register, verify the same
+`canonicalKey` everywhere), idempotently and without overwriting existing checkouts. Contract and
+limits: [`docs/oauth-session.md`](docs/oauth-session.md#ensuring-one-repository-in-several-environments-t3_project_ensure).
+
 ## Development
 
 ```sh

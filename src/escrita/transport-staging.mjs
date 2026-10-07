@@ -18,6 +18,9 @@ const RESULTS={
 // (scheduledTasks.delete answers {id}).
 const object=z.object({}).passthrough();
 for(const m of ['projects.createNew','sourceControl.cloneRepository','server.getSettings','server.updateSettings','orchestration.searchThreads','vcs.listRefs','scheduledTasks.list','scheduledTasks.upsert','scheduledTasks.delete','scheduledTasks.runNow']) RESULTS[m]=r=>object.parse(r);
+// A synchronous clone answers only when git finishes; T3 bounds it at 120 s (SourceControlRepositoryService
+// 8ed276c2). The default timeout would turn a slow clone into a lost transport, which ends every session.
+const METHOD_TIMEOUT_MS={'sourceControl.cloneRepository':130000};
 export class StagingRpcTransport {
  #pending=new Map(); #next=1; #closed=false;
  constructor({socket,onFailure,timeoutMs=10000,maxPending=64,allowLoopback=false}) {
@@ -39,7 +42,7 @@ export class StagingRpcTransport {
   const id=String(this.#next++);
   // send is synchronous. No readiness wait or reconnect can outlive the gate check.
   return new Promise((resolve,reject)=>{
-   const timer=setTimeout(()=>this.fail(),this.timeoutMs);
+   const timer=setTimeout(()=>this.fail(),Math.max(this.timeoutMs,METHOD_TIMEOUT_MS[method]??0));
    this.#pending.set(id,{resolve,reject,timer,method,nativeErrors});
    try {this.socket.send(JSON.stringify({_tag:'Request',id,tag:method,payload,headers:[]}));}
    catch {this.fail();}

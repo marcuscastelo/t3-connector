@@ -290,6 +290,67 @@ Not wrapped, with the reason:
 - Local-session, preview and device tools: out of scope.
 - Moving or reassigning a thread: there is no native primitive.
 
+#### Ensuring one repository in several environments (`t3_project_ensure`)
+
+With the native tools on, a session consented with `t3_project_create` and `t3_project_clone` also
+gets `t3_project_ensure` (`connector:write`). It is not a new action: it composes the writes and
+reads above, and each step is authorized, journaled and reconciled as if called alone.
+
+Arguments: `{operationId, input: {title, repositoryUrl | repository, protocol?, environments:
+{<alias or environmentId>: {workspaceRoot}}, primaryEnvironment?}}`. `repository` is a GitHub
+`owner/name` (T3 picks the clone URL; `protocol` only applies there); any other host takes
+`repositoryUrl`. The expected identity is the `canonicalKey` T3 derives from that URL (same
+normalization as T3's `normalizeGitRemoteUrl`). Every environment is resolved and must have both
+native actions consented before anything is sent. The primary environment (default: the first key)
+is handled first.
+
+Per environment, in order:
+
+1. **Discover.** A live project whose `workspaceRoot` is the requested one is reused. If another
+   project of the environment already has the expected `canonicalKey` at a different root, nothing
+   is created (`repository_registered_at_other_root`). A project with the same title only adds a
+   warning.
+2. **Inspect.** `vcs.listRefs` on the root says whether it is a Git checkout and which remotes have
+   fetched refs (a warning when `origin` and `upstream` both exist: T3 resolves the identity from
+   `upstream`).
+3. **Clone** only when the root is not a checkout. T3 clones into a missing or empty folder and
+   refuses a non-empty one without touching it (`workspace_not_empty`). A clone error classified as
+   `repository_not_found_or_no_access` ("Repository not found" is also the answer for a private
+   repository the host cannot read) becomes `repository_access_denied` when another environment of
+   the same call reached the repository. Nothing is registered after a failed clone; no remote
+   repository is created and no credential is changed.
+4. **Register** with `t3_project_create` and the requested `workspaceRoot` (never
+   `createWorkspaceRootIfMissing`, never the title-only branch).
+5. **Verify** the project's `repositoryIdentity` from the project list (T3 resolves it
+   asynchronously; the tool waits about 5 seconds). No identity is `identity_unresolved`. A
+   different `canonicalKey` is `remote_mismatch`; an identity whose `rootPath` is another folder is
+   `workspace_inside_other_repository`. Remotes are never changed: the blocker names the remote T3
+   used.
+6. **Compensate** only a registration this operation created (its projectId is the stable
+   `commandId` of the `register` step), only through `project.delete` (the same count guard, never
+   force), only if the session was consented with project administration. A project with any
+   thread is left in place (`refused_project_has_threads`). The workspace folder is always kept.
+
+Sub-operations are `<operationId>/<alias>/clone|register|compensate`. Repeating the call with the
+same `operationId` replays them from the journal: a completed step is not resent, a failed clone is
+not retried, and an uncertain step is reconciled (`t3_reconciliar_escrita`) and checked against the
+project list for the operation's projectId; it is never resent. After fixing a blocker, call again
+with a new `operationId`; discovery makes that call reuse whatever already exists.
+
+Result: `{operationId, title, repository: {requested, canonicalKey}, environments: {<key>:
+{environment, projectId, workspaceRoot, repositoryIdentity, canonicalKey, remoteUrl, registered,
+checkoutReady, accessValidated, createdByOperation, blocker, actionsTaken}}, summary: {status:
+ready|partial|blocked, sameRepositoryIdentity, selectorReady, primaryEnvironment, partialSuccess,
+warnings}}`. `accessValidated` is true only when this call cloned (an existing checkout's remote is
+not contacted). `selectorReady` means at least two environments, all ready, with one
+`canonicalKey`.
+
+Limits: no connector or T3 RPC reads the full remote list of an unregistered folder or edits a
+remote, so an existing checkout's repository is known only after it is registered, and a divergent
+remote is reported, not fixed. T3 may cache a resolved identity for up to 15 minutes after the
+remote is fixed. A synchronous clone is bounded by T3 at 120 seconds; the connector waits 130 seconds
+for it instead of the default 10, so a slow clone no longer reads as a lost transport.
+
 #### Project deletion (opt-in)
 
 `T3_CONNECTOR_OAUTH_PROJECT_ADMIN=1` (only with `T3_CONNECTOR_OAUTH_PROJECTS=all`; any other value

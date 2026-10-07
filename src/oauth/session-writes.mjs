@@ -8,6 +8,7 @@ import { consentAll, consented } from './project-policy.mjs';
 import { redact } from './http.mjs';
 import { PROJECT_ACTIONS } from '../escrita/project-admin.mjs';
 import { NATIVE_WRITES, NATIVE_WRITE_ACTIONS, NATIVE_READS, ENV_SCOPED } from '../escrita/native.mjs';
+import { projectEnsure, ENSURE_SCHEMA, ENSURE_DESCRIPTION } from './project-ensure.mjs';
 
 // T3 writes authorized by an OAuth session instead of a passkey lease. The existing Dispatcher
 // (journal reservation, target/workspace preflight, uncertainty handling, final synchronous check
@@ -91,7 +92,7 @@ export const writeToolName = action => `t3_escrever_${action.replaceAll('.', '_'
 // In restricted mode, `allowedProjects` (Map alias → Set of project ids) narrows the sign-in grant
 // to those projects; an environment without an entry gets no grant. Without it the grant is the
 // full inventory, as with the lease.
-export function sessionWrites({ conexoes, journal, authority, issuer, allowedProjects = null, inventoryMs = 15000, projectPolicy = 'restricted', projectAdmin = false, nativeTools = false, audit = e => journal.audit(e) }) {
+export function sessionWrites({ conexoes, journal, authority, issuer, allowedProjects = null, inventoryMs = 15000, projectPolicy = 'restricted', projectAdmin = false, nativeTools = false, audit = e => journal.audit(e), ensureIdentityWait }) {
   const all = projectPolicy === 'all';
   if (projectAdmin && !all) throw new Error('OAuth project administration requires projectPolicy all');
   if (nativeTools && !all) throw new Error('OAuth native tools require projectPolicy all');
@@ -272,6 +273,22 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
     return value;
   }
 
+  // t3_project_ensure (project-ensure.mjs): composes the native project writes and reads above in
+  // several environments; each step keeps its own authorization through dispatch/reconcile.
+  const ensure = projectEnsure({
+    resolve, dispatch, reconcile, code,
+    caller: principal => exigirIdentidade(identity(principal)),
+    actions: (principal, c) => consented(authority, principal, c.registro).grants.environments.find(e => e.alias === c.registro.alias)?.actions ?? [],
+    native: async (principal, c, fn) => {
+      consented(authority, principal, c.registro);
+      if (!c.adapter.native) fail('environment_unavailable');
+      const value = await fn(c.adapter.native);
+      consented(authority, principal, c.registro);
+      return value;
+    },
+    ...(ensureIdentityWait ? { identityWait: ensureIdentityWait } : {}),
+  });
+
   const error = e => {
     // A native refusal keeps its native code and message (OrchestratorMcpFailure code or T3 error tag).
     // A native wrapper's typed refusal is T3's own code and message; a connector code that carries a
@@ -298,6 +315,11 @@ export function sessionWrites({ conexoes, journal, authority, issuer, allowedPro
       inputSchema: z.strictObject({ environment, operationId: z.string(), input: NATIVE_WRITES[action].schema }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     }, ({ environment: env, operationId, input }) => result(() => dispatch(principal, { environment: env, action, operationId, input })));
+    if (nativeGranted.includes('t3_project_create') && nativeGranted.includes('t3_project_clone')) server.registerTool('t3_project_ensure', {
+      description: ENSURE_DESCRIPTION,
+      inputSchema: z.strictObject({ operationId: z.string().min(1), input: ENSURE_SCHEMA }),
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    }, ({ operationId, input }) => result(() => ensure(principal, { operationId, input })));
     if (nativeGranted.length) for (const [name, spec] of Object.entries(NATIVE_READS)) server.registerTool(name, {
       description: `${spec.description} Chosen environment only.`,
       inputSchema: spec.schema.extend({ environment }),

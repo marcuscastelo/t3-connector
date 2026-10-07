@@ -99,6 +99,9 @@ const RECUSAS=/^(thread_not_found|scope_denied|lease_closed|ambiente_[a-z_]+|wor
 const PROJECT_SCOPED=new Set(['thread.launch','thread.fork',...PROJECT_ACTIONS]);
 // v2: environment e destino lógico (t3://<environmentId>) estáveis; caller sem boot.
 export const chaveOperacao=({environmentId,destination,caller,operationId})=>digest(['v2',environmentId,destination,caller,operationId]);
+// Stable commandId of an operation: T3 replays the receipt of a command it already committed. For a
+// native project create it is also the projectId, so the operation's project can be found again.
+export const stableCommandId=key=>{const h=key.slice(0,32);return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;};
 // The journal is retained across restarts. An uncertain result is never resubmitted.
 export class Dispatcher {
  constructor({gate,adapter,journal,environmentId,destination,resolveGrant,validateTarget,authorizeRecorded}) {
@@ -144,8 +147,7 @@ export class Dispatcher {
    if(PROJECT_SCOPED.has(action)) release=await lockProject(JSON.stringify([this.environmentId,[...projects].sort()]));
    await this.#workspace(grant,[...projects],action,parsed.input);
    const target={environmentId:this.environmentId,destination:this.destination,projectIds:[...projects],action};
-   // Stable commandId: T3 replays the receipt of a command it already committed.
-   const h=key.slice(0,32), stableId=`${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+   const stableId=stableCommandId(key);
    let method=parsed.spec.method, payload=parsed.spec.native?null:parsed.spec.encode(parsed.input);
    if(action==='thread.send'||isProjectAction(action)) { payload.commandId=stableId; if(action==='thread.send')payload.messageId=payload.commandId; }
    // Conexão do environment aberta ainda em 'preparing' (falha aqui não enviou nada) e antes

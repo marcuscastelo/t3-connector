@@ -109,7 +109,7 @@ test('native transport: typed T3 failures are returned with their tag only when 
   assert.throws(() => tr2.invoke('attachments.createUploadUrl', {}), /rpc_unavailable/);
 });
 
-test('native: off by default; with the flag only granted sessions see the 18 wrappers, under native names', async t => {
+test('native: off by default; with the flag only granted sessions see the 18 wrappers (plus t3_project_ensure), under native names', async t => {
   const off = await fixture(t, { nativeTools: false });
   const namesOff = (await off.list()).map(x => x.name);
   for (const n of [...NATIVE_WRITE_ACTIONS, ...NATIVE_READ_TOOLS]) assert.ok(!namesOff.includes(n), n);
@@ -117,7 +117,8 @@ test('native: off by default; with the flag only granted sessions see the 18 wra
   const on = await fixture(t);
   const tools = await on.list(), names = tools.map(x => x.name);
   for (const n of [...NATIVE_WRITE_ACTIONS, ...NATIVE_READ_TOOLS]) assert.ok(names.includes(n), n);
-  assert.equal(names.length - namesOff.length, 18);
+  assert.equal(names.length - namesOff.length, 19);
+  assert.ok(names.includes('t3_project_ensure')); assert.ok(!namesOff.includes('t3_project_ensure'));
   for (const n of NATIVE_READ_TOOLS) assert.equal(tools.find(x => x.name === n).annotations.readOnlyHint, true, n);
   for (const n of NATIVE_WRITE_ACTIONS) assert.equal(tools.find(x => x.name === n).annotations.readOnlyHint, false, n);
   for (const n of Object.keys(NATIVE_OMITTED)) assert.ok(!names.includes(n), n);
