@@ -8,8 +8,17 @@
 // Every mutation carries a commandId derived from the caller's request id, so repeating a
 // call does not repeat its effect, and is confirmed by reading the server afterwards.
 //
-// Reads (list, thread, read, timeline, projects) need a token with orchestration:read; send,
-// create, settle, snooze and providers also need orchestration:operate.
+// Beyond these, `act` runs every action the connector knows (adapters.mjs ALL_ACTIONS: T3
+// commands, project administration, native-tool writes and operator-only wrappers) and `query`
+// every read (native-tool reads and the MCP reads of servidor.mjs), with the same validation and
+// the same code as the MCP paths; `actions()` lists both. ops is stateless: there is no journal.
+// The idempotency of `act` is the commandId (and messageId/threadId/targetThreadId) derived from
+// (namespace, environmentId, action, operationId): repeating an operation makes T3 replay the
+// receipt it committed instead of applying it again. Native writes that T3 accepts without a
+// commandId (see `idempotent: false` in actions()) do repeat their effect.
+//
+// Reads (list, thread, read, timeline, projects, query, providers) need a token with
+// orchestration:read; send, create, settle, snooze and act also need orchestration:operate.
 //
 // Config (T3_CONNECTOR_OPS_CONFIG, default ~/.config/t3-connector/ops.json), or the same
 // object as JSON in T3_CONNECTOR_OPS_ENVIRONMENTS:
@@ -23,12 +32,29 @@
 
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { z } from 'zod';
 import { campoConfig, expandir, sshConfig } from './config.mjs';
-import { criarCliente, validarUrl } from './t3.mjs';
+import { Cancelada, criarCliente, ErroT3, validarUrl } from './t3.mjs';
 import { criarTransporteSsh, criarTransporteUrl } from './transporte.mjs';
 import { lerTokenPrivado } from './escrita/conexao.mjs';
-import { StagingRpcTransport } from './escrita/transport-staging.mjs';
-import { problemasModelSelection } from './escrita/model-selection.mjs';
+import { projectReceipt, StagingRpcTransport } from './escrita/transport-staging.mjs';
+import { problemasModelSelection, validarModelSelection } from './escrita/model-selection.mjs';
+import { ALL_ACTIONS, describeAction, parseAction } from './escrita/adapters.mjs';
+import { guardProjectDelete, isProjectAction, lerOcupacao, lockProject, PROJECT_ACTIONS } from './escrita/project-admin.mjs';
+import { NATIVE_READS, NATIVE_WRITES, NativeRpcError, NativeToolError, OPS_NATIVE_READS, OPS_NATIVE_WRITE_ACTIONS } from './escrita/native.mjs';
+import { criarEscopoOperador, ForaDoEscopo } from './ambientes.mjs';
+import { resumoModelo } from './estado.mjs';
+import { aguardarThread } from './espera.mjs';
+import { buscarThreads } from './busca-threads.mjs';
+import { lerThreadsEmLote } from './leitura-lote.mjs';
+import { snapshotPlanoControle } from './plano-controle.mjs';
+import { resumirPedidosRuntime } from './pedidos-runtime.mjs';
+import { CursorInvalido } from './paginacao.mjs';
+import { EntradaInvalida } from './varredura.mjs';
+import { assinar, chamar } from './ws.mjs';
+import {
+  executarListagem, formasLeitura, LISTAGEM_ATENCAO, LISTAGEM_PROJETOS, LISTAGEM_THREADS, lerThreadDetalhada, listagemProviders, mensagensDaThread, resumoDaThread,
+} from './servidor.mjs';
 
 export const OPS_CONFIG = '~/.config/t3-connector/ops.json';
 // Reads need orchestration:read; anything sent over the socket also needs orchestration:operate,
@@ -38,6 +64,11 @@ export const OPERATE_SCOPE = 'orchestration:operate';
 export const ACTIVE_STATUSES = new Set(['preparing', 'queued', 'starting', 'running', 'waiting']);
 export const DELIVERIES = Object.freeze(['queue_after_active', 'start_immediately']);
 const RUNTIME_MODES = ['approval-required', 'auto-accept-edits', 'auto', 'full-access'];
+// Ceiling of query('wait'): the MCP t3_aguardar_thread keeps 5 s (a voice turn); a CLI caller
+// can block longer on the same event-driven wait (one WebSocket subscription, no polling).
+export const OPS_WAIT_MAX_MS = 300000;
+// T3 accepts a commandId for these native writes, so a repeated operation is replayed, not redone.
+const NATIVE_IDEMPOTENT = new Set(['t3_project_update', 'schedule_task', 't3_thread_configure']);
 // Option ids that carry reasoning effort, per provider driver (server.getConfig optionDescriptors).
 const EFFORT_OPTIONS = ['effort', 'reasoningEffort'];
 
@@ -136,12 +167,81 @@ export function buildModelSelection(providers, { instanceId, model, effort, opti
   return selection;
 }
 
+// Reads exposed by query(): the MCP reads of servidor.mjs by a stable name (same shapes, the
+// environment is always this one), then the native-tool reads by their tool name.
+const FORMAS = formasLeitura('this ops environment');
+const shape = (name, overrides = {}) => z.object({ ...FORMAS[name], ...overrides }).strict();
+const READS = {
+  thread: { mcp: 't3_thread', schema: shape('t3_thread'), description: 'Detailed state of a thread (MCP t3_thread): canonical state, model with effort, runtimeMode, pendingRequests with content and nextAction, activeRun, latestRun, providerSession, latestResponse and history. Finds archived threads too.' },
+  pending_requests: { schema: z.object({ threadId: z.string().min(1), requestId: z.string().min(1).optional() }).strict(), description: 'Pending runtime requests of a thread with full public content and nextAction (the pendingRequests of t3_thread): every kind, approvals included, unlike the native t3_pending_request_list (user_input only). With requestId, that one request (native t3_pending_request_read).' },
+  messages: { mcp: 't3_mensagens', schema: shape('t3_mensagens'), description: 'Latest user and assistant messages of the recent window of a thread (MCP t3_mensagens).' },
+  search: { mcp: 't3_buscar_threads', schema: shape('t3_buscar_threads'), description: 'Find threads by title or ID, archived included (MCP t3_buscar_threads); exactly one of search or threadId.' },
+  threads: { mcp: 't3_threads', schema: shape('t3_threads'), description: 'Threads with canonical state, woke marker, filters (projectId, state, woke, search) and pagination (MCP t3_threads).' },
+  projects: { mcp: 't3_projetos', schema: shape('t3_projetos'), description: 'Projects with running and needs-intervention counts, search and pagination (MCP t3_projetos).' },
+  providers: { mcp: 't3_providers', schema: shape('t3_providers'), description: 'Provider instances summarized as MCP t3_providers (includeModels with instanceId for models); providers() returns the raw catalog.' },
+  attention: { mcp: 't3_atencao', schema: shape('t3_atencao'), description: 'Threads needing intervention or failed and not settled (MCP t3_atencao).' },
+  control_plane: { mcp: 't3_control_plane', schema: shape('t3_control_plane'), description: 'Running, needsIntervention and ready threads in one shell read (MCP t3_control_plane).' },
+  wait: { mcp: 't3_aguardar_thread', schema: shape('t3_aguardar_thread', { environment: z.string().min(1).optional(), timeoutMs: z.number().int().min(1).max(OPS_WAIT_MAX_MS) }), description: `Event-driven wait for the run of a thread to end or ask for intervention (MCP t3_aguardar_thread), timeoutMs up to ${OPS_WAIT_MAX_MS} ms here (5000 in MCP); reaching it returns timedOut=true.` },
+  read_batch: { mcp: 't3_thread_read_batch', schema: shape('t3_thread_read_batch'), description: 'Up to 20 threads in one call, each with the t3_thread detail, failures per item (MCP t3_thread_read_batch); items need only threadId here.' },
+};
+const NATIVE_QUERIES = { ...NATIVE_READS, ...OPS_NATIVE_READS };
+export const QUERY_NAMES = Object.freeze([...Object.keys(READS), ...Object.keys(NATIVE_QUERIES)]);
+
+// Native T3 MCP tools without an ops action or read, with the reason (what covers them, if anything).
+export const OPS_OMITTED = Object.freeze({
+  'preview_* (status, open, navigate, resize, set_appearance, snapshot, click, type, press, scroll, evaluate, wait_for, recording_start, recording_stop)': 'browser automation runs through the PreviewAutomationBroker of a connected host renderer; T3 exposes no external invoke RPC for it, only host-side connect/respond. t3_preview_list and t3_preview_close are offered',
+  'device_list, device_open, device_close, device_screenshot': 'bound to simulators and helpers on the T3 host and to the thread panel; screenshot has no unary RPC. Not a thin wrapper',
+  't3_attachment_prepare_upload, t3_attachment_discard, t3_thread_send_attachments': 'needs the exact bytes uploaded to a signed URL on the T3 origin and claim handling on uncertain results; a client path is not an attachment. Candidate for a future op, not a thin wrapper',
+  t3_thread_read: 'the native timeline view (positions, textOffset, acknowledgement) is a server-side projection; read, timeline and query thread/messages cover the conversation',
+  list_thread_pull_requests: 'PR entries and stack chains come from a server-side helper; the links are in the thread projection',
+  t3_worktree_handoff: 'multi-step (vcs.createWorktree, metadata update, continuation, setup) with rollback, defined for the calling thread; thread.metadata.update is one step of it',
+  'delegate_task, task_status, task_cancel': 'composed over the calling thread (inheritance, wait, completion acknowledgement); delegated_task.request, wake-policy, completion-delivery.acknowledge/dispose and run.interrupt are offered as the building blocks',
+  'thread.conditional-send': 'needs the write journal (manifest and step states across calls); ops is stateless. Use run state from query thread/wait, then act thread.model-selection.set and thread.send',
+  orchestrator_capabilities: 'caller inheritance and features do not apply to an operator; providers() and query providers give the catalog',
+  t3_thread_update: 'covered by thread.metadata.update (rename, regenerate) and thread.pull-request.link/unlink',
+  'link_pull_request, unlink_pull_request, watch_pull_request, unwatch_pull_request': 'covered by thread.pull-request.link/unlink/watch with explicit host, repository and number (no URL resolution)',
+  't3_thread_launch, create_threads': 'covered by thread.launch and create (one thread per call, explicit model; no caller inheritance)',
+});
+
+const actionKind = (a) => (PROJECT_ACTIONS.includes(a) ? 'project' : NATIVE_WRITES[a] || OPS_NATIVE_WRITE_ACTIONS.includes(a) ? 'native-write' : 'command');
+
+/** Catalog of what act() and query() accept, built from the tables that define them. */
+export function opsActions() {
+  return [
+    ...ALL_ACTIONS.map((action) => {
+      const kind = actionKind(action);
+      return { action, kind, description: describeAction(action), idempotent: kind !== 'native-write' || NATIVE_IDEMPOTENT.has(action) };
+    }),
+    ...QUERY_NAMES.map((action) => NATIVE_QUERIES[action]
+      ? { action, kind: 'native-read', description: NATIVE_QUERIES[action].description, idempotent: true }
+      : { action, kind: 'read', description: READS[action].description, idempotent: true }),
+  ];
+}
+
+const SAFE_CODE = /^[a-z][a-z0-9_]{2,63}$/;
+/** Any error from the shared MCP/write code as an OpsError (code, message, details). */
+export function asOpsError(e) {
+  if (e instanceof OpsError) return e;
+  if (e instanceof NativeToolError) return new OpsError(e.native.code, e.native.message, { native: e.native, sent: false });
+  if (e instanceof NativeRpcError) return new OpsError('t3_refused', `${e.native.code}: ${e.native.message}`, { native: e.native });
+  if (e?.name === 'ZodError' || Array.isArray(e?.issues)) return new OpsError('input_invalid', (e.issues ?? []).map((i) => `${(i.path ?? []).join('.') || 'input'}: ${i.message}`).join('; ') || 'invalid input', { issues: e.issues });
+  if (e instanceof ForaDoEscopo) return new OpsError(/^thread /.test(e.message) ? 'thread_not_found' : /^project /.test(e.message) ? 'project_not_found' : 'not_found', e.message);
+  if (e instanceof EntradaInvalida || e instanceof CursorInvalido) return new OpsError('input_invalid', e.message);
+  if (e instanceof Cancelada) return new OpsError('cancelled', e.message);
+  if (e instanceof ErroT3) {
+    const code = e.codigo === 'prazo' ? 'timeout' : e.codigo === 'indisponivel' ? 'environment_unavailable' : e.codigo === 'environment_divergente' ? 'environment_mismatch' : e.status ? `http_${e.status}` : 't3_error';
+    return new OpsError(code, e.message);
+  }
+  if (SAFE_CODE.test(e?.message ?? '')) return new OpsError(e.message, e.message);
+  return new OpsError('failed', e?.message ?? String(e));
+}
+
 const threadSummary = (t, projects) => ({
   threadId: t.id, title: t.title, projectId: t.projectId, project: projects.get(t.projectId) ?? null,
   status: t.status, createdBy: t.createdBy, creationSource: t.creationSource ?? null,
   parentThreadId: t.lineage?.parentThreadId ?? null, settledAt: t.settledAt ?? null, snoozedUntil: t.snoozedUntil ?? null,
   archivedAt: t.archivedAt ?? null, pendingRequest: t.pendingRuntimeRequest?.kind ?? null, updatedAt: t.updatedAt ?? null,
-  modelSelection: t.modelSelection ?? null, runtimeMode: t.runtimeMode ?? null,
+  modelSelection: t.modelSelection ?? null, effort: resumoModelo(t.modelSelection)?.effort ?? null, runtimeMode: t.runtimeMode ?? null,
 });
 
 export function createOps(environment, {
@@ -164,14 +264,20 @@ export function createOps(environment, {
     }
     const scopes = (await client.sessao()).scopes ?? [];
     if (!scopes.includes(READ_SCOPE)) throw new OpsError('token_scope_missing', `token of ${environment.alias} lacks ${READ_SCOPE}`);
-    session = { client, base, environmentId: desc.environmentId, label: desc.label, scopes };
+    session = { client, base, environmentId: desc.environmentId, label: desc.label, version: desc.serverVersion ?? null, scopes };
     return session;
   }
 
+  async function requireOperate() {
+    const s = await open();
+    if (!s.scopes.includes(OPERATE_SCOPE)) throw new OpsError('token_scope_missing', `token of ${environment.alias} lacks ${OPERATE_SCOPE} (read-only pairing)`);
+    return s;
+  }
+
+  // Read RPCs (server.getConfig, archived shell, settings, search…) need orchestration:read only.
   async function socket() {
     if (rpc?.available) return rpc;
-    const { client, base, scopes } = await open();
-    if (!scopes.includes(OPERATE_SCOPE)) throw new OpsError('token_scope_missing', `token of ${environment.alias} lacks ${OPERATE_SCOPE} (read-only pairing)`);
+    const { client, base } = await open();
     const ticket = await client.ticketWs();
     const url = new URL('/ws', base);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -183,20 +289,30 @@ export function createOps(environment, {
       ws.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
       ws.addEventListener('error', () => { clearTimeout(timer); reject(new OpsError('environment_unavailable', 'WebSocket refused')); }, { once: true });
     });
-    const current = new StagingRpcTransport({ socket: ws, allowLoopback: true, timeoutMs: rpcTimeoutMs, onFailure: () => { if (rpc === current) rpc = null; } });
+    const current = new StagingRpcTransport({ socket: ws, allowLoopback: true, allowInsecureWs: environment.insecureHttp, timeoutMs: rpcTimeoutMs, onFailure: () => { if (rpc === current) rpc = null; } });
     rpc = current;
     return current;
   }
 
-  // A typed T3 refusal comes back as NativeRpcError; anything else on the socket is uncertain.
-  async function invoke(method, payload) {
+  // A typed T3 refusal comes back as NativeRpcError; anything else on the socket is uncertain,
+  // except a refusal raised before the frame was sent.
+  async function invoke(method, payload, { write = true } = {}) {
+    if (write) await requireOperate();
     const transport = await socket();
     try {
       return await transport.invoke(method, payload, { nativeErrors: true });
     } catch (e) {
       if (e.native) throw new OpsError('t3_refused', `${e.native.code}: ${e.native.message}`, { native: e.native });
+      if (['rpc_unavailable', 'control_socket_closed', 'too_many_dispatches'].includes(e.message)) throw new OpsError('not_sent', `${method}: ${e.message}; nothing was sent`);
+      if (!write) throw new OpsError('environment_unavailable', `${method}: ${e.message}`);
       throw new OpsError('uncertain', `${method}: ${e.message}; the effect may or may not have happened, read before repeating`);
     }
+  }
+  const read = (method, payload = {}) => invoke(method, payload, { write: false });
+
+  /** Archived threads (WS orchestration.getArchivedShellSnapshot; the HTTP shell has active ones). */
+  async function archivedThreads() {
+    return (await read('orchestration.getArchivedShellSnapshot', {})).threads ?? [];
   }
 
   async function shell() {
@@ -210,12 +326,63 @@ export function createOps(environment, {
 
   async function threadOrFail(threadId) {
     const s = await shell();
+    if (!s.threads.has(threadId)) for (const a of await archivedThreads().catch(() => [])) s.threads.set(a.id, a);
     const t = s.threads.get(threadId);
     if (!t || t.deletedAt) throw new OpsError('thread_not_found', `${threadId}: not found in ${environment.alias}`);
     return { s, t };
   }
 
   const dispatch = (command) => invoke('orchestration.dispatchCommand', command);
+
+  // Full thread count of a project: HTTP shell (active) + archived snapshot at the same sequence.
+  async function occupancy(projectId) {
+    const { client } = await open();
+    try {
+      return await lerOcupacao({ projectId, readActive: () => client.shell(), readArchived: () => read('orchestration.getArchivedShellSnapshot', {}) });
+    } catch { throw new OpsError('project_count_incomplete', 'could not count the project threads (active and archived); nothing was sent'); }
+  }
+  // A delete can leave threads another client created meanwhile: report them (never throws).
+  async function afterDelete(projectId) {
+    let count;
+    try { count = await occupancy(projectId); } catch { return { postCheck: 'unavailable' }; }
+    if (!count?.complete) return { postCheck: 'incomplete' };
+    return count.total > 0 ? { postCheck: 'live_threads_remain', liveThreadsAfterDelete: count.total } : { postCheck: 'clean', liveThreadsAfterDelete: 0 };
+  }
+
+  // The MCP read code over this one environment, with the operator's scope (every project).
+  async function registry() {
+    const s = await open();
+    const r = { alias: environment.alias, environmentId: s.environmentId, escopo: criarEscopoOperador(environment.alias), ssh: environment.ssh, projetosPermitidos: [] };
+    const info = { nome: s.label, versao: s.version };
+    const mine = (k) => k === undefined || k === environment.alias || k === s.environmentId || environment.aliases.includes(k);
+    return {
+      r,
+      registros: [r],
+      resolver: (k) => { if (mine(k)) return r; throw new ForaDoEscopo(`environment "${k}" is not ${environment.alias}; ops reads only its own environment`); },
+      identidade: () => ({ alias: environment.alias, environmentId: s.environmentId }),
+      conectar: async () => ({ cliente: s.client, info }),
+      usar: async (_r, fn) => fn(s.client, info),
+      falhou() {},
+    };
+  }
+
+  /** HTTP shell, with the archived threads added when `threadId` is not among the active ones. */
+  async function shellFor(threadId) {
+    const raw = await (await open()).client.shell();
+    if ((raw.threads ?? []).some((t) => t.id === threadId) || (raw.archivedThreads ?? []).some((t) => t.id === threadId)) return raw;
+    return { ...raw, archivedThreads: [...(raw.archivedThreads ?? []), ...await archivedThreads().catch(() => [])] };
+  }
+
+  // Same reads as the native handler, through this environment's client and RPCs.
+  const native = {
+    rpc: (method, payload) => read(method, payload),
+    thread: async (id) => (await open()).client.threadCompleto(id),
+    projects: async () => (await open()).client.projetos(),
+    environment: async () => (await open()).client.ambiente(),
+  };
+
+  const opsChamar = (o) => chamar({ ...o, WebSocketImpl });
+  const opsAssinar = (o) => assinar({ ...o, WebSocketImpl });
 
   return {
     environment,
@@ -225,10 +392,20 @@ export function createOps(environment, {
       return { alias: environment.alias, environmentId: s.environmentId, label: s.label };
     },
 
-    /** Threads that are neither settled, archived nor deleted. */
-    async list() {
+    /**
+     * Threads that are neither settled, archived nor deleted. `settled: true` lists the settled
+     * ones instead (as the native t3_thread_list), `archived: true` the archived ones (read from
+     * the archived shell snapshot); both together list settled or archived.
+     */
+    async list({ settled = false, archived = false } = {}) {
       const s = await shell();
-      return [...s.threads.values()].filter((t) => !t.settledAt && !t.archivedAt && !t.deletedAt).map((t) => threadSummary(t, s.projects));
+      if (archived) for (const a of await archivedThreads()) if (!s.threads.has(a.id)) s.threads.set(a.id, a);
+      const keep = (t) => {
+        if (t.deletedAt) return false;
+        if (!settled && !archived) return !t.settledAt && !t.archivedAt;
+        return (settled && Boolean(t.settledAt) && !t.archivedAt) || (archived && Boolean(t.archivedAt));
+      };
+      return [...s.threads.values()].filter(keep).map((t) => threadSummary(t, s.projects));
     },
 
     async thread(threadId) {
@@ -281,7 +458,7 @@ export function createOps(environment, {
 
     /** Provider catalog of this environment (server.getConfig), the source create validates against. */
     async providers() {
-      const config = await invoke('server.getConfig', {});
+      const config = await read('server.getConfig', {});
       const { environmentId } = await open();
       if (config?.environment?.environmentId && config.environment.environmentId !== environmentId) throw new OpsError('environment_mismatch', 'server.getConfig answered for another environment');
       if (!Array.isArray(config?.providers)) throw new OpsError('providers_unavailable', 'server.getConfig returned no providers');
@@ -295,6 +472,7 @@ export function createOps(environment, {
      */
     async send(threadId, { text, messageId, delivery = 'queue_after_active', createdBy = 'agent', creationSource = 'mcp' }) {
       if (!text?.trim()) throw new OpsError('text_empty', 'empty text');
+      await requireOperate();
       if (!messageId) throw new OpsError('message_id_required', 'messageId required (idempotency key)');
       if (!DELIVERIES.includes(delivery)) throw new OpsError('delivery_invalid', `delivery must be one of ${DELIVERIES.join(', ')}`);
       const { t } = await threadOrFail(threadId);
@@ -321,7 +499,7 @@ export function createOps(environment, {
       if (!title?.trim()) throw new OpsError('title_required', 'title required');
       if (!instanceId || !model) throw new OpsError('model_required', 'instanceId and model required');
       if (!RUNTIME_MODES.includes(runtimeMode)) throw new OpsError('runtime_mode_invalid', `runtimeMode must be one of ${RUNTIME_MODES.join(', ')}`);
-      const { environmentId } = await open();
+      const { environmentId } = await requireOperate();
       const threadId = deriveUuid('t3-connector-ops:create', environmentId, clientRequestId);
       const before = await shell();
       const existing = before.threads.get(threadId);
@@ -349,6 +527,111 @@ export function createOps(environment, {
       const iso = until.toISOString();
       return (await this.mutate([threadId], (id) => ({ type: 'thread.snooze', commandId: deriveId(namespace, 'snooze', id, iso), threadId: id, snoozedUntil: iso }),
         (t) => Boolean(t?.snoozedUntil) && Date.parse(t.snoozedUntil) === until.getTime()))[0];
+    },
+
+    /** Everything act() and query() accept: [{action, kind, description, idempotent}]. */
+    actions() {
+      return opsActions();
+    },
+
+    /**
+     * Any connector action (ALL_ACTIONS) with the operator's token. Validation is the MCP one
+     * (parseAction: same zod schemas and errors; modelSelection against server.getConfig; the
+     * project-delete guard on a fresh active+archived count). Ids are derived from (namespace,
+     * environmentId, action, operationId): the same operation repeated is replayed by T3, not
+     * applied again. A typed T3 refusal is OpsError t3_refused (details.native); a lost transport
+     * after the send is `uncertain` (read before repeating; repeating the same operationId is safe
+     * where T3 accepts a commandId). Returns {action, operationId, commandId, ids?, result}.
+     */
+    async act(action, input = {}, { operationId, namespace = 't3-connector-ops' } = {}) {
+      if (!ALL_ACTIONS.includes(action)) throw new OpsError('action_unknown', `unknown action: ${action}`, { known: ALL_ACTIONS });
+      if (action === 'thread.send') operationId ??= input?.clientRequestId;
+      if (typeof operationId !== 'string' || !operationId.trim() || operationId.length > 1024) throw new OpsError('operation_id_required', 'operationId required (idempotency key, 1-1024 characters)');
+      let parsed;
+      try { parsed = parseAction(action, input); } catch (e) { throw asOpsError(e); }
+      const { spec, input: data } = parsed;
+      if (action === 'thread.send' && data.clientRequestId !== operationId) throw new OpsError('request_id_mismatch', 'thread.send: clientRequestId must equal operationId');
+      const { environmentId } = await requireOperate();
+      const derive = (...extra) => deriveUuid(namespace, environmentId, action, operationId, ...extra);
+      const commandId = derive();
+      const ids = {};
+      // Serialized with this process's other project-scoped writes (the Dispatcher's key).
+      const release = data.projectId && (isProjectAction(action) || action === 'thread.launch') ? await lockProject(JSON.stringify([environmentId, [data.projectId]])) : null;
+      try {
+        if (data.modelSelection) await validarModelSelection({ providers: () => this.providers() }, data.modelSelection);
+        if (isProjectAction(action)) guardProjectDelete(action, data, await occupancy(data.projectId));
+        let method = spec.method, payload;
+        if (spec.native) ({ method, payload } = await spec.build({ input: data, native, commandId }));
+        else {
+          payload = { ...spec.encode(data), commandId };
+          if (action === 'thread.send') payload.messageId = ids.messageId = commandId;
+          if (action === 'thread.launch') {
+            payload.threadId = ids.threadId = derive('thread');
+            if (payload.initialMessage) payload.initialMessage = { ...payload.initialMessage, messageId: ids.messageId = derive('message') };
+          }
+          if (action === 'thread.fork') payload.targetThreadId = ids.targetThreadId = derive('thread');
+        }
+        const raw = await invoke(method, payload, { write: true });
+        let result;
+        if (spec.native) {
+          try { result = spec.result ? await spec.result({ raw, method, payload, input: data, native }) : raw; } catch { result = { raw, resultUnavailable: true }; }
+        } else result = projectReceipt(raw) ?? ('threadId' in raw ? { threadId: raw.threadId, resumed: raw.resumed } : { sequence: raw.sequence });
+        if (isProjectAction(action)) result = { ...result, ...await afterDelete(data.projectId) };
+        return { action, operationId, commandId: payload.commandId ?? null, ...(Object.keys(ids).length ? { ids } : {}), result };
+      } catch (e) {
+        throw asOpsError(e);
+      } finally { release?.(); }
+    },
+
+    /**
+     * Any read by name (QUERY_NAMES): the MCP reads of servidor.mjs (thread, pending_requests,
+     * messages, search, threads, projects, providers, attention, control_plane, wait, read_batch)
+     * and the native-tool reads by their tool name. The result is what the MCP tool returns.
+     */
+    async query(name, input = {}) {
+      try {
+        if (NATIVE_QUERIES[name]) {
+          return await NATIVE_QUERIES[name].run({ input: NATIVE_QUERIES[name].schema.parse(input ?? {}), native, authorize: async () => {} });
+        }
+        const def = READS[name];
+        if (!def) throw new OpsError('query_unknown', `unknown query: ${name}`, { known: QUERY_NAMES });
+        const amb = await registry();
+        const { r } = amb;
+        const environmentId = amb.identidade().environmentId;
+        const own = { ...(input ?? {}) };
+        if (name === 'read_batch' && Array.isArray(own.items)) own.items = own.items.map((i) => (i && typeof i === 'object' && i.environment === undefined ? { ...i, environment: environment.alias } : i));
+        if ('environment' in def.schema.shape) own.environment ??= environment.alias;
+        const args = def.schema.parse(own);
+        amb.resolver(args.environment);
+        const env = amb.identidade();
+        const client = (await open()).client;
+        switch (name) {
+          case 'thread': return { environment: env, ...await lerThreadDetalhada({ ...args, r, cliente: client, shell: await shellFor(args.threadId) }) };
+          case 'messages': return { environment: env, ...await mensagensDaThread({ ...args, r, cliente: client, shell: await shellFor(args.threadId) }) };
+          case 'pending_requests': {
+            const thread = r.escopo.exigirThread(await shellFor(args.threadId), args.threadId);
+            const pending = resumirPedidosRuntime((await client.thread(args.threadId)).projection ?? {}, thread);
+            if (args.requestId === undefined) return { environment: env, threadId: args.threadId, total: pending.length, pendingRequests: pending };
+            const request = pending.find((p) => p.requestId === args.requestId);
+            if (!request) throw new OpsError('request_not_found', `no pending request ${args.requestId} in thread ${args.threadId}`, { pending: pending.map((p) => p.requestId) });
+            return { environment: env, threadId: args.threadId, request };
+          }
+          case 'search': return await buscarThreads(amb, args, { resumir: (t, p) => resumoDaThread(t, p) });
+          case 'threads': return await executarListagem(amb, LISTAGEM_THREADS, args);
+          case 'projects': return await executarListagem(amb, LISTAGEM_PROJETOS, args);
+          case 'attention': return await executarListagem(amb, LISTAGEM_ATENCAO, args);
+          case 'providers': return await executarListagem(amb, listagemProviders({ chamarImpl: opsChamar }), args);
+          case 'control_plane': return await snapshotPlanoControle(amb, args, { resumir: resumoDaThread });
+          case 'wait': return await aguardarThread(amb, args, { tetoMs: OPS_WAIT_MAX_MS, assinarImpl: opsAssinar });
+          case 'read_batch': {
+            const { maxCharacters: maxCaracteres = 1500 } = args;
+            return await lerThreadsEmLote(amb, args, { ler: ({ r: rr, cliente, shell: sh, threadId, signal }) => lerThreadDetalhada({ r: rr, cliente, shell: sh, threadId, signal, maxCharacters: maxCaracteres }) });
+          }
+          default: throw new OpsError('query_unknown', `unknown query: ${name}`, { known: QUERY_NAMES, environmentId });
+        }
+      } catch (e) {
+        throw asOpsError(e);
+      }
     },
 
     async mutate(threadIds, command, confirmed) {

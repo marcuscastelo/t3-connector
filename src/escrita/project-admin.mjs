@@ -33,6 +33,11 @@ export const PROJECT_SCHEMAS = Object.freeze({
   }).strict(),
 });
 
+export const PROJECT_DESCRIPTIONS = Object.freeze({
+  'project.delete': 'Deletes an EMPTY project (no active or archived threads) from T3. Refused if any thread exists; never escalates to force. The workspace directory on disk is kept.',
+  'project.delete-force': 'Deletes a project AND all its threads (active and archived), cancelling their pending work. Only on an explicit request to delete the project with its threads: requires force=true, confirmProjectId equal to projectId and expectedThreadCount from t3_contar_threads_projeto; refused if the count changed or a thread has an active run. The workspace directory on disk is kept.',
+});
+
 // Statuses of a run that is still doing or waiting for work (OrchestrationV2RunStatus).
 const BUSY = new Set(['preparing', 'queued', 'starting', 'running', 'waiting']);
 

@@ -655,7 +655,7 @@ plugin keeps its lease.
 
 ```sh
 t3-connector-ops environments
-t3-connector-ops <env> list                       # threads not settled, archived or deleted
+t3-connector-ops <env> list [--settled] [--archived]  # default: not settled, archived or deleted
 t3-connector-ops <env> read <threadId> [--since P] [--last N]
 t3-connector-ops <env> timeline <threadId> [--message-ids A,B] [--not-before ISO]
 t3-connector-ops <env> projects | providers
@@ -664,14 +664,17 @@ t3-connector-ops <env> create --project P --title T --instance I --model M [--ef
                               [--runtime-mode M] [--worktree BASE[:BRANCH]] --client-request-id ID < brief
 t3-connector-ops <env> settle <threadId>...
 t3-connector-ops <env> snooze <threadId> <ISO datetime with offset>
+t3-connector-ops <env> actions                    # every action and read below, with kind and description
+t3-connector-ops <env> act <action> [--operation-id ID] [--namespace NS] [--input JSON | < JSON]
+t3-connector-ops <env> query <name> [--input JSON | < JSON]
 ```
 
 - **Environments**: `~/.config/t3-connector/ops.json` (or `T3_CONNECTOR_OPS_CONFIG`), or the same
   JSON in `T3_CONNECTOR_OPS_ENVIRONMENTS`: `{"environments": {"mac": {"url": "https://…",
   "tokenFile": "…", "aliases": ["laptop"], "environmentId": "…"}}}`. Each entry has `url` or
   `ssh`, a `tokenFile` (mode 600, private directory) whose token has
-  `orchestration:read` (enough for list, thread, read, timeline and projects) and, for send,
-  create, settle, snooze and providers, `orchestration:operate`; optional extra `aliases` and an optional
+  `orchestration:read` (enough for list, thread, read, timeline, projects, providers and query)
+  and, for send, create, settle, snooze and act, `orchestration:operate`; optional extra `aliases` and an optional
   `environmentId` that the server descriptor must match. `url` is HTTPS or loopback HTTP;
   `"insecureHttp": true` allows plain HTTP to another host, only for a network that encrypts
   by itself (for example a tailnet).
@@ -687,6 +690,47 @@ t3-connector-ops <env> snooze <threadId> <ISO datetime with offset>
 - **Confirmation**: every mutation is read back. Settle and snooze refuse a thread that is
   running or has a pending runtime request; `send` reports `delivered` or `queued` (behind an
   active run).
+- **Every action (`act`)**: the same actions as the write tools, from the same table
+  (`ALL_ACTIONS`): the T3 commands (`thread.*`, `run.interrupt`, `queued-run.*`,
+  `runtime-request.*`, `provider.switch`, `thread.launch`, `thread.send` with the four
+  deliveries, `thread.fork`, `delegated_task.*`, ...), `project.delete[-force]` (same guard on a
+  fresh active + archived count), the native-tool writes (`t3_project_create`, `schedule_task`,
+  ...) and three operator-only wrappers that no MCP catalog or consent gains:
+  `t3_thread_configure` (change account/instance, model and effort of a thread:
+  `thread.model-selection.set` on the same instance, `provider.switch` on another, as the native
+  tool decides), `thread.pull-request.watch` (`watching: true|false`; needs a T3 server with that
+  command) and `t3_preview_close`. Input is validated by the same zod schemas (same error codes,
+  e.g. `target_run_id_required`), and any `modelSelection` against `server.getConfig` before
+  sending. Output: `{action, operationId, commandId, ids?, result}`; `result` is the T3 receipt
+  (`{sequence}`, `{threadId, resumed}`, the project) or the native tool's result.
+- **Idempotency of `act`**: ops is stateless (no journal). The commandId, and the messageId of
+  `thread.send`, the threadId of `thread.launch` and the targetThreadId of `thread.fork`, derive
+  from (namespace, environmentId, action, operationId), so repeating an operation makes T3 replay
+  its receipt instead of applying it again. `thread.send` takes `clientRequestId` as the
+  operationId. Native writes that T3 accepts without a commandId (`idempotent: false` in
+  `actions`: clone, preferences, scheduled task update/delete/run, project create from a title,
+  preview close) repeat their effect. A typed T3 answer is `t3_refused` with `details.native`
+  (for a sent command it does not prove that nothing happened); a lost transport after the send
+  is `uncertain`: read before repeating, or repeat the same operationId.
+- **Every read (`query`)**: the MCP reads by a stable name, built by the same code and returning
+  what the MCP tool returns, always in this environment: `thread` (t3_thread: model with effort,
+  runtimeMode, pendingRequests with content and nextAction, activeRun, latestRun,
+  providerSession; finds archived threads), `pending_requests` (`{threadId, requestId?}`; every
+  kind, approvals included), `messages`, `search`, `threads`, `projects`, `providers`,
+  `attention`, `control_plane`, `wait` (event-driven, `timeoutMs` up to 300000 ms here, 5000 in
+  MCP) and `read_batch` (items need only `threadId`); plus the native-tool reads by tool name
+  (`t3_thread_configuration`, `t3_queue_list`, `t3_worktree_status`, `list_scheduled_tasks`,
+  `t3_preview_list`, ...).
+- **List**: `--settled` lists the settled threads instead (as the native `t3_thread_list`),
+  `--archived` the archived ones (from the archived shell snapshot); both list either. Every
+  summary carries `modelSelection` and `effort` (`reasoningEffort`, else `effort`, as `t3_thread`).
+- **Not offered**, with the reason in `OPS_OMITTED` (`src/ops.mjs`): preview automation and
+  devices (host-bound), attachments (signed upload), the native `t3_thread_read` timeline,
+  `list_thread_pull_requests`, `t3_worktree_handoff`, `delegate_task`/`task_status`/`task_cancel`
+  as composed tools (their building blocks are actions) and `thread.conditional-send` (needs the
+  write journal).
+- **Transport**: with `"insecureHttp": true` the WebSocket follows the plain `http:` base
+  (`ws:` to that host); otherwise `ws:` is accepted only on `127.0.0.1` (SSH tunnel).
 
 ## OAuth session profile (experimental)
 

@@ -18,13 +18,17 @@ const RESULTS={
 // (scheduledTasks.delete answers {id}).
 const object=z.object({}).passthrough();
 // server.getConfig: provider configuration, read before a modelSelection write (model-selection.mjs).
-for(const m of ['server.getConfig','projects.createNew','sourceControl.cloneRepository','server.getSettings','server.updateSettings','orchestration.searchThreads','vcs.listRefs','scheduledTasks.list','scheduledTasks.upsert','scheduledTasks.delete','scheduledTasks.runNow']) RESULTS[m]=r=>object.parse(r);
+// preview.close answers no value (Schema.Void); preview.list an object (operator core only).
+RESULTS['preview.close']=r=>r===undefined||r===null?{}:object.parse(r);
+for(const m of ['preview.list','server.getConfig','projects.createNew','sourceControl.cloneRepository','server.getSettings','server.updateSettings','orchestration.searchThreads','vcs.listRefs','scheduledTasks.list','scheduledTasks.upsert','scheduledTasks.delete','scheduledTasks.runNow']) RESULTS[m]=r=>object.parse(r);
 export class StagingRpcTransport {
  #pending=new Map(); #next=1; #closed=false;
- constructor({socket,onFailure,timeoutMs=10000,maxPending=64,allowLoopback=false}) {
+ // allowInsecureWs: plain ws: to any host, only when the operator's environment declared insecureHttp
+ // (a network that encrypts by itself, e.g. a tailnet); the socket URL then follows its http: base.
+ constructor({socket,onFailure,timeoutMs=10000,maxPending=64,allowLoopback=false,allowInsecureWs=false}) {
   if(!onFailure || socket.readyState!==1) throw new Error('control_socket_not_ready');
   const url=new URL(socket.url);
-  if((url.protocol!=='wss:' && !(allowLoopback && url.protocol==='ws:' && url.hostname==='127.0.0.1')) || url.pathname!=='/ws' || url.searchParams.get('orchestrationProtocol')!=='2') throw new Error('control_socket_invalid');
+  if((url.protocol!=='wss:' && !(url.protocol==='ws:' && (allowInsecureWs || (allowLoopback && url.hostname==='127.0.0.1')))) || url.pathname!=='/ws' || url.searchParams.get('orchestrationProtocol')!=='2') throw new Error('control_socket_invalid');
   Object.assign(this,{socket,onFailure,timeoutMs,maxPending});
   socket.addEventListener('message',event=>this.#receive(event.data));
   socket.addEventListener('close',()=>this.fail());socket.addEventListener('error',()=>this.fail());

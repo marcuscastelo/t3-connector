@@ -37,9 +37,10 @@ const ultimoRunAtivo = (runs) => ultimoRun((runs ?? []).filter((x) => ATIVIDADE.
  *   Sem runId, segue o run ativo da thread e, sem run ativo, o último run: o último run
  *   pode ser uma mensagem da fila já cancelada enquanto o ativo continua.
  * @param signal cancelamento vindo do cliente MCP
+ * @param tetoMs teto do prazo: TETO_MS no MCP; o núcleo ops (CLI) passa um teto maior
  */
-export async function aguardarThread(ambientes, entrada, opcoes = {}) {
-  const timeoutMs = Math.min(Math.max(1, Math.trunc(entrada.timeoutMs)), TETO_MS);
+export async function aguardarThread(ambientes, entrada, { tetoMs = TETO_MS, ...opcoes } = {}) {
+  const timeoutMs = Math.min(Math.max(1, Math.trunc(entrada.timeoutMs)), tetoMs);
   // Timer real (não AbortSignal.timeout) para o prazo valer mesmo sem outro I/O pendente.
   const controle = new AbortController();
   const timer = setTimeout(() => controle.abort(new DOMException('prazo da espera', 'TimeoutError')), timeoutMs);

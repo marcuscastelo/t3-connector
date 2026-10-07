@@ -3,8 +3,8 @@ import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { digest, grantDoAmbiente } from './gate.mjs';
 import { exigirIdentidade } from './identidade.mjs';
-import { PROJECT_ACTIONS, PROJECT_SCHEMAS, isProjectAction, guardProjectDelete, lockProject } from './project-admin.mjs';
-import { NATIVE_WRITES, NATIVE_WRITE_ACTIONS, NativeToolError, NativeRpcError } from './native.mjs';
+import { PROJECT_ACTIONS, PROJECT_DESCRIPTIONS, PROJECT_SCHEMAS, isProjectAction, guardProjectDelete, lockProject } from './project-admin.mjs';
+import { NATIVE_WRITES, NATIVE_WRITE_ACTIONS, OPS_NATIVE_WRITES, OPS_NATIVE_WRITE_ACTIONS, NativeToolError, NativeRpcError } from './native.mjs';
 import { validarModelSelection } from './model-selection.mjs';
 const str=z.string().trim().min(1).max(1024), id=str;
 const model=z.object({instanceId:str.describe('Exact ID of the provider instance configured in the chosen environment (instanceId in t3_providers); keep case, underscores and hyphens, for example claudeAgent_custom.'),model:str.describe('Exact model ID for that instance (models[].slug in t3_providers), including custom models, for example claude-opus-5-5.'),options:z.array(z.object({id:str,value:z.union([z.string(),z.boolean()])}).strict()).optional().describe('Model options by exact descriptor id, for example [{id:"fastMode",value:true},{id:"reasoningEffort",value:"high"}]: boolean descriptors take true/false, select descriptors the id of one choice. Omitted options keep T3 defaults; the connector adds none.')}).strict().describe('No prior t3_providers call is needed: before sending, the write checks instanceId, model and options against the live provider configuration of the environment and refuses with the exact problem and the offered values (provider_instance_unavailable, provider_model_unavailable, model_option_unsupported, model_option_value_unsupported, model_capabilities_unknown); nothing is sent then.');
@@ -12,7 +12,7 @@ const runtimeMode=z.enum(['approval-required','auto-accept-edits','auto','full-a
 const base={threadId:id};
 const specs=new Map();
 function command(action,type,fields={},fixed={},refs=['threadId']) {
- specs.set(action,{schema:z.object({...base,...fields}).strict(),refs,method:'orchestration.dispatchCommand',encode:p=>({type,commandId:randomUUID(),...p,...fixed})});
+ specs.set(action,{type,schema:z.object({...base,...fields}).strict(),refs,method:'orchestration.dispatchCommand',encode:p=>({type,commandId:randomUUID(),...p,...fixed})});
 }
 for(const suffix of ['archive','unarchive','delete','settle','pin','unpin','unsnooze','mark-unread']) command(`thread.${suffix}`,`thread.${suffix}`,{},suffix==='unsnooze'?{reason:'user'}:{});
 command('thread.unsettle','thread.unsettle',{}, {reason:'user'});
@@ -43,7 +43,7 @@ const workspace=z.discriminatedUnion('type',[
  z.object({type:z.literal('worktree'),baseRef:str,branch:str.optional(),startFromOrigin:z.boolean().optional()}).strict()]);
 // Canonical path for a new branch + worktree: agents must not go looking for a separate creation tool.
 export const LAUNCH_DESCRIPTION='Launches a new thread in projectId. This is the canonical way to open an implementation thread on a NEW branch and worktree: workspaceStrategy {type:\'worktree\', baseRef, branch?, startFromOrigin?} makes T3 create the branch from baseRef and its worktree and bind the thread to it in this one call. There is no separate branch or worktree creation tool; do not look for one. {type:\'existing_worktree\', worktreePath} reuses an approved worktree; {type:\'root\'} uses the project checkout. text is the first message.';
-specs.set('thread.launch',{method:'orchestration.launchThread',refs:[],schema:z.object({projectId:id,title:str,modelSelection:model,workspaceStrategy:workspace,runtimeMode,text:z.string().max(100000).optional()}).strict(),encode:p=>{const {text,...rest}=p;return {...rest,commandId:randomUUID(),threadId:randomUUID(),interactionMode:'default',...(text!==undefined?{initialMessage:{messageId:randomUUID(),text,attachments:[]}}:{})};}});
+specs.set('thread.launch',{type:'orchestration.launchThread',method:'orchestration.launchThread',refs:[],schema:z.object({projectId:id,title:str,modelSelection:model,workspaceStrategy:workspace,runtimeMode,text:z.string().max(100000).optional()}).strict(),encode:p=>{const {text,...rest}=p;return {...rest,commandId:randomUUID(),threadId:randomUUID(),interactionMode:'default',...(text!==undefined?{initialMessage:{messageId:randomUUID(),text,attachments:[]}}:{})};}});
 // One branch per mode: tools/list carries conditional requirements, not just runtime refinements.
 export const SEND_DESCRIPTIONS=Object.freeze({
  start_immediately:'Starts a new run when there is no active run to preserve. Does not correct or interrupt a current run. If a run is active, T3 may turn this into a queued message: read t3_thread first; to correct the current run use steer_active with targetRunId.',
@@ -60,20 +60,20 @@ const sendSchema=z.discriminatedUnion('delivery',[
  z.object({...sendBase,delivery:z.literal('restart_active').describe(SEND_DESCRIPTIONS.restart_active),targetRunId}).strict(),
  z.object({...sendBase,delivery:z.literal('queue_after_active').describe(SEND_DESCRIPTIONS.queue_after_active),deferUntilActiveCompletes:z.literal(true,{error:'queue_after_active requires explicit intent: pass deferUntilActiveCompletes=true only if deferring was explicitly requested; to correct the current run use steer_active + targetRunId'}).describe('Confirms an explicit request to run only after the current run. Never infer true from a correction, a conversation follow-up or reluctance to interrupt.')}).strict(),
 ]).describe(SEND_DESCRIPTION);
-specs.set('thread.send',{method:'orchestration.dispatchCommand',refs:['threadId'],schema:sendSchema,encode:p=>({type:'message.dispatch',createdBy:'user',creationSource:'mcp',commandId:p.clientRequestId,messageId:p.clientRequestId,threadId:p.threadId,text:p.text,attachments:[],dispatchMode:{type:p.delivery,...(p.targetRunId?{targetRunId:p.targetRunId}:{})}})});
+specs.set('thread.send',{type:'message.dispatch',method:'orchestration.dispatchCommand',refs:['threadId'],schema:sendSchema,encode:p=>({type:'message.dispatch',createdBy:'user',creationSource:'mcp',commandId:p.clientRequestId,messageId:p.clientRequestId,threadId:p.threadId,text:p.text,attachments:[],dispatchMode:{type:p.delivery,...(p.targetRunId?{targetRunId:p.targetRunId}:{})}})});
 
 command('thread.metadata.update','thread.metadata.update',{title:str.optional(),regenerateTitle:z.boolean().optional(),branch:str.nullable().optional(),worktreePath:str.nullable().optional(),expectedWorktreePath:str.nullable().optional(),expectedEmpty:z.boolean().optional()});
 command('thread.pull-request.link','thread.pull-request.link',{host:str,repository:str,number:z.number().int().positive(),url:z.url(),source:z.enum(['manual','created','agent','stack','stack-dismissed'])});
 command('thread.pull-request.unlink','thread.pull-request.unlink',{host:str,repository:str,number:z.number().int().positive()});
 const sourcePoint=z.discriminatedUnion('type',[z.object({type:z.literal('latest_stable')}).strict(),z.object({type:z.literal('run'),runId:id}).strict(),z.object({type:z.literal('checkpoint'),checkpointId:id}).strict()]);
-specs.set('thread.fork',{method:'orchestration.dispatchCommand',refs:['sourceThreadId'],schema:z.object({sourceThreadId:id,sourcePoint,title:str.optional()}).strict(),encode:p=>({type:'thread.fork',commandId:randomUUID(),targetThreadId:randomUUID(),createdBy:'user',creationSource:'mcp',...p})});
-specs.set('thread.merge_back',{method:'orchestration.dispatchCommand',refs:['sourceThreadId','targetThreadId'],schema:z.object({sourceThreadId:id,targetThreadId:id,sourcePoint}).strict(),encode:p=>({type:'thread.merge_back',commandId:randomUUID(),createdBy:'user',creationSource:'mcp',...p})});
-specs.set('delegated_task.request',{method:'orchestration.dispatchCommand',refs:['parentThreadId'],schema:z.object({parentThreadId:id,parentRunId:id,parentNodeId:id,task:str,title:str.optional(),modelSelection:model,runtimeMode,completionWake:z.enum(['always','settled_only']).optional()}).strict(),encode:p=>({type:'delegated_task.request',commandId:randomUUID(),createdBy:'user',creationSource:'mcp',interactionMode:'default',...p})});
+specs.set('thread.fork',{type:'thread.fork',method:'orchestration.dispatchCommand',refs:['sourceThreadId'],schema:z.object({sourceThreadId:id,sourcePoint,title:str.optional()}).strict(),encode:p=>({type:'thread.fork',commandId:randomUUID(),targetThreadId:randomUUID(),createdBy:'user',creationSource:'mcp',...p})});
+specs.set('thread.merge_back',{type:'thread.merge_back',method:'orchestration.dispatchCommand',refs:['sourceThreadId','targetThreadId'],schema:z.object({sourceThreadId:id,targetThreadId:id,sourcePoint}).strict(),encode:p=>({type:'thread.merge_back',commandId:randomUUID(),createdBy:'user',creationSource:'mcp',...p})});
+specs.set('delegated_task.request',{type:'delegated_task.request',method:'orchestration.dispatchCommand',refs:['parentThreadId'],schema:z.object({parentThreadId:id,parentRunId:id,parentNodeId:id,task:str,title:str.optional(),modelSelection:model,runtimeMode,completionWake:z.enum(['always','settled_only']).optional()}).strict(),encode:p=>({type:'delegated_task.request',commandId:randomUUID(),createdBy:'user',creationSource:'mcp',interactionMode:'default',...p})});
 for(const [action,fields] of [
  ['delegated_task.wake-policy',{completionWake:z.enum(['always','settled_only'])}],
  ['delegated_task.completion-delivery.acknowledge',{observedByRunId:id.nullable()}],
  ['delegated_task.completion-delivery.dispose',{}]]) {
- specs.set(action,{method:'orchestration.dispatchCommand',refs:['parentThreadId'],schema:z.object({parentThreadId:id,taskId:id,...fields}).strict(),encode:p=>({type:action,commandId:randomUUID(),...p})});
+ specs.set(action,{type:action,method:'orchestration.dispatchCommand',refs:['parentThreadId'],schema:z.object({parentThreadId:id,taskId:id,...fields}).strict(),encode:p=>({type:action,commandId:randomUUID(),...p})});
 }
 export const ACTIONS=Object.freeze([...specs.keys()]);
 export const INVENTORY=Object.freeze([...specs].map(([action,s])=>({action,rpc:s.method,status:'mock-only'})));
@@ -82,7 +82,30 @@ export const INVENTORY=Object.freeze([...specs].map(([action,s])=>({action,rpc:s
 for(const action of PROJECT_ACTIONS) specs.set(action,{method:'projects.mutate',refs:[],schema:PROJECT_SCHEMAS[action],encode:p=>({type:'project.delete',commandId:randomUUID(),projectId:p.projectId,force:action==='project.delete-force'})});
 // Native-tool wrappers (native.mjs): opt-in too; payload built right before the send.
 for(const action of NATIVE_WRITE_ACTIONS) specs.set(action,{native:true,refs:NATIVE_WRITES[action].refs??[],schema:NATIVE_WRITES[action].schema,build:NATIVE_WRITES[action].build,result:NATIVE_WRITES[action].result});
-export const ALL_ACTIONS=Object.freeze([...ACTIONS,...PROJECT_ACTIONS,...NATIVE_WRITE_ACTIONS]);
+// Operator-only actions (src/ops.mjs): never registered as MCP tools nor granted by a lease or an
+// OAuth session, so the MCP catalogs and consents stay as they were. thread.pull-request.watch needs
+// a T3 server with that command (T3 9bd1d800); an older one answers a typed refusal.
+command('thread.pull-request.watch','thread.pull-request.watch',{host:str,repository:str,number:z.number().int().positive(),watching:z.boolean(),link:z.object({url:z.url(),source:z.enum(['manual','created','agent','stack','stack-dismissed'])}).strict().optional()});
+for(const action of OPS_NATIVE_WRITE_ACTIONS) specs.set(action,{native:true,refs:OPS_NATIVE_WRITES[action].refs??[],schema:OPS_NATIVE_WRITES[action].schema,build:OPS_NATIVE_WRITES[action].build,result:OPS_NATIVE_WRITES[action].result});
+export const OPS_ONLY_ACTIONS=Object.freeze(['thread.pull-request.watch',...OPS_NATIVE_WRITE_ACTIONS]);
+export const ALL_ACTIONS=Object.freeze([...ACTIONS,...PROJECT_ACTIONS,...NATIVE_WRITE_ACTIONS,...OPS_ONLY_ACTIONS]);
+const RUNTIME_REQUEST_DESCRIPTIONS={
+ 'runtime-request.answer':'Answers a pending user_input runtime request using requestId and answers keyed by question ID from t3_thread.pendingRequests; thread.send does NOT answer it.',
+ 'runtime-request.approve':'Responds to a pending approval runtime request using requestId and decision from t3_thread.pendingRequests; user_input requires runtime-request.answer instead.',
+};
+// Input fields of an object schema, optional ones with "?".
+const fieldsOf=schema=>schema?.shape?Object.entries(schema.shape).map(([k,f])=>f.safeParse(undefined).success?`${k}?`:k).join(', '):null;
+/** One-line description of an action, from the same tables that define it. */
+export function describeAction(action) {
+ const s=specs.get(action);if(!s)throw new Error('action_unavailable');
+ if(PROJECT_DESCRIPTIONS[action])return PROJECT_DESCRIPTIONS[action];
+ if(action==='thread.send')return SEND_DESCRIPTION;
+ if(action==='thread.launch')return LAUNCH_DESCRIPTION;
+ if(RUNTIME_REQUEST_DESCRIPTIONS[action])return RUNTIME_REQUEST_DESCRIPTIONS[action];
+ if(s.native)return (NATIVE_WRITES[action]??OPS_NATIVE_WRITES[action]).description;
+ const fields=fieldsOf(s.schema);
+ return `Dispatches the T3 command ${s.type}${fields?` with {${fields}}`:''}.`;
+}
 export function schemaForAction(action) {const s=specs.get(action);if(!s)throw new Error('action_unavailable');return s.schema;}
 export function parseAction(action,input) {
  const s=specs.get(action);if(!s) throw new Error('action_unavailable');

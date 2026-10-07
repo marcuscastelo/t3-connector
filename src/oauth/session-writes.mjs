@@ -6,7 +6,7 @@ import { identidadeSessaoOAuth, exigirIdentidade } from '../escrita/identidade.m
 import { resolverAmbiente } from '../escrita/config.mjs';
 import { consentAll, consented } from './project-policy.mjs';
 import { redact } from './http.mjs';
-import { PROJECT_ACTIONS } from '../escrita/project-admin.mjs';
+import { PROJECT_ACTIONS, PROJECT_DESCRIPTIONS } from '../escrita/project-admin.mjs';
 import { NATIVE_WRITES, NATIVE_WRITE_ACTIONS, NATIVE_READS, ENV_SCOPED } from '../escrita/native.mjs';
 import { conditionalSend, conditionalSchema, CONDITIONAL_TOOL, CONDITIONAL_DESCRIPTION } from '../escrita/conditional.mjs';
 
@@ -80,10 +80,6 @@ const MESSAGES = {
   project_count_changed: 'the live thread count differs from expectedThreadCount; nothing was sent. Count again and confirm',
   project_confirmation_mismatch: 'confirmProjectId must repeat the exact projectId; nothing was sent',
   project_has_active_work: 'a thread of the project has an active run or a pending request; nothing was sent. Interrupt or finish it first',
-};
-const PROJECT_DESCRIPTIONS = {
-  'project.delete': 'Deletes an EMPTY project (no active or archived threads) from T3. Refused if any thread exists; never escalates to force. The workspace directory on disk is kept.',
-  'project.delete-force': 'Deletes a project AND all its threads (active and archived), cancelling their pending work. Only on an explicit request to delete the project with its threads: requires force=true, confirmProjectId equal to projectId and expectedThreadCount from t3_contar_threads_projeto; refused if the count changed or a thread has an active run. The workspace directory on disk is kept.',
 };
 const describe = action => PROJECT_DESCRIPTIONS[action] ?? (action === 'thread.send' ? SEND_DESCRIPTION
   : action === 'thread.launch' ? LAUNCH_DESCRIPTION

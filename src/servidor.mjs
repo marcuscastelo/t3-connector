@@ -27,7 +27,7 @@ import { resumirPedidosRuntime } from './pedidos-runtime.mjs';
 import { lerThreadsEmLote, MAX_ALVOS, PRAZO_MAX_MS, PRAZO_PADRAO_MS } from './leitura-lote.mjs';
 import { LIMITE_MAXIMO, LIMITE_PADRAO, snapshotPlanoControle } from './plano-controle.mjs';
 
-export const VERSAO = '0.14.0';
+export const VERSAO = '0.15.0';
 const ESTADOS = ['running', 'needs_intervention', 'completed', 'failed', 'cancelled', 'no_run', 'unknown'];
 const SO_LEITURA = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
@@ -135,13 +135,303 @@ const erro = toolErrorMapper({
   fallback: (e) => `failed to query T3: ${e?.message ?? e}`,
 });
 
-export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {} }) {
-  const servidor = new McpServer({ name: 't3-connector', version: VERSAO });
-  const nomes = ambientes.registros.map((r) => r.alias).join(', ');
+const identidadeCompleta = (ambientes, r, info) => ({ ...ambientes.identidade(r), name: info?.nome ?? null });
+
+/**
+ * Listagem sobre `ambientes`. `colher(ctx)` lê um environment e devolve `{ itens, ...extras }`,
+ * cada item já com `environment`; `montar({ colhidos, args, cobertura })` fecha a resposta
+ * como `{ campos, lista: { nome, itens } }`. Com `environment`, só aquele environment é
+ * lido e qualquer falha nele é erro (como sempre foi). Sem `environment`, a varredura lê
+ * todos: falha de um vira `environmentFailures` e `complete: false`, nunca uma lista
+ * que pareceria completa. Compartilhada pelas ferramentas MCP e pelo núcleo ops.
+ */
+export async function executarListagem(ambientes, { colher, montar }, args, { signal, opcoesBusca = {} } = {}) {
+  // Um só instante por chamada: o marcador Woke depende do relógio.
+  const agora = new Date().toISOString();
+  let varredura;
+  let explicito = null;
+  if (args.environment !== undefined) {
+    explicito = ambientes.resolver(args.environment);
+    const r = explicito;
+    const { valor, info } = await ambientes.usar(r, async (cliente, info) => ({
+      valor: await colher({ ...args, r, cliente, info, signal, agora, ambiente: identidadeCompleta(ambientes, r, info), explicito: true }),
+      info,
+    }), { signal });
+    const ambiente = identidadeCompleta(ambientes, r, info);
+    varredura = {
+      sucesso: [{ r, ambiente, valor }],
+      falhas: [],
+      cobertura: { filter: r.environmentId, selected: [r.environmentId], answered: [r.environmentId] },
+    };
+  } else {
+    varredura = await varrerAmbientes(ambientes, {
+      signal,
+      ...opcoesBusca,
+      porAmbiente: (r, cliente, info, sinal) =>
+        colher({ ...args, r, cliente, info, signal: sinal, agora, ambiente: identidadeCompleta(ambientes, r, info), explicito: false }),
+    });
+  }
+  const { campos, lista } = montar({ args, colhidos: varredura.sucesso.map((x) => x.valor), cobertura: varredura.cobertura, falhas: varredura.falhas });
+  return {
+    ...(explicito ? { environment: ambientes.identidade(explicito) } : {}),
+    ...campos,
+    ...resumoCobertura(varredura),
+    [lista.nome]: lista.itens,
+  };
+}
+
+/** Pagina itens já varridos, com o cursor amarrado aos filtros e à cobertura. */
+function paginarCoberto({ itens, partes, cobertura, cursor, limite, chave, comparar, versao }) {
+  const consulta = assinaturaCoberta(partes, cobertura);
+  try {
+    return paginar({ itens: itens.sort((a, b) => comparar(chave(a), chave(b))), consulta, cursor, limite, chave, comparar, versao });
+  } catch (e) {
+    throw traduzirCursorInvalido(e, cursor, consulta);
+  }
+}
+
+/**
+ * Schemas (shapes zod) das leituras, por ferramenta. `nomes` só entra nas descrições do
+ * campo `environment`. O núcleo ops valida com as mesmas shapes, com `environment` = o seu.
+ */
+export function formasLeitura(nomes) {
   const campoAmbiente = z.string().min(1).optional()
     .describe(`Restrict to one T3 environment (alias or environmentId): ${nomes}. Omitted: every configured environment is queried and each item says which one it came from. Project and thread IDs are only valid inside their own environment.`);
   const campoAmbienteDaThread = z.string().min(1).optional()
     .describe(`Environment where the thread lives (alias or environmentId): ${nomes}. Omitted: the thread ID is located across every configured environment and read only when every environment answered and exactly one has it; refused when it exists in more than one, when none has it, or when any environment failed or timed out (then the ID could still live there, so pass \`environment\` or retry).`);
+  const campoCursor = z.string().min(1).optional()
+    .describe('`nextCursor` from the previous page, with the same `environment` (or none) and filters; omitted: first page');
+  return {
+    t3_ambientes: {
+      check: z.boolean().optional().describe('Try to connect to each environment (up to 4 s); default true'),
+    },
+    t3_projetos: {
+      environment: campoAmbiente,
+      search: z.string().min(1).optional().describe('Filter by part of the title or projectId, ignoring case and accents'),
+      limit: z.number().int().min(1).optional().describe('Maximum projects per page; `total` always counts every match'),
+      cursor: campoCursor,
+    },
+    t3_threads: {
+      environment: campoAmbiente,
+      projectId: z.string().optional().describe('Restrict to one authorized project; a projectId belongs to one environment, so without `environment` only the environment that authorizes it contributes'),
+      state: z.enum(ESTADOS).optional().describe('Filter by state'),
+      includeNoRun: z.boolean().optional().describe('Include threads without a V2 run; default false'),
+      woke: z.boolean().optional().describe('Filter by the Woke marker: true = only woke threads, false = only threads not woke; omitted: no filter. Refused when the server cannot decide the marker for a matching thread'),
+      search: z.string().min(1).optional().describe('Filter by part of the title or threadId, ignoring case and accents'),
+      limit: z.number().int().min(1).max(50).optional().describe('Maximum threads per page; default 20'),
+      cursor: campoCursor,
+    },
+    t3_buscar_threads: {
+      search: z.string().min(1).optional().describe('Part of the title or threadId, ignoring case and accents; exclusive with threadId'),
+      threadId: z.string().min(1).optional().describe('Exact thread ID, compared literally; exclusive with search'),
+      match: z.enum(['partial', 'exact']).optional().describe('With search: partial (substring, default) or exact (whole title, or exact ID)'),
+      environment: z.string().min(1).optional().describe(`Restrict the search to one environment (alias or environmentId): ${nomes}. Omitted: every configured environment`),
+      limit: z.number().int().min(1).max(50).optional().describe('Maximum threads per page; default 20. `total` counts every match in the environments that answered'),
+      cursor: z.string().min(1).optional().describe('`nextCursor` from the previous page of the same search; omitted: first page'),
+    },
+    t3_providers: {
+      environment: campoAmbiente,
+      instanceId: z.string().min(1).optional().describe('Return only this instance; compared literally, case-sensitive'),
+      includeModels: z.boolean().optional().describe('Include `models` with capabilities; default false. Use it with `instanceId`'),
+    },
+    t3_atencao: { environment: campoAmbiente },
+    t3_control_plane: {
+      environment: z.string().min(1).optional().describe(`Restrict the snapshot to one environment (alias or environmentId): ${nomes}. Omitted: every configured environment`),
+      limit: z.number().int().min(1).max(LIMITE_MAXIMO).optional().describe(`Maximum threads per list (needsIntervention, running, ready); default ${LIMITE_PADRAO}. \`total\` counts every match in the environments that answered`),
+    },
+    t3_thread: {
+      environment: campoAmbienteDaThread,
+      threadId: z.string().min(1),
+      maxCharacters: z.number().int().min(200).max(6000).optional().describe('Maximum length of the latest response; default 1500'),
+    },
+    t3_thread_read_batch: {
+      items: z.array(z.object({
+        environment: z.string().min(1).describe(`Environment of this thread (alias or environmentId): ${nomes}`),
+        threadId: z.string().min(1),
+      }).strict()).min(1).max(MAX_ALVOS).describe(`Targets to read, 1-${MAX_ALVOS}; the answer keeps this order`),
+      maxCharacters: z.number().int().min(200).max(6000).optional().describe('Maximum length of each latest response; default 1500'),
+      timeoutMs: z.number().int().min(1000).max(PRAZO_MAX_MS).optional().describe(`Deadline for the whole call in ms; default ${PRAZO_PADRAO_MS}`),
+    },
+    t3_mensagens: {
+      environment: campoAmbienteDaThread,
+      threadId: z.string().min(1),
+      limit: z.number().int().min(1).max(20).optional().describe('Number of messages; default 6'),
+      maxCharacters: z.number().int().min(100).max(4000).optional().describe('Maximum characters per message; default 800'),
+    },
+    t3_aguardar_thread: {
+      environment: z.string().min(1).describe(`Environment where the thread lives (required): ${nomes}`),
+      threadId: z.string().min(1),
+      timeoutMs: z.number().int().min(1).max(TETO_MS).describe(`Total deadline for the call in ms, 1-${TETO_MS}; voice: 1000-2000`),
+      runId: z.string().min(1).optional().describe('Run to follow; default: the active run when the call starts, otherwise the latest run'),
+      includeLatestResponse: z.boolean().optional().describe('Include the latest assistant response of that run; default false'),
+      maxCharacters: z.number().int().min(100).max(4000).optional().describe('Maximum length of the latest response; default 800'),
+    },
+  };
+}
+
+/** t3_projetos: projetos autorizados com contagem de threads rodando e pedindo intervenção. */
+export const LISTAGEM_PROJETOS = {
+  async colher({ r, cliente, signal, ambiente, search: busca }) {
+    const shell = await cliente.shell({ signal });
+    const threads = r.escopo.threadsVisiveis(shell);
+    const itens = (shell.projects ?? [])
+      .filter((p) => r.escopo.projetoPermitido(p.id))
+      .filter((p) => casaBusca(busca, p.title, p.id))
+      .map((p) => {
+        const doProjeto = threads.filter((t) => t.projectId === p.id).map((t) => estadoDaThread(t).state);
+        return {
+          projectId: p.id,
+          title: p.title,
+          environment: ambiente,
+          directory: p.workspaceRoot,
+          runningThreads: doProjeto.filter((e) => e === 'running').length,
+          threadsNeedingIntervention: doProjeto.filter((e) => e === 'needs_intervention').length,
+        };
+      });
+    return { itens };
+  },
+  montar({ args: { search: busca, limit: limite, cursor }, colhidos, cobertura }) {
+    const chave = (p) => [normalizar(p.title), p.environment.environmentId, p.projectId];
+    const { pagina, truncado, proximoCursor } = paginarCoberto({
+      itens: colhidos.flatMap((x) => x.itens),
+      partes: ['t3_projetos', normalizar(busca ?? '')],
+      cobertura,
+      cursor,
+      limite,
+      chave,
+      comparar: comparador(),
+    });
+    return {
+      campos: {
+        total: colhidos.reduce((n, x) => n + x.itens.length, 0),
+        ...(busca ? { search: busca } : {}),
+        returned: pagina.length,
+        truncated: truncado,
+        ...(proximoCursor ? { nextCursor: proximoCursor } : {}),
+      },
+      lista: { nome: 'projects', itens: pagina },
+    };
+  },
+};
+
+/** t3_threads: threads com estado canônico, filtros e paginação. */
+export const LISTAGEM_THREADS = {
+  async colher({ r, cliente, signal, agora, ambiente, explicito, projectId, state: estado, includeNoRun: incluirSemExecucao = false, woke, search: busca }) {
+    if (projectId && !r.escopo.projetoPermitido(projectId)) {
+      // Pedido explícito neste environment: recusa. Varredura: este environment só não
+      // tem o projeto; a resposta diz se nenhum tinha.
+      if (explicito) r.escopo.exigirProjeto(projectId);
+      return { itens: [], ocultas: 0, semProjeto: true };
+    }
+    const shell = await cliente.shell({ signal });
+    const projetos = projetosPorId(shell);
+    const candidatas = r.escopo
+      .threadsVisiveis(shell)
+      .filter((t) => !projectId || t.projectId === projectId)
+      .filter((t) => casaBusca(busca, t.title, t.id))
+      .map((t) => ({ ...resumoDaThread(t, projetos.get(t.projectId), [], agora), environment: ambiente }));
+    const passaEstado = (t) => (estado ? t.state === estado : incluirSemExecucao || t.state !== 'no_run');
+    // Recusa em vez de devolver uma lista que pareceria completa sem as indecidíveis.
+    if (woke !== undefined && candidatas.some((t) => t.woke === null && passaEstado(t))) {
+      throw new EntradaInvalida('the woke filter is unavailable here: this T3 server does not expose the snooze or visited state needed to decide the Woke marker; repeat without `woke`');
+    }
+    const porWoke = woke === undefined ? candidatas : candidatas.filter((t) => t.woke === woke);
+    const itens = porWoke.filter(passaEstado);
+    return { itens, ocultas: estado || incluirSemExecucao ? 0 : porWoke.length - itens.length, semProjeto: false };
+  },
+  montar({ args: { projectId, state: estado, includeNoRun: incluirSemExecucao = false, woke, search: busca, limit: limite = 20, cursor }, colhidos, cobertura, falhas }) {
+    if (projectId && colhidos.length && colhidos.every((x) => x.semProjeto)) {
+      const pendentes = falhas.length ? `; environments that did not answer: ${falhas.map((f) => `${f.alias} (${f.code})`).join(', ')}` : '';
+      throw new ForaDoEscopo(`project ${projectId} is not among the authorized projects of any environment that answered (${cobertura.answered.join(', ')})${pendentes}`);
+    }
+    const chave = (t) => [t.updatedAt ?? '', t.environment.environmentId, t.threadId];
+    const comparar = comparador([true, false, false]);
+    const { pagina, truncado, proximoCursor, alterados } = paginarCoberto({
+      itens: colhidos.flatMap((x) => x.itens),
+      partes: ['t3_threads', projectId ?? null, estado ?? null, incluirSemExecucao, normalizar(busca ?? ''), ...(woke === undefined ? [] : [{ woke }])],
+      cobertura,
+      cursor,
+      limite,
+      chave,
+      comparar,
+      versao: (t) => t.updatedAt ?? '',
+    });
+    const ocultas = colhidos.reduce((n, x) => n + x.ocultas, 0);
+    return {
+      campos: {
+        total: colhidos.reduce((n, x) => n + x.itens.length, 0),
+        ...(busca ? { search: busca } : {}),
+        returned: pagina.length,
+        truncated: truncado,
+        ...(proximoCursor ? { nextCursor: proximoCursor } : {}),
+        ...(alterados ? { changedSinceStart: alterados } : {}),
+        ...(ocultas ? { hiddenNoRun: ocultas } : {}),
+      },
+      lista: { nome: 'threads', itens: pagina },
+    };
+  },
+};
+
+/** t3_providers: provider instances de server.getConfig, sem filtrar. */
+export const listagemProviders = (opcoesProviders = {}) => ({
+  async colher({ r, cliente, signal, ambiente, instanceId, includeModels = false }) {
+    const todos = await lerProviders(cliente, { environmentIdEsperado: r.environmentId, signal, ...opcoesProviders });
+    const itens = todos
+      .filter((p) => instanceId === undefined || p.instanceId === instanceId)
+      .map((p) => ({ ...resumoProvider(p, { incluirModelos: includeModels }), environment: ambiente }));
+    return { itens };
+  },
+  montar({ colhidos }) {
+    const itens = colhidos.flatMap((x) => x.itens);
+    return { campos: { source: 'server.getConfig', total: itens.length }, lista: { nome: 'providers', itens } };
+  },
+});
+
+/** t3_atencao: threads pedindo intervenção ou com falha não assentada. */
+export const LISTAGEM_ATENCAO = {
+  async colher({ r, cliente, signal, agora, ambiente }) {
+    const shell = await cliente.shell({ signal });
+    const projetos = projetosPorId(shell);
+    const itens = r.escopo
+      .threadsVisiveis(shell)
+      .map((t) => ({ ...resumoDaThread(t, projetos.get(t.projectId), [], agora), environment: ambiente }))
+      .filter((t) => t.state === 'needs_intervention' || (t.state === 'failed' && !t.settled));
+    return { itens };
+  },
+  montar({ colhidos }) {
+    const itens = colhidos.flatMap((x) => x.itens);
+    return { campos: { total: itens.length }, lista: { nome: 'threads', itens } };
+  },
+};
+
+/** t3_thread: detalhe sobre uma shell lida agora. */
+export async function lerThreadDetalhada({ r, cliente, signal, threadId, maxCharacters: maxCaracteres = 1500, shell }) {
+  return detalheDaThread({ r, cliente, shell: shell ?? await cliente.shell({ signal }), threadId, signal, maxCaracteres });
+}
+
+/** t3_mensagens: últimas mensagens de usuário e assistente da janela recente. */
+export async function mensagensDaThread({ r, cliente, signal, threadId, limit: limite = 6, maxCharacters: maxCaracteres = 800, shell }) {
+  r.escopo.exigirThread(shell ?? await cliente.shell({ signal }), threadId);
+  const bounded = await cliente.thread(threadId, { signal });
+  const mensagens = (bounded.projection.messages ?? []).filter((m) => m.text).slice(-limite).map((m) => ({
+    messageId: m.id,
+    role: m.role,
+    text: m.text.length > maxCaracteres ? m.text.slice(0, maxCaracteres) + '…' : m.text,
+    truncated: m.text.length > maxCaracteres,
+    streaming: Boolean(m.streaming),
+    createdAt: m.createdAt,
+  }));
+  return {
+    threadId,
+    messages: mensagens,
+    history: { complete: !bounded.hasMoreHistory, payloadBudgetExceeded: Boolean(bounded.payloadBudgetExceeded) },
+  };
+}
+
+export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {} }) {
+  const servidor = new McpServer({ name: 't3-connector', version: VERSAO });
+  const nomes = ambientes.registros.map((r) => r.alias).join(', ');
+  const formas = formasLeitura(nomes);
 
   /**
    * Registra a ferramenta com schema estrito: um parâmetro desconhecido (por exemplo um
@@ -150,63 +440,12 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
    */
   const registrar = strictRegistrar(servidor);
 
-  const identidadeCompleta = (r, info) => ({ ...ambientes.identidade(r), name: info?.nome ?? null });
-
-  /**
-   * Ferramenta de listagem. `colher(ctx)` lê um environment e devolve `{ itens, ...extras }`,
-   * cada item já com `environment`; `montar({ colhidos, args, cobertura })` fecha a resposta
-   * como `{ campos, lista: { nome, itens } }`. Com `environment`, só aquele environment é
-   * lido e qualquer falha nele é erro (como sempre foi). Sem `environment`, a varredura lê
-   * todos: falha de um vira `environmentFailures` e `complete: false`, nunca uma lista
-   * que pareceria completa.
-   */
-  const listagem = ({ colher, montar }) => async (args, extra) => {
+  /** Ferramenta de listagem (ver executarListagem). */
+  const listagem = (definicao) => async (args, extra) => {
     try {
-      const signal = extra?.signal;
-      // Um só instante por chamada: o marcador Woke depende do relógio.
-      const agora = new Date().toISOString();
-      let varredura;
-      let explicito = null;
-      if (args.environment !== undefined) {
-        explicito = ambientes.resolver(args.environment);
-        const r = explicito;
-        const { valor, info } = await ambientes.usar(r, async (cliente, info) => ({
-          valor: await colher({ ...args, r, cliente, info, signal, agora, ambiente: identidadeCompleta(r, info), explicito: true }),
-          info,
-        }), { signal });
-        const ambiente = identidadeCompleta(r, info);
-        varredura = {
-          sucesso: [{ r, ambiente, valor }],
-          falhas: [],
-          cobertura: { filter: r.environmentId, selected: [r.environmentId], answered: [r.environmentId] },
-        };
-      } else {
-        varredura = await varrerAmbientes(ambientes, {
-          signal,
-          ...opcoesBusca,
-          porAmbiente: (r, cliente, info, sinal) =>
-            colher({ ...args, r, cliente, info, signal: sinal, agora, ambiente: identidadeCompleta(r, info), explicito: false }),
-        });
-      }
-      const { campos, lista } = montar({ args, colhidos: varredura.sucesso.map((x) => x.valor), cobertura: varredura.cobertura, falhas: varredura.falhas });
-      return resposta({
-        ...(explicito ? { environment: ambientes.identidade(explicito) } : {}),
-        ...campos,
-        ...resumoCobertura(varredura),
-        [lista.nome]: lista.itens,
-      });
+      return resposta(await executarListagem(ambientes, definicao, args, { signal: extra?.signal, opcoesBusca }));
     } catch (e) {
       return erro(e);
-    }
-  };
-
-  /** Pagina itens já varridos, com o cursor amarrado aos filtros e à cobertura. */
-  const paginarCoberto = ({ itens, partes, cobertura, cursor, limite, chave, comparar, versao }) => {
-    const consulta = assinaturaCoberta(partes, cobertura);
-    try {
-      return paginar({ itens: itens.sort((a, b) => comparar(chave(a), chave(b))), consulta, cursor, limite, chave, comparar, versao });
-    } catch (e) {
-      throw traduzirCursorInvalido(e, cursor, consulta);
     }
   };
 
@@ -276,9 +515,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       title: 'Configured T3 environments',
       description:
         'Lists the T3 environments this connector can read (e.g. local = this machine, remoto = another one over SSH), with the transport and whether each responds right now. There is no default environment: listing and discovery tools called without `environment` query every environment listed here; pass the alias in `environment` to restrict a read to one. Read-only.',
-      shape: {
-        check: z.boolean().optional().describe('Try to connect to each environment (up to 4 s); default true'),
-      },
+      shape: formas.t3_ambientes,
       annotations: SO_LEITURA,
     },
     async ({ check = true }, extra) => {
@@ -290,8 +527,6 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
     },
   );
 
-  const campoCursor = z.string().min(1).optional()
-    .describe('`nextCursor` from the previous page, with the same `environment` (or none) and filters; omitted: first page');
 
   registrar(
     't3_projetos',
@@ -299,57 +534,10 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       title: 'Authorized T3 projects',
       description:
         'Lists the authorized projects of every T3 environment (or only of `environment`), each with its `environment`, directory and counts of threads running or needing intervention, ordered by title. `total` comes before the list; use `search` (part of the title or projectId) and `limit` in environments with many projects. When `truncated: true`, repeat the call with `cursor` = `nextCursor` for the next page. ' + CONTRATO_ESCOPO + ' Read-only.',
-      shape: {
-        environment: campoAmbiente,
-        search: z.string().min(1).optional().describe('Filter by part of the title or projectId, ignoring case and accents'),
-        limit: z.number().int().min(1).optional().describe('Maximum projects per page; `total` always counts every match'),
-        cursor: campoCursor,
-      },
+      shape: formas.t3_projetos,
       annotations: SO_LEITURA,
     },
-    listagem({
-      async colher({ r, cliente, signal, ambiente, search: busca }) {
-        const shell = await cliente.shell({ signal });
-        const threads = r.escopo.threadsVisiveis(shell);
-        const itens = (shell.projects ?? [])
-          .filter((p) => r.escopo.projetoPermitido(p.id))
-          .filter((p) => casaBusca(busca, p.title, p.id))
-          .map((p) => {
-            const doProjeto = threads.filter((t) => t.projectId === p.id).map((t) => estadoDaThread(t).state);
-            return {
-              projectId: p.id,
-              title: p.title,
-              environment: ambiente,
-              directory: p.workspaceRoot,
-              runningThreads: doProjeto.filter((e) => e === 'running').length,
-              threadsNeedingIntervention: doProjeto.filter((e) => e === 'needs_intervention').length,
-            };
-          });
-        return { itens };
-      },
-      montar({ args: { search: busca, limit: limite, cursor }, colhidos, cobertura }) {
-        const chave = (p) => [normalizar(p.title), p.environment.environmentId, p.projectId];
-        const { pagina, truncado, proximoCursor } = paginarCoberto({
-          itens: colhidos.flatMap((x) => x.itens),
-          partes: ['t3_projetos', normalizar(busca ?? '')],
-          cobertura,
-          cursor,
-          limite,
-          chave,
-          comparar: comparador(),
-        });
-        return {
-          campos: {
-            total: colhidos.reduce((n, x) => n + x.itens.length, 0),
-            ...(busca ? { search: busca } : {}),
-            returned: pagina.length,
-            truncated: truncado,
-            ...(proximoCursor ? { nextCursor: proximoCursor } : {}),
-          },
-          lista: { nome: 'projects', itens: pagina },
-        };
-      },
-    }),
+    listagem(LISTAGEM_PROJETOS),
   );
 
   registrar(
@@ -358,74 +546,10 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       title: 'T3 threads',
       description:
         'Lists threads of the authorized projects of every T3 environment (or only of `environment`), each with its `environment`, project, directory, model and state (running, needs_intervention, completed, failed, cancelled, no_run, unknown), most recently updated first. ' + CONTRATO_ESTADO + ' ' + CONTRATO_WOKE + ' Use `woke: true` to list only woke threads; the filter is evaluated at read time, so a snooze expiring or an acknowledgement can change the selection between pages without changing `updatedAt`; an environment whose server cannot decide the marker refuses the filter (in `environmentFailures` when several are queried). To find a thread by name use `search` (part of the title or threadId): `total` counts every match, not just the page. When `truncated: true`, repeat the call with `cursor` = `nextCursor` for the next page. Threads without a V2 run (imported history) only appear with includeNoRun; `hiddenNoRun` says how many were left out. ' + CONTRATO_ESCOPO + ' Read-only.',
-      shape: {
-        environment: campoAmbiente,
-        projectId: z.string().optional().describe('Restrict to one authorized project; a projectId belongs to one environment, so without `environment` only the environment that authorizes it contributes'),
-        state: z.enum(ESTADOS).optional().describe('Filter by state'),
-        includeNoRun: z.boolean().optional().describe('Include threads without a V2 run; default false'),
-        woke: z.boolean().optional().describe('Filter by the Woke marker: true = only woke threads, false = only threads not woke; omitted: no filter. Refused when the server cannot decide the marker for a matching thread'),
-        search: z.string().min(1).optional().describe('Filter by part of the title or threadId, ignoring case and accents'),
-        limit: z.number().int().min(1).max(50).optional().describe('Maximum threads per page; default 20'),
-        cursor: campoCursor,
-      },
+      shape: formas.t3_threads,
       annotations: SO_LEITURA,
     },
-    listagem({
-      async colher({ r, cliente, signal, agora, ambiente, explicito, projectId, state: estado, includeNoRun: incluirSemExecucao = false, woke, search: busca }) {
-        if (projectId && !r.escopo.projetoPermitido(projectId)) {
-          // Pedido explícito neste environment: recusa. Varredura: este environment só não
-          // tem o projeto; a resposta diz se nenhum tinha.
-          if (explicito) r.escopo.exigirProjeto(projectId);
-          return { itens: [], ocultas: 0, semProjeto: true };
-        }
-        const shell = await cliente.shell({ signal });
-        const projetos = projetosPorId(shell);
-        const candidatas = r.escopo
-          .threadsVisiveis(shell)
-          .filter((t) => !projectId || t.projectId === projectId)
-          .filter((t) => casaBusca(busca, t.title, t.id))
-          .map((t) => ({ ...resumoDaThread(t, projetos.get(t.projectId), [], agora), environment: ambiente }));
-        const passaEstado = (t) => (estado ? t.state === estado : incluirSemExecucao || t.state !== 'no_run');
-        // Recusa em vez de devolver uma lista que pareceria completa sem as indecidíveis.
-        if (woke !== undefined && candidatas.some((t) => t.woke === null && passaEstado(t))) {
-          throw new EntradaInvalida('the woke filter is unavailable here: this T3 server does not expose the snooze or visited state needed to decide the Woke marker; repeat without `woke`');
-        }
-        const porWoke = woke === undefined ? candidatas : candidatas.filter((t) => t.woke === woke);
-        const itens = porWoke.filter(passaEstado);
-        return { itens, ocultas: estado || incluirSemExecucao ? 0 : porWoke.length - itens.length, semProjeto: false };
-      },
-      montar({ args: { projectId, state: estado, includeNoRun: incluirSemExecucao = false, woke, search: busca, limit: limite = 20, cursor }, colhidos, cobertura, falhas }) {
-        if (projectId && colhidos.length && colhidos.every((x) => x.semProjeto)) {
-          const pendentes = falhas.length ? `; environments that did not answer: ${falhas.map((f) => `${f.alias} (${f.code})`).join(', ')}` : '';
-          throw new ForaDoEscopo(`project ${projectId} is not among the authorized projects of any environment that answered (${cobertura.answered.join(', ')})${pendentes}`);
-        }
-        const chave = (t) => [t.updatedAt ?? '', t.environment.environmentId, t.threadId];
-        const comparar = comparador([true, false, false]);
-        const { pagina, truncado, proximoCursor, alterados } = paginarCoberto({
-          itens: colhidos.flatMap((x) => x.itens),
-          partes: ['t3_threads', projectId ?? null, estado ?? null, incluirSemExecucao, normalizar(busca ?? ''), ...(woke === undefined ? [] : [{ woke }])],
-          cobertura,
-          cursor,
-          limite,
-          chave,
-          comparar,
-          versao: (t) => t.updatedAt ?? '',
-        });
-        const ocultas = colhidos.reduce((n, x) => n + x.ocultas, 0);
-        return {
-          campos: {
-            total: colhidos.reduce((n, x) => n + x.itens.length, 0),
-            ...(busca ? { search: busca } : {}),
-            returned: pagina.length,
-            truncated: truncado,
-            ...(proximoCursor ? { nextCursor: proximoCursor } : {}),
-            ...(alterados ? { changedSinceStart: alterados } : {}),
-            ...(ocultas ? { hiddenNoRun: ocultas } : {}),
-          },
-          lista: { nome: 'threads', itens: pagina },
-        };
-      },
-    }),
+    listagem(LISTAGEM_THREADS),
   );
 
   registrar(
@@ -438,14 +562,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         `Each environment has ${PRAZO_AMBIENTE_MS} ms and the whole search ${PRAZO_TOTAL_MS} ms; environments that fail or time out are listed in \`environmentFailures\` and \`complete\` is false, so zero results then do not prove the thread is missing. ` +
         'The same title or ID can exist in several environments: never pick one on your own; ask the user when `total` > 1, then call the other tools with the chosen environment (`environment` parameter) and `threadId`. ' +
         'Includes archived threads (`archived`) and threads without a run. Results are ordered by environmentId and threadId; when `truncated: true`, repeat with `cursor` = `nextCursor`. ' + CONTRATO_ESTADO + ' Read-only.',
-      shape: {
-        search: z.string().min(1).optional().describe('Part of the title or threadId, ignoring case and accents; exclusive with threadId'),
-        threadId: z.string().min(1).optional().describe('Exact thread ID, compared literally; exclusive with search'),
-        match: z.enum(['partial', 'exact']).optional().describe('With search: partial (substring, default) or exact (whole title, or exact ID)'),
-        environment: z.string().min(1).optional().describe(`Restrict the search to one environment (alias or environmentId): ${nomes}. Omitted: every configured environment`),
-        limit: z.number().int().min(1).max(50).optional().describe('Maximum threads per page; default 20. `total` counts every match in the environments that answered'),
-        cursor: z.string().min(1).optional().describe('`nextCursor` from the previous page of the same search; omitted: first page'),
-      },
+      shape: formas.t3_buscar_threads,
       annotations: SO_LEITURA,
     },
     async (args, extra) => {
@@ -467,26 +584,10 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         'IDs, display names and models belong to this environment only and are returned exactly as T3 sends them (keep case, underscores and hyphens); the same instanceId can have another display name or other models elsewhere. ' +
         'Each item keeps the T3 field names, limited to identity, state, runtime modes and models; `auth` carries only `status`. ' +
         'By default only the instances are listed; models with capabilities are large (tens of kB per environment), so pass `includeModels: true` with the chosen `instanceId` and `environment`. ' + CONTRATO_ESCOPO + ' Read-only.',
-      shape: {
-        environment: campoAmbiente,
-        instanceId: z.string().min(1).optional().describe('Return only this instance; compared literally, case-sensitive'),
-        includeModels: z.boolean().optional().describe('Include `models` with capabilities; default false. Use it with `instanceId`'),
-      },
+      shape: formas.t3_providers,
       annotations: SO_LEITURA,
     },
-    listagem({
-      async colher({ r, cliente, signal, ambiente, instanceId, includeModels = false }) {
-        const todos = await lerProviders(cliente, { environmentIdEsperado: r.environmentId, signal, ...opcoesProviders });
-        const itens = todos
-          .filter((p) => instanceId === undefined || p.instanceId === instanceId)
-          .map((p) => ({ ...resumoProvider(p, { incluirModelos: includeModels }), environment: ambiente }));
-        return { itens };
-      },
-      montar({ colhidos }) {
-        const itens = colhidos.flatMap((x) => x.itens);
-        return { campos: { source: 'server.getConfig', total: itens.length }, lista: { nome: 'providers', itens } };
-      },
-    }),
+    listagem(listagemProviders(opcoesProviders)),
   );
 
   registrar(
@@ -495,24 +596,10 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       title: 'What needs my attention in T3',
       description:
         'Threads of the authorized projects of every T3 environment (or only of `environment`) that need intervention (approval, question, plan, usage limit) or that failed and were not settled, each with its `environment`, reason and identifier. ' + CONTRATO_ESTADO + ' ' + CONTRATO_ESCOPO + ' Read-only.',
-      shape: { environment: campoAmbiente },
+      shape: formas.t3_atencao,
       annotations: SO_LEITURA,
     },
-    listagem({
-      async colher({ r, cliente, signal, agora, ambiente }) {
-        const shell = await cliente.shell({ signal });
-        const projetos = projetosPorId(shell);
-        const itens = r.escopo
-          .threadsVisiveis(shell)
-          .map((t) => ({ ...resumoDaThread(t, projetos.get(t.projectId), [], agora), environment: ambiente }))
-          .filter((t) => t.state === 'needs_intervention' || (t.state === 'failed' && !t.settled));
-        return { itens };
-      },
-      montar({ colhidos }) {
-        const itens = colhidos.flatMap((x) => x.itens);
-        return { campos: { total: itens.length }, lista: { nome: 'threads', itens } };
-      },
-    }),
+    listagem(LISTAGEM_ATENCAO),
   );
 
   registrar(
@@ -525,10 +612,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         `Each environment has ${PRAZO_AMBIENTE_MS} ms and the whole call ${PRAZO_TOTAL_MS} ms. Environments that fail or time out are listed in \`environmentFailures\` and \`complete\` is false: their threads are missing from every list and count, so the answer is NOT a global view; never conclude that nothing needs attention from an incomplete snapshot. ` +
         'Each environment is one shell read (`snapshotSequence`, `readAt`, counts by state in `queriedEnvironments`); environments are not read at one instant. Each list is ordered by `updatedAt` (newest first) and cut at `limit` with `total` and `truncated`; for more use t3_threads with `state` in that environment. Request content and answers are read with t3_thread. ' +
         CONTRATO_ESTADO + ' ' + CONTRATO_WOKE + ' Read-only.',
-      shape: {
-        environment: z.string().min(1).optional().describe(`Restrict the snapshot to one environment (alias or environmentId): ${nomes}. Omitted: every configured environment`),
-        limit: z.number().int().min(1).max(LIMITE_MAXIMO).optional().describe(`Maximum threads per list (needsIntervention, running, ready); default ${LIMITE_PADRAO}. \`total\` counts every match in the environments that answered`),
-      },
+      shape: formas.t3_control_plane,
       annotations: SO_LEITURA,
     },
     async (args, extra) => {
@@ -550,15 +634,10 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         '`activeRun` (present while a run is active) is that run with the model it executes; `latestRun` is the newest run and, when it differs from `activeRun`, is informational. ' +
         'Model precedence: `model` is what the thread runs next; `activeRun.model` is what the active run executes (fixed when the run was requested); `providerSession` (status, model) is the provider process as last reported and is informational only: it can keep the previous model after a model change and read `ready` while a run is active, so never use it to decide the model or the state. ' +
         'Message `streaming` flags do not decide the state either. Read-only.',
-      shape: {
-        environment: campoAmbienteDaThread,
-        threadId: z.string().min(1),
-        maxCharacters: z.number().int().min(200).max(6000).optional().describe('Maximum length of the latest response; default 1500'),
-      },
+      shape: formas.t3_thread,
       annotations: SO_LEITURA,
     },
-    naThread(async ({ r, cliente, signal, threadId, maxCharacters: maxCaracteres = 1500 }) =>
-      detalheDaThread({ r, cliente, shell: await cliente.shell({ signal }), threadId, signal, maxCaracteres })),
+    naThread(lerThreadDetalhada),
   );
 
   registrar(
@@ -574,14 +653,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         'Each environment is read from one shell observation per call (`environments[].observedAt`, also on each item); the thread projection is read right after, as in t3_thread. A repeated target is read once and answered at each position. ' +
         `\`timeoutMs\` (default ${PRAZO_PADRAO_MS}, max ${PRAZO_MAX_MS}) bounds the whole call, not each item. Reading never answers, approves or acknowledges anything. ` +
         CONTRATO_ESTADO + ' ' + CONTRATO_WOKE + ' Read-only.',
-      shape: {
-        items: z.array(z.object({
-          environment: z.string().min(1).describe(`Environment of this thread (alias or environmentId): ${nomes}`),
-          threadId: z.string().min(1),
-        }).strict()).min(1).max(MAX_ALVOS).describe(`Targets to read, 1-${MAX_ALVOS}; the answer keeps this order`),
-        maxCharacters: z.number().int().min(200).max(6000).optional().describe('Maximum length of each latest response; default 1500'),
-        timeoutMs: z.number().int().min(1000).max(PRAZO_MAX_MS).optional().describe(`Deadline for the whole call in ms; default ${PRAZO_PADRAO_MS}`),
-      },
+      shape: formas.t3_thread_read_batch,
       annotations: SO_LEITURA,
     },
     async ({ items, maxCharacters: maxCaracteres = 1500, timeoutMs }, extra) => {
@@ -602,32 +674,10 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       title: 'Recent thread messages',
       description:
         'Latest user and assistant messages of an authorized thread, oldest first, with truncated text. They come from the recent window of the thread; `history.complete` false means older messages exist outside it. Pass the thread environment when known; without it the ID is located across every environment and read only when all answered and exactly one has it; refused when it exists in more than one, in none, or when any environment failed or timed out. Read-only.',
-      shape: {
-        environment: campoAmbienteDaThread,
-        threadId: z.string().min(1),
-        limit: z.number().int().min(1).max(20).optional().describe('Number of messages; default 6'),
-        maxCharacters: z.number().int().min(100).max(4000).optional().describe('Maximum characters per message; default 800'),
-      },
+      shape: formas.t3_mensagens,
       annotations: SO_LEITURA,
     },
-    naThread(async ({ r, cliente, signal, threadId, limit: limite = 6, maxCharacters: maxCaracteres = 800 }) => {
-      const shell = await cliente.shell({ signal });
-      r.escopo.exigirThread(shell, threadId);
-      const bounded = await cliente.thread(threadId, { signal });
-      const mensagens = (bounded.projection.messages ?? []).filter((m) => m.text).slice(-limite).map((m) => ({
-        messageId: m.id,
-        role: m.role,
-        text: m.text.length > maxCaracteres ? m.text.slice(0, maxCaracteres) + '…' : m.text,
-        truncated: m.text.length > maxCaracteres,
-        streaming: Boolean(m.streaming),
-        createdAt: m.createdAt,
-      }));
-      return {
-        threadId,
-        messages: mensagens,
-        history: { complete: !bounded.hasMoreHistory, payloadBudgetExceeded: Boolean(bounded.payloadBudgetExceeded) },
-      };
-    }),
+    naThread(mensagensDaThread),
   );
 
   registrar(
@@ -639,14 +689,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
         'Without `runId` it follows the run the thread is executing (the active run), not a newer queued run that was cancelled or promoted to steer; `runId`, `statusRun` and `state` describe the followed run only. ' +
         'Returns immediately if the run already finished, if there is no run or if a request is pending. Reaching the deadline is not an error: it returns timedOut=true with the current state. ' +
         'To follow a long thread, call again later, between conversation turns; in voice use 1000-2000 ms. Never interrupts or changes the thread. Read-only.',
-      shape: {
-        environment: z.string().min(1).describe(`Environment where the thread lives (required): ${nomes}`),
-        threadId: z.string().min(1),
-        timeoutMs: z.number().int().min(1).max(TETO_MS).describe(`Total deadline for the call in ms, 1-${TETO_MS}; voice: 1000-2000`),
-        runId: z.string().min(1).optional().describe('Run to follow; default: the active run when the call starts, otherwise the latest run'),
-        includeLatestResponse: z.boolean().optional().describe('Include the latest assistant response of that run; default false'),
-        maxCharacters: z.number().int().min(100).max(4000).optional().describe('Maximum length of the latest response; default 800'),
-      },
+      shape: formas.t3_aguardar_thread,
       annotations: SO_LEITURA,
     },
     async (args, extra) => {
