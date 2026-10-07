@@ -664,6 +664,9 @@ t3-connector-ops <env> create --project P --title T --instance I --model M [--ef
                               [--runtime-mode M] [--worktree BASE[:BRANCH]] --client-request-id ID < brief
 t3-connector-ops <env> settle <threadId>...
 t3-connector-ops <env> snooze <threadId> <ISO datetime with offset>
+t3-connector-ops <env> configure <threadId> [--instance I] [--model M] [--effort E] [--option id=value]... --operation-id ID
+t3-connector-ops <env> interrupt <threadId> --operation-id ID [--run-id R] [--reason TEXT]
+t3-connector-ops <env> organize <threadId> <pin|unpin|snooze|unsnooze|settle|unsettle|archive|unarchive|mark_unread> --operation-id ID [--until ISO]
 t3-connector-ops <env> actions                    # every action and read below, with kind and description
 t3-connector-ops <env> act <action> [--operation-id ID] [--namespace NS] [--input JSON | < JSON]
 t3-connector-ops <env> query <name> [--input JSON | < JSON]
@@ -690,6 +693,15 @@ t3-connector-ops <env> query <name> [--input JSON | < JSON]
 - **Confirmation**: every mutation is read back. Settle and snooze refuse a thread that is
   running or has a pending runtime request; `send` reports `delivered` or `queued` (behind an
   active run).
+- **Composed operations**, decided as the native MCP tools decide them on the server:
+  `configure` (t3_thread_configure: builds the selection with `buildModelSelection`, effort mapped
+  to the model's option; omitted instance/model keep the current ones and, when both stay, the
+  other current options are kept; `thread.model-selection.set` on the thread's instance,
+  `provider.switch` on another; confirmed by reading the thread; returns `{command, before,
+  after}`), `interrupt` (t3_thread_interrupt: the active run with the highest ordinal; no active
+  run is `{interrupted: false, reason: 'no_active_run'}`) and `organize` (t3_thread_organize
+  actions, sent as the native tool sends them and confirmed by reading the thread, archived
+  included; `mark_unread` is confirmed by the receipt only). Each takes an `operationId`.
 - **Every action (`act`)**: the same actions as the write tools, from the same table
   (`ALL_ACTIONS`): the T3 commands (`thread.*`, `run.interrupt`, `queued-run.*`,
   `runtime-request.*`, `provider.switch`, `thread.launch`, `thread.send` with the four

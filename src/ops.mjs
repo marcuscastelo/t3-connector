@@ -44,6 +44,7 @@ import { guardProjectDelete, isProjectAction, lerOcupacao, lockProject, PROJECT_
 import { NATIVE_READS, NATIVE_WRITES, NativeRpcError, NativeToolError, OPS_NATIVE_READS, OPS_NATIVE_WRITE_ACTIONS } from './escrita/native.mjs';
 import { criarEscopoOperador, ForaDoEscopo } from './ambientes.mjs';
 import { resumoModelo } from './estado.mjs';
+import { sameModel } from './escrita/conditional.mjs';
 import { aguardarThread } from './espera.mjs';
 import { buscarThreads } from './busca-threads.mjs';
 import { lerThreadsEmLote } from './leitura-lote.mjs';
@@ -201,6 +202,41 @@ export const OPS_OMITTED = Object.freeze({
   t3_thread_update: 'covered by thread.metadata.update (rename, regenerate) and thread.pull-request.link/unlink',
   'link_pull_request, unlink_pull_request, watch_pull_request, unwatch_pull_request': 'covered by thread.pull-request.link/unlink/watch with explicit host, repository and number (no URL resolution)',
   't3_thread_launch, create_threads': 'covered by thread.launch and create (one thread per call, explicit model; no caller inheritance)',
+});
+
+// ---- composed operations (decided as the native T3 MCP tools decide) ---------------------------
+// T3 9bd1d800 orchestration-v2/ThreadManagementService.ts isActiveRun / isTerminalRunStatus.
+const INTERRUPTIBLE = new Set(['preparing', 'starting', 'running', 'waiting']);
+const TERMINAL_RUN = new Set(['completed', 'failed', 'cancelled', 'interrupted', 'rolled_back']);
+
+/**
+ * Run to interrupt, as ThreadManagementService.interruptThread (behind t3_thread_interrupt):
+ * an explicit terminal run → already_terminal; otherwise the active run with the highest
+ * ordinal; none → no_active_run (an explicit runId then is not interruptible).
+ */
+export function selectInterruptRun(runs = [], runId) {
+  const explicit = runId === undefined ? undefined : runs.find((r) => r.id === runId);
+  if (runId !== undefined && !explicit) return { type: 'run_not_found' };
+  if (explicit && TERMINAL_RUN.has(explicit.status)) return { type: 'already_terminal', run: explicit };
+  const active = runs.filter((r) => INTERRUPTIBLE.has(r.status)).toSorted((a, b) => b.ordinal - a.ordinal)[0];
+  if (!active) return { type: runId === undefined ? 'no_active_run' : 'not_interruptible' };
+  if (runId !== undefined && active.id !== runId) return { type: 'not_interruptible' };
+  return { type: 'interrupt', run: active };
+}
+
+// t3_thread_organize actions (T3 9bd1d800 mcp/toolkits/thread/handlers.ts) → connector action and
+// the read that confirms it. mark_unread moves lastVisitedAt to a server-chosen instant: confirmed by
+// the receipt only. A field the server does not send (older T3) cannot confirm either.
+export const ORGANIZE_ACTIONS = Object.freeze({
+  pin: { action: 'thread.pin', confirm: (t) => (t.pinnedAt === undefined ? null : t.pinnedAt !== null) },
+  unpin: { action: 'thread.unpin', confirm: (t) => (t.pinnedAt === undefined ? null : t.pinnedAt === null) },
+  snooze: { action: 'thread.snooze', confirm: (t, until) => Boolean(t.snoozedUntil) && Date.parse(t.snoozedUntil) === Date.parse(until) },
+  unsnooze: { action: 'thread.unsnooze', confirm: (t) => !t.snoozedUntil },
+  settle: { action: 'thread.settle', confirm: (t) => Boolean(t.settledAt) },
+  unsettle: { action: 'thread.unsettle', confirm: (t) => !t.settledAt },
+  archive: { action: 'thread.archive', confirm: (t) => Boolean(t.archivedAt) },
+  unarchive: { action: 'thread.unarchive', confirm: (t) => !t.archivedAt },
+  mark_unread: { action: 'thread.mark-unread', confirm: () => null },
 });
 
 const actionKind = (a) => (PROJECT_ACTIONS.includes(a) ? 'project' : NATIVE_WRITES[a] || OPS_NATIVE_WRITE_ACTIONS.includes(a) ? 'native-write' : 'command');
@@ -632,6 +668,77 @@ export function createOps(environment, {
       } catch (e) {
         throw asOpsError(e);
       }
+    },
+
+    /**
+     * Change account (instance), model and effort of a thread as the native t3_thread_configure:
+     * thread.model-selection.set on the thread's current instance, provider.switch on another
+     * (through the t3_thread_configure action). Omitted instanceId/model keep the current ones;
+     * when both stay, the current options are kept and only the given ones (and effort) replace
+     * theirs. The selection is built with buildModelSelection against server.getConfig, then
+     * confirmed by reading the thread. Returns {threadId, command, commandId, before, after}.
+     */
+    async configure(threadId, { instanceId, model, effort, options = [] } = {}, { operationId, namespace = 't3-connector-ops' } = {}) {
+      if (!operationId) throw new OpsError('operation_id_required', 'operationId required (idempotency key)');
+      await requireOperate();
+      const read = async () => {
+        try { return (await (await open()).client.threadCompleto(threadId)).projection?.thread; } catch (e) { throw asOpsError(e); }
+      };
+      const current = await read();
+      if (!current || current.deletedAt) throw new OpsError('thread_not_found', `${threadId}: not found in ${environment.alias}`);
+      const before = current.modelSelection ?? null;
+      const target = { instanceId: instanceId ?? before?.instanceId, model: model ?? before?.model };
+      if (!target.instanceId || !target.model) throw new OpsError('model_required', 'the thread has no model selection; give instanceId and model');
+      const kept = before && target.instanceId === before.instanceId && target.model === before.model ? (before.options ?? []) : [];
+      const replaced = new Set(options.map((o) => o.id));
+      const merged = [...kept.filter((o) => !replaced.has(o.id) && !(effort !== undefined && EFFORT_OPTIONS.includes(o.id))), ...options];
+      const selection = buildModelSelection(await this.providers(), { ...target, effort, options: merged });
+      const r = await this.act('t3_thread_configure', { threadId, modelSelection: selection }, { operationId, namespace });
+      const after = (await read())?.modelSelection ?? null;
+      const out = { threadId, command: r.result?.command ?? null, commandId: r.commandId, before, after };
+      if (!sameModel(after, selection)) throw new OpsError('not_confirmed', `${threadId}: model selection after ${out.command} differs from the requested one`, { ...out, requested: selection });
+      return out;
+    },
+
+    /**
+     * Interrupt the active run, selected as the native t3_thread_interrupt does
+     * (selectInterruptRun). No active run is an explicit no-op: {interrupted: false, reason:
+     * 'no_active_run'}; an explicit terminal runId: reason 'already_terminal'.
+     */
+    async interrupt(threadId, { operationId, namespace = 't3-connector-ops', reason, runId } = {}) {
+      if (!operationId) throw new OpsError('operation_id_required', 'operationId required (idempotency key)');
+      await requireOperate();
+      let projection;
+      try { projection = (await (await open()).client.threadCompleto(threadId)).projection; } catch (e) { throw asOpsError(e); }
+      if (!projection?.thread || projection.thread.deletedAt) throw new OpsError('thread_not_found', `${threadId}: not found in ${environment.alias}`);
+      const choice = selectInterruptRun(projection.runs ?? [], runId);
+      if (choice.type === 'no_active_run') return { threadId, interrupted: false, reason: 'no_active_run', runId: null };
+      if (choice.type === 'already_terminal') return { threadId, interrupted: false, reason: 'already_terminal', runId: choice.run.id, status: choice.run.status };
+      if (choice.type !== 'interrupt') throw new OpsError(choice.type === 'run_not_found' ? 'run_not_found' : 'thread_not_interruptible', `${threadId}: run ${runId} ${choice.type === 'run_not_found' ? 'not found' : 'is not the active run'}`);
+      const r = await this.act('run.interrupt', { threadId, runId: choice.run.id, ...(reason ? { reason } : {}) }, { operationId, namespace });
+      return { threadId, interrupted: true, status: 'interrupt_requested', runId: choice.run.id, runStatus: choice.run.status, commandId: r.commandId, result: r.result };
+    },
+
+    /**
+     * t3_thread_organize: pin, unpin, snooze (snoozedUntil), unsnooze, settle, unsettle, archive,
+     * unarchive, mark_unread, sent as the native tool sends them (no extra refusal: T3 decides),
+     * then confirmed by reading the thread (archived ones included). Returns {threadId, action,
+     * ok, confirmation: 'read' | 'receipt_only', commandId, thread} or ok:false with not_confirmed.
+     */
+    async organize(threadId, action, { snoozedUntil, operationId, namespace = 't3-connector-ops' } = {}) {
+      const spec = ORGANIZE_ACTIONS[action];
+      if (!spec) throw new OpsError('organize_action_invalid', `action must be one of ${Object.keys(ORGANIZE_ACTIONS).join(', ')}`);
+      if (action === 'snooze' && !snoozedUntil) throw new OpsError('input_invalid', 'snooze requires snoozedUntil');
+      if (action !== 'snooze' && snoozedUntil !== undefined) throw new OpsError('input_invalid', 'snoozedUntil only applies to snooze');
+      if (!operationId) throw new OpsError('operation_id_required', 'operationId required (idempotency key)');
+      await threadOrFail(threadId);
+      const until = snoozedUntil instanceof Date ? snoozedUntil.toISOString() : snoozedUntil;
+      const r = await this.act(spec.action, { threadId, ...(action === 'snooze' ? { snoozedUntil: until } : {}) }, { operationId, namespace });
+      const { s, t } = await threadOrFail(threadId);
+      const verdict = spec.confirm(t, until);
+      const base = { threadId, action, command: spec.action, commandId: r.commandId, thread: threadSummary(t, s.projects) };
+      if (verdict === false) return { ...base, ok: false, error: 'not_confirmed', reason: 'state unchanged after dispatch' };
+      return { ...base, ok: true, confirmation: verdict === null ? 'receipt_only' : 'read' };
     },
 
     async mutate(threadIds, command, confirmed) {

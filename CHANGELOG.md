@@ -19,6 +19,13 @@
   (change account/instance, model and effort: `thread.model-selection.set` on the same instance,
   `provider.switch` on another, as the native tool decides), `thread.pull-request.watch` and
   `t3_preview_close`; read `t3_preview_list`.
+- Composed operations decided as the native MCP tools decide them: `configure(threadId,
+  {instanceId?, model?, effort?, options?}, {operationId})` (t3_thread_configure; omitted
+  instance/model keep the current ones and the other options, `{command, before, after}` after a
+  confirming read), `interrupt(threadId, {operationId, reason?, runId?})` (t3_thread_interrupt run
+  selection; no active run is an explicit no-op) and `organize(threadId, action, {snoozedUntil?,
+  operationId})` (t3_thread_organize actions, confirmed by reading the thread). CLI: `<env>
+  configure`, `<env> interrupt`, `<env> organize`.
 - `list({settled, archived})` (`--settled`, `--archived`) lists settled or archived threads (the
   archived ones from `orchestration.getArchivedShellSnapshot`); thread lookups find archived
   threads too, so archive/unarchive work end to end. Every summary carries `effort`.

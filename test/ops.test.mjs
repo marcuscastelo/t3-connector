@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { after, before, beforeEach, test } from 'node:test';
-import { buildModelSelection, createOps, deriveUuid, findProject, OPS_WAIT_MAX_MS, opsActions, QUERY_NAMES, refusal, resolveEnvironment, validateOpsConfig } from '../src/ops.mjs';
+import { buildModelSelection, createOps, deriveUuid, findProject, OPS_WAIT_MAX_MS, opsActions, QUERY_NAMES, refusal, resolveEnvironment, selectInterruptRun, validateOpsConfig } from '../src/ops.mjs';
 import { ALL_ACTIONS, ACTIONS } from '../src/escrita/adapters.mjs';
 import { NATIVE_READ_TOOLS, NATIVE_WRITE_ACTIONS, OPS_NATIVE_READ_TOOLS } from '../src/escrita/native.mjs';
 import { PROJECT_ACTIONS } from '../src/escrita/project-admin.mjs';
@@ -19,6 +19,7 @@ function reset() {
     seq: 7,
     archived: [{ id: 't-arch', projectId: 'p1', title: 'Archived', status: 'completed', archivedAt: '2026-10-02T00:00:00Z' }],
     requests: {},
+    runs: {},
     threads: [
       { id: 't-idle', projectId: 'p1', title: 'Idle', status: 'idle', createdBy: 'user', modelSelection: { instanceId: 'claudeAgent', model: 'opus', options: [{ id: 'effort', value: 'high' }] }, runtimeMode: 'full-access' },
       { id: 't-run', projectId: 'p1', title: 'Running', status: 'running', createdBy: 'user' },
@@ -44,6 +45,8 @@ function rpc(tag, p) {
   if (p?.type === 'thread.pull-request.watch') return new Typed({ _tag: 'OrchestrationCommandInvalid', message: 'unknown command' });
   if (p?.type === 'thread.archive') { const i = state.threads.findIndex((x) => x.id === p.threadId); state.archived.push({ ...state.threads[i], archivedAt: '2026-10-07T12:00:00Z' }); state.threads.splice(i, 1); return { sequence: calls.length }; }
   if (p?.type === 'thread.unarchive') { const i = state.archived.findIndex((x) => x.id === p.threadId); const { archivedAt, ...t } = state.archived[i]; state.threads.push(t); state.archived.splice(i, 1); return { sequence: calls.length }; }
+  if (p?.type === 'thread.pin' || p?.type === 'thread.unpin') { state.threads.find((x) => x.id === p.threadId).pinnedAt = p.type === 'thread.pin' ? '2026-10-07T12:00:00Z' : null; return { sequence: calls.length }; }
+  if (p?.type === 'thread.unsettle') { delete state.threads.find((x) => x.id === p.threadId).settledAt; return { sequence: calls.length }; }
   if (p?.type === 'thread.model-selection.set' || p?.type === 'provider.switch') { state.threads.find((x) => x.id === p.threadId).modelSelection = p.modelSelection; return { sequence: calls.length }; }
   if (tag === 'orchestration.launchThread') {
     state.threads.push({ id: p.threadId, projectId: p.projectId, title: p.title, status: 'starting', createdBy: 'user', modelSelection: p.modelSelection, runtimeMode: p.runtimeMode });
@@ -86,7 +89,7 @@ before(async () => {
       const req = state.requests[id] ?? [];
       if (m[2] === '/bounded') return json({ projection: { messages, runs: [], runtimeRequests: req.map((r) => r.request), turnItems: [...messages.map((x, i) => ({ messageId: x.id, type: `${x.role}_message`, text: x.text, ordinal: i + 1, createdBy: 'user', creationSource: 'web', startedAt: '2026-10-07T11:00:00Z' })), ...req.map((r) => r.item)] }, hasMoreHistory: true, historyCursor: 'c1' });
       const t = [...state.threads, ...state.archived].find((x) => x.id === id);
-      return json({ snapshotSequence: state.seq, projection: { thread: t && { ...t, providerInstanceId: t.modelSelection?.instanceId ?? 'claudeAgent', interactionMode: 'default' }, messages, runs: [], contextTransfers: [] } });
+      return json({ snapshotSequence: state.seq, projection: { thread: t && { ...t, providerInstanceId: t.modelSelection?.instanceId ?? 'claudeAgent', interactionMode: 'default' }, messages, runs: state.runs[id] ?? [], contextTransfers: [] } });
     }
     json({}, 404);
   });
@@ -411,4 +414,72 @@ test('insecureHttp: the WebSocket transport accepts ws: to a non-loopback host o
   const no = createOps(env(false), { readToken: () => 'tok', WebSocketImpl: FakeSocket });
   await assert.rejects(no.act('thread.pin', { threadId: 't-idle' }, { operationId: 'ins-2' }), { code: 'control_socket_invalid' });
   no.close();
+});
+
+// ---- composed operations: configure / interrupt / organize ------------------------------------------
+test('configure: only effort keeps instance, model and the other options; set on the same instance', async () => {
+  state.threads[0].modelSelection = { instanceId: 'claudeAgent', model: 'opus', options: [{ id: 'effort', value: 'high' }, { id: 'fast', value: true }] };
+  state.providers[0].models[0].capabilities.optionDescriptors.push({ id: 'fast', type: 'boolean' });
+  const o = ops();
+  const r = await o.configure('t-idle', { effort: 'low' }, { operationId: 'cf-1' });
+  assert.equal(r.command, 'thread.model-selection.set');
+  assert.deepEqual(r.before, { instanceId: 'claudeAgent', model: 'opus', options: [{ id: 'effort', value: 'high' }, { id: 'fast', value: true }] });
+  assert.deepEqual(r.after, { instanceId: 'claudeAgent', model: 'opus', options: [{ id: 'fast', value: true }, { id: 'effort', value: 'low' }] });
+  assert.equal(r.commandId, deriveUuid('t3-connector-ops', ENV_ID, 't3_thread_configure', 'cf-1'));
+  await assert.rejects(o.configure('t-idle', { effort: 'low' }), { code: 'operation_id_required' });
+  o.close();
+});
+
+test('configure: another instance → provider.switch with only the given options; invalid selection sends nothing', async () => {
+  const o = ops();
+  const r = await o.configure('t-idle', { instanceId: 'codex', model: 'gpt', effort: 'high' }, { operationId: 'cf-2' });
+  assert.equal(r.command, 'provider.switch');
+  assert.deepEqual(r.after, { instanceId: 'codex', model: 'gpt', options: [{ id: 'reasoningEffort', value: 'high' }] });
+  const before = calls.length;
+  await assert.rejects(o.configure('t-idle', { model: 'nope' }, { operationId: 'cf-3' }), { code: 'provider_model_unavailable' });
+  await assert.rejects(o.configure('t-idle', { effort: 'ultra' }, { operationId: 'cf-4' }), { code: 'model_option_value_unsupported' });
+  assert.ok(calls.slice(before).every((c) => c.tag === 'server.getConfig'));
+  o.close();
+});
+
+test('interrupt: the active run with the highest ordinal, as the native tool; none is an explicit no-op', async () => {
+  assert.deepEqual(selectInterruptRun([{ id: 'a', ordinal: 1, status: 'running' }, { id: 'b', ordinal: 2, status: 'waiting' }, { id: 'c', ordinal: 3, status: 'queued' }]).run.id, 'b');
+  assert.equal(selectInterruptRun([{ id: 'a', ordinal: 1, status: 'completed' }], 'a').type, 'already_terminal');
+  assert.equal(selectInterruptRun([{ id: 'a', ordinal: 1, status: 'completed' }]).type, 'no_active_run');
+  assert.equal(selectInterruptRun([{ id: 'a', ordinal: 1, status: 'running' }], 'x').type, 'run_not_found');
+  const o = ops();
+  assert.deepEqual(await o.interrupt('t-idle', { operationId: 'i-0' }), { threadId: 't-idle', interrupted: false, reason: 'no_active_run', runId: null });
+  assert.equal(dispatched('run.interrupt').length, 0);
+  state.runs['t-run'] = [{ id: 'r1', ordinal: 1, status: 'completed' }, { id: 'r2', ordinal: 2, status: 'running' }];
+  const r = await o.interrupt('t-run', { operationId: 'i-1', reason: 'stop' });
+  assert.equal(r.interrupted, true);
+  assert.equal(r.runId, 'r2');
+  assert.deepEqual(dispatched('run.interrupt')[0], { type: 'run.interrupt', commandId: deriveUuid('t3-connector-ops', ENV_ID, 'run.interrupt', 'i-1'), threadId: 't-run', runId: 'r2', reason: 'stop' });
+  await assert.rejects(o.interrupt('t-run', { operationId: 'i-2', runId: 'r1x' }), { code: 'run_not_found' });
+  o.close();
+});
+
+test('organize: native action names, confirmed by reading the thread (archived included)', async () => {
+  const o = ops();
+  const pin = await o.organize('t-idle', 'pin', { operationId: 'o-1' });
+  assert.deepEqual([pin.ok, pin.confirmation, pin.command], [true, 'read', 'thread.pin']);
+  assert.equal((await o.organize('t-idle', 'unpin', { operationId: 'o-2' })).ok, true);
+  const until = '2026-10-09T17:00:00.000Z';
+  const sn = await o.organize('t-idle', 'snooze', { snoozedUntil: until, operationId: 'o-3' });
+  assert.equal(sn.ok, true);
+  assert.equal(sn.thread.snoozedUntil, until);
+  const ar = await o.organize('t-idle', 'archive', { operationId: 'o-4' });
+  assert.equal(ar.ok, true);
+  assert.equal((await o.organize('t-idle', 'unarchive', { operationId: 'o-5' })).ok, true);
+  assert.equal((await o.organize('t-done', 'unsettle', { operationId: 'o-6' })).ok, true);
+  const mu = await o.organize('t-idle', 'mark_unread', { operationId: 'o-7' });
+  assert.deepEqual([mu.ok, mu.confirmation, mu.command], [true, 'receipt_only', 'thread.mark-unread']);
+  // unsnooze is not applied by the fake: the read refuses to confirm it.
+  const un = await o.organize('t-idle', 'unsnooze', { operationId: 'o-8' });
+  assert.deepEqual([un.ok, un.error], [false, 'not_confirmed']);
+  assert.equal(dispatched('thread.unsnooze')[0].reason, 'user');
+  await assert.rejects(o.organize('t-idle', 'snooze', { operationId: 'o-9' }), { code: 'input_invalid' });
+  await assert.rejects(o.organize('t-idle', 'nap', { operationId: 'o-10' }), { code: 'organize_action_invalid' });
+  await assert.rejects(o.organize('nope', 'pin', { operationId: 'o-11' }), { code: 'thread_not_found' });
+  o.close();
 });

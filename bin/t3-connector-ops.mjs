@@ -15,6 +15,9 @@
 //                                 [--runtime-mode M] [--worktree BASE[:BRANCH]] --client-request-id ID < brief
 //   t3-connector-ops <env> settle <threadId>...
 //   t3-connector-ops <env> snooze <threadId> <ISO datetime with offset>
+//   t3-connector-ops <env> configure <threadId> [--instance I] [--model M] [--effort E] [--option id=value]... --operation-id ID
+//   t3-connector-ops <env> interrupt <threadId> --operation-id ID [--run-id R] [--reason TEXT]
+//   t3-connector-ops <env> organize <threadId> <pin|unpin|snooze|unsnooze|settle|unsettle|archive|unarchive|mark_unread> --operation-id ID [--until ISO]
 //   t3-connector-ops <env> actions
 //   t3-connector-ops <env> act <action> [--operation-id ID] [--namespace NS] [--input JSON | < JSON]
 //   t3-connector-ops <env> query <name> [--input JSON | < JSON]
@@ -28,7 +31,7 @@
 import { readFileSync } from 'node:fs';
 import { createOps, loadOpsConfig, OpsError, resolveEnvironment } from '../src/ops.mjs';
 
-const USAGE = 'usage: t3-connector-ops environments | <env> list|thread|read|timeline|projects|providers|send|create|settle|snooze|actions|act|query … (see the header of bin/t3-connector-ops.mjs)';
+const USAGE = 'usage: t3-connector-ops environments | <env> list|thread|read|timeline|projects|providers|send|create|settle|snooze|configure|interrupt|organize|actions|act|query … (see the header of bin/t3-connector-ops.mjs)';
 const BOOLEAN_FLAGS = new Set(['settled', 'archived']);
 const out = (v) => process.stdout.write(JSON.stringify(v, null, 1) + '\n');
 const usage = (m) => { throw new OpsError('usage', m ?? USAGE); };
@@ -77,6 +80,18 @@ async function main() {
     switch (command) {
       case 'list': return out(await ops.list({ settled: Boolean(flags.settled), archived: Boolean(flags.archived) }));
       case 'actions': return out(ops.actions());
+      case 'configure': return out(await ops.configure(id ?? usage('configure needs <threadId>'),
+        { instanceId: flags.instance, model: flags.model, effort: flags.effort, options: options.map(option) }, { operationId: flags['operation-id'], ...(flags.namespace ? { namespace: flags.namespace } : {}) }));
+      case 'interrupt': {
+        const r = await ops.interrupt(id ?? usage('interrupt needs <threadId>'), { operationId: flags['operation-id'], reason: flags.reason, runId: flags['run-id'], ...(flags.namespace ? { namespace: flags.namespace } : {}) });
+        return out(r);
+      }
+      case 'organize': {
+        const action = ids[0] ?? usage('organize needs <threadId> <action>');
+        if (flags.until !== undefined && (Number.isNaN(Date.parse(flags.until)) || !/(Z|[+-]\d{2}:\d{2})$/.test(flags.until))) usage('--until must be ISO with offset');
+        const r = await ops.organize(id, action, { snoozedUntil: flags.until, operationId: flags['operation-id'], ...(flags.namespace ? { namespace: flags.namespace } : {}) });
+        out(r); if (!r.ok) process.exitCode = 1; return;
+      }
       case 'act': return out(await ops.act(id ?? usage('act needs <action>'), jsonInput(flags.input), { operationId: flags['operation-id'], ...(flags.namespace ? { namespace: flags.namespace } : {}) }));
       case 'query': return out(await ops.query(id ?? usage('query needs <name>'), jsonInput(flags.input)));
       case 'thread': return out(await ops.thread(id ?? usage('thread needs <threadId>')));
