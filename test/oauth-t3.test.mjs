@@ -24,9 +24,9 @@ function conexaoFalsa(alias, environmentId, { projetos = [{ id: 'app', name: 'ap
   return c;
 }
 
-async function montar({ local = {}, remoto = {}, journal = { ...memoryJournal(), audit: () => {} }, writeProjects = null } = {}) {
+async function montar({ local = {}, remoto = {}, journal = { ...memoryJournal(), audit: () => {} }, writeProjects = null, mount } = {}) {
   const l = conexaoFalsa('local', 'env-p', local), r = conexaoFalsa('remoto', 'env-s', remoto);
-  const c = await startConnector({ tools: t3Tools({ ambientes: ambientesFalsos(), conexoes: [l, r], journal, writeProjects, projectPolicy: 'restricted' }) });
+  const c = await startConnector({ ...(mount ? { mount } : {}), tools: t3Tools({ ambientes: ambientesFalsos(), conexoes: [l, r], journal, writeProjects, projectPolicy: 'restricted' }) });
   const data = res => JSON.parse(res.data.result.content[0].text);
   const send = (at, { environment = 'local', id = 'op-1', text = 'hi', threadId = 'thread' } = {}) => c.callTool(at, writeToolName('thread.send'), { environment, operationId: id, input: { threadId, text, clientRequestId: id, delivery: 'start_immediately' } });
   return { c, l, r, data, send, journal };
@@ -66,6 +66,14 @@ test('restricted mode: sign-in shows and freezes the write scope; reads and writ
   assert.equal(l.calls.filter(x => x.m).length, 1);
   const rec = data(await c.callTool(at, 't3_reconciliar_escrita', { environment: 'local', operationId: 'op-1' }));
   assert.equal(rec.state, 'completed');
+});
+
+test('issuer mounted on a path: a session write works and reconciles (identity accepts the mount)', async t => {
+  const { c, l, data, send } = await montar({ mount: '/t3' }); t.after(c.close);
+  const at = (await c.signIn()).tokens.access_token;
+  const w = data(await send(at));
+  assert.equal(w.state, 'completed'); assert.equal(l.calls.filter(x => x.m).length, 1);
+  assert.equal(data(await c.callTool(at, 't3_reconciliar_escrita', { environment: 'local', operationId: 'op-1' })).state, 'completed');
 });
 
 test('write dedupe survives refresh and a new sign-in (stable subject), and nothing is resent', async t => {
@@ -143,6 +151,11 @@ test('SessionWriteGate never accepts lease/channel identities or unknown session
   assert.throws(() => gate.check(me, sid, { ...target, action: 'thread.delete' }), /scope_denied/);
   assert.throws(() => gate.check(me, sid, { ...target, projectIds: ['secret'] }), /scope_denied/);
   assert.throws(() => identidadeSessaoOAuth({ issuer: 'https://as.example', subject: 'canal:org' }), /oauth_identity_invalid/);
+  // An issuer mounted on a path (mcp-connector-kit 0.3.0) is a distinct, valid binding; malformed mounts are refused.
+  const mounted = identidadeSessaoOAuth({ issuer: 'https://as.example/t3', subject: 'local:abcdefghijkl' });
+  assert.equal(mounted.binding, 'oauth-issuer:https://as.example/t3'); assert.notEqual(mounted.binding, me.binding);
+  for (const issuer of ['https://as.example/', 'https://as.example/T3', 'https://as.example/t3/', 'https://as.example/t3?x=1', 'ftp://as.example', 'as.example'])
+    assert.throws(() => identidadeSessaoOAuth({ issuer, subject: 'local:abcdefghijkl' }), /oauth_identity_invalid/);
   grants.environments[0].projects.push({ id: 'x' });
   assert.equal(authority.check(sid).grants.environments[0].projects.length, 1, 'caller copy does not alias the session grant');
   assert.throws(() => authority.check(sid).grants.environments[0].projects.push({}), TypeError);

@@ -61,6 +61,9 @@
   identical to 0.2.0 (snapshot test). A mounted connector routes only canonical origin-form
   request-targets (no dot segments, backslash, authority or absolute form), so the connector that
   answers is always the one the ingress chose from the raw path.
+- OAuth writes work with an issuer mounted on a path: the session write identity now accepts the
+  same issuer form as the OAuth server (`https://host/mount`). Before, every write in a mounted
+  connector was refused with `oauth_identity_invalid` while reads worked.
 - OAuth client authentication: a `private_key_jwt` assertion is accepted only when every `aud` value
   names this authorization server (its issuer, token or revocation endpoint). Before, one matching
   value was enough, so an assertion naming two servers authenticated at both. Assertions with a single

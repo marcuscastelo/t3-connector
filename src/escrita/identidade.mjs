@@ -1,3 +1,4 @@
+import { issuerParts } from 'mcp-connector-kit/oauth/issuer';
 const trusted = new WeakSet();
 // Only for the inert local gate exercise; never represents a remote MCP caller.
 export function identidadeTesteLocal(bootId) {
@@ -17,7 +18,9 @@ export function identidadeCanal({organization,tunnelId}) {
 // token, never from tool arguments. Stable across refresh and new sign-ins, so the journal dedupe
 // key survives them; it never matches a channel or mTLS identity, so lease grants do not apply.
 export function identidadeSessaoOAuth({issuer,subject}) {
-  if(typeof issuer!=='string'||!/^https?:\/\/[^/]+$/.test(issuer)||typeof subject!=='string'||!/^local:[A-Za-z0-9_-]{8,}$/.test(subject))throw new Error('oauth_identity_invalid');
+  // Same issuer rule as the OAuth server (mcp-connector-kit): an origin, optionally with a mount path.
+  const parts=typeof issuer==='string'?issuerParts(issuer):null;
+  if(!parts||!/^https?:\/\//.test(parts.origin)||typeof subject!=='string'||!/^local:[A-Za-z0-9_-]{8,}$/.test(subject))throw new Error('oauth_identity_invalid');
   const identity=Object.freeze({subject:`oauth:${subject}`,binding:`oauth-issuer:${issuer}`});
   trusted.add(identity);return identity;
 }
