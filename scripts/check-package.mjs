@@ -47,7 +47,7 @@ try {
     // Shared MCP plumbing (packages/mcp-connector-kit), bundled so the release stays one artifact.
     /^node_modules\/mcp-connector-kit\/(((oauth|testing)\/)?[\w-]+\.mjs|package\.json|README\.md|LICENSE)$/];
   for (const f of files) if (!allowed.some((r) => r.test(f))) fail(`file outside the allowlist: ${f}`);
-  for (const f of ['bin/t3-connector.mjs', 'bin/t3-connector-write.mjs', 'bin/t3-connector-oauth.mjs', 'LICENSE', 'README.md', 'SECURITY.md', 'web/aprovacao.html', 'node_modules/mcp-connector-kit/index.mjs', 'node_modules/mcp-connector-kit/oauth/connector.mjs'])
+  for (const f of ['bin/t3-connector.mjs', 'bin/t3-connector-write.mjs', 'bin/t3-connector-oauth.mjs', 'bin/t3-connector-ops.mjs', 'src/ops.mjs', 'LICENSE', 'README.md', 'SECURITY.md', 'web/aprovacao.html', 'node_modules/mcp-connector-kit/index.mjs', 'node_modules/mcp-connector-kit/oauth/connector.mjs'])
     if (!files.includes(f)) fail(`required file missing: ${f}`);
   if (info.name !== 't3-connector') fail(`package name ${info.name}, expected t3-connector`);
   if (info.version !== pkg.version) fail(`artifact version ${info.version} ≠ package.json ${pkg.version}`);

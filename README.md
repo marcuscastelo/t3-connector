@@ -645,6 +645,46 @@ optional `waitMs` (0–10000) to wait for R to end inside the call.
   (`deliveredAs: started | queued_behind_active`, `runModelMatches`): T3 can still queue it
   if a run started after the last check, and that is reported, not hidden.
 
+## Operator CLI (`t3-connector-ops`)
+
+One core for thread operations across environments, for local automation on a machine that
+already holds an `orchestration:operate` token: `src/ops.mjs`, exposed as the CLI
+`t3-connector-ops` (JSON on stdout) and importable from scripts. It uses the operator's own
+token and no passkey lease, so it is never reachable from a remote MCP client; the write
+plugin keeps its lease.
+
+```sh
+t3-connector-ops environments
+t3-connector-ops <env> list                       # threads not settled, archived or deleted
+t3-connector-ops <env> read <threadId> [--since P] [--last N]
+t3-connector-ops <env> timeline <threadId> [--message-ids A,B] [--not-before ISO]
+t3-connector-ops <env> projects | providers
+t3-connector-ops <env> send <threadId> --message-id ID [--delivery queue_after_active|start_immediately] < text
+t3-connector-ops <env> create --project P --title T --instance I --model M [--effort E] [--option id=value]...
+                              [--runtime-mode M] [--worktree BASE[:BRANCH]] --client-request-id ID < brief
+t3-connector-ops <env> settle <threadId>...
+t3-connector-ops <env> snooze <threadId> <ISO datetime with offset>
+```
+
+- **Environments**: `~/.config/t3-connector/ops.json` (or `T3_CONNECTOR_OPS_CONFIG`), or the same
+  JSON in `T3_CONNECTOR_OPS_ENVIRONMENTS`: `{"environments": {"mac": {"url": "https://…",
+  "tokenFile": "…", "aliases": ["laptop"], "environmentId": "…"}}}`. Each entry has `url` or
+  `ssh`, a `tokenFile` (mode 600, private directory) whose token has at least
+  `orchestration:read` and `orchestration:operate`, optional extra `aliases` and an optional
+  `environmentId` that the server descriptor must match.
+- **Idempotency**: `send` uses `--message-id` as commandId and messageId; `create` derives the
+  thread id from `--client-request-id` and returns the existing thread (`created: false`) on a
+  repeat; settle and snooze derive their commandId from the thread (and date). Importers can
+  pass a `namespace` for the derived ids (`deriveId`).
+- **Create**: the project is an id, a workspace root or a unique title (an ambiguous title is
+  refused with the candidates). The instance, model, `--effort` (mapped to the model's
+  `effort` or `reasoningEffort` option) and any `--option` are checked against the
+  environment's `server.getConfig` before anything is sent, with the same codes as the write
+  tools. Default runtime mode `full-access`, workspace `root`.
+- **Confirmation**: every mutation is read back. Settle and snooze refuse a thread that is
+  running or has a pending runtime request; `send` reports `delivered` or `queued` (behind an
+  active run).
+
 ## OAuth session profile (experimental)
 
 `t3-connector-oauth` serves the same tools over MCP HTTP behind an embedded OAuth server: the
