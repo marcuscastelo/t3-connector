@@ -10,7 +10,8 @@
   `orchestration:operate` for anything sent), without the passkey lease
   (local automation only; the MCP write plugin is unchanged). `create` takes the project by id,
   workspace root or unique title, checks instance, model, effort and options against
-  `server.getConfig`, sends the brief as the first message and is idempotent by
+  `server.getConfig`, sends the brief as the first message (thread with `creationSource`
+  `mcp`, since T3 records `createdBy` `user` for an external launch) and is idempotent by
   `clientRequestId`. Every mutation has a derived commandId and is confirmed by reading the
   server back. See "Operator CLI" in the README.
 - Read client: `historico` reads older timeline pages (`/threads/:id/history`).

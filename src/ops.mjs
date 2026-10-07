@@ -312,9 +312,11 @@ export function createOps(environment, {
      * New thread in a project (id, workspace root or title), with model and effort checked
      * against this environment's catalog and the brief as first message. `clientRequestId` makes
      * it idempotent: the thread id derives from it, and an existing thread is returned as is.
-     * `namespace` prefixes the derived commandId and brief messageId (see deriveId).
+     * `namespace` prefixes the derived commandId and brief messageId (see deriveId). T3 records
+     * createdBy "user" for a launch through the external API; `creationSource` (default "mcp")
+     * marks where it came from.
      */
-    async create({ project, title, instanceId, model, effort, options = [], runtimeMode = 'full-access', workspace = { type: 'root' }, text, clientRequestId, namespace = 't3-connector-ops' }) {
+    async create({ project, title, instanceId, model, effort, options = [], runtimeMode = 'full-access', workspace = { type: 'root' }, text, clientRequestId, namespace = 't3-connector-ops', creationSource = 'mcp' }) {
       if (!clientRequestId) throw new OpsError('client_request_id_required', 'clientRequestId required (idempotency key)');
       if (!title?.trim()) throw new OpsError('title_required', 'title required');
       if (!instanceId || !model) throw new OpsError('model_required', 'instanceId and model required');
@@ -328,7 +330,7 @@ export function createOps(environment, {
       const modelSelection = buildModelSelection(await this.providers(), { instanceId, model, effort, options });
       await invoke('orchestration.launchThread', {
         commandId: deriveId(namespace, 'launch', environmentId, clientRequestId), threadId, projectId: p.id, title, modelSelection,
-        workspaceStrategy: workspace, runtimeMode, interactionMode: 'default',
+        workspaceStrategy: workspace, runtimeMode, interactionMode: 'default', creationSource,
         ...(text?.trim() ? { initialMessage: { messageId: deriveId(namespace, 'brief', environmentId, clientRequestId), text, attachments: [] } } : {}),
       });
       const after = await shell();

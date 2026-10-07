@@ -172,6 +172,7 @@ test('create: launches with the brief, validated model and derived ids; repeatin
   assert.deepEqual(launch.modelSelection, { instanceId: 'claudeAgent', model: 'opus', options: [{ id: 'effort', value: 'high' }] });
   assert.equal(launch.initialMessage.text, 'brief');
   assert.equal(launch.runtimeMode, 'full-access');
+  assert.equal(launch.creationSource, 'mcp');
   assert.deepEqual(launch.workspaceStrategy, { type: 'root' });
   const again = await o.create(req);
   assert.equal(again.created, false);
