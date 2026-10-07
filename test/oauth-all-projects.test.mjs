@@ -80,6 +80,34 @@ test('all: t3_control_plane spans both environments with projects created after 
   assert.ok(y.needsIntervention.threads.every(i => i.environment.alias === 'local'));
 });
 
+test('all: reads without environment span both consented environments; by-ID discovery resolves, refuses ambiguity and refuses when a host is offline', async t => {
+  const f = await fixture(t); const at = (await f.c.signIn()).tokens.access_token;
+  const local = f.add('local'), remoto = f.add('remoto');
+  const threads = body(await f.c.callTool(at, 't3_threads', { includeNoRun: true }));
+  assert.equal(threads.complete, true);
+  assert.deepEqual(threads.queriedEnvironments.map(e => e.alias), ['local', 'remoto']);
+  assert.ok(threads.threads.some(x => x.threadId === `t-${local}` && x.environment.alias === 'local'));
+  assert.ok(threads.threads.some(x => x.threadId === `t-${remoto}` && x.environment.alias === 'remoto'));
+  const projects = body(await f.c.callTool(at, 't3_projetos', {}));
+  assert.ok(projects.projects.some(p => p.projectId === remoto && p.environment.alias === 'remoto'));
+  assert.ok(body(await f.c.callTool(at, 't3_atencao', {})).threads.some(x => x.threadId === `t-${local}`));
+  // Thread só do remoto, sem environment: localizada e lida lá.
+  const lida = body(await f.c.callTool(at, 't3_thread', { threadId: `t-${remoto}` }));
+  assert.equal(lida.environment.alias, 'remoto'); assert.equal(lida.environmentDiscovery.complete, true);
+  assert.match(body(await f.c.callTool(at, 't3_mensagens', { threadId: `t-${remoto}` })).messages[0].text, /message/);
+  // Mesmo ID nos dois: recusa.
+  const comum = await f.c.callTool(at, 't3_thread', { threadId: 't-comum' });
+  assert.equal(comum.data.result.isError, true); assert.match(comum.data.result.content[0].text, /more than one environment/);
+  // Remoto offline para as leituras: listagem incompleta, e a thread do local não é resolvida sem environment.
+  f.data.remoto.shell = () => Promise.reject(new Error('offline'));
+  const parcial = body(await f.c.callTool(at, 't3_threads', { includeNoRun: true }));
+  assert.equal(parcial.complete, false); assert.equal(parcial.environmentFailures[0].alias, 'remoto');
+  assert.ok(parcial.threads.some(x => x.threadId === `t-${local}`));
+  const recusada = await f.c.callTool(at, 't3_thread', { threadId: `t-${local}` });
+  assert.equal(recusada.data.result.isError, true); assert.match(recusada.data.result.content[0].text, /could not be resolved without `environment`: it was found in environment local, but remoto/);
+  assert.equal(body(await f.c.callTool(at, 't3_thread', { environment: 'local', threadId: `t-${local}` })).threadId, `t-${local}`);
+});
+
 test('all: empty inventory and offline host at login recover within the same session', async t => {
   const f = await fixture(t, { empty: true }); f.connections[1].offline = true;
   const at = (await f.c.signIn()).tokens.access_token;

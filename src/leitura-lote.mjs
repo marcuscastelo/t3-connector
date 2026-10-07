@@ -9,7 +9,7 @@
 // encerra a chamada inteira. Alvo repetido é lido uma vez e respondido em cada posição.
 
 import { ForaDoEscopo } from './ambientes.mjs';
-import { correrComSinal, falhaSanitizada } from './busca-threads.mjs';
+import { correrComSinal, falhaSanitizada } from './varredura.mjs';
 import { Cancelada, ErroT3 } from './t3.mjs';
 
 export const MAX_ALVOS = 20;

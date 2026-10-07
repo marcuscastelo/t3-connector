@@ -1,0 +1,2880 @@
+{
+ "302": {
+  "routes": {
+   "GET /.well-known/oauth-authorization-server": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "POST /.well-known/oauth-authorization-server": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "GET /.well-known/openid-configuration": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "POST /.well-known/openid-configuration": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "GET /.well-known/oauth-authorization-server/mcp": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "POST /.well-known/oauth-authorization-server/mcp": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "GET /.well-known/oauth-protected-resource": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "resource": "http://localhost:PUBLIC/mcp",
+     "authorization_servers": [
+      "http://localhost:PUBLIC"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "bearer_methods_supported": [
+      "header"
+     ],
+     "resource_name": "Demo Connector"
+    }
+   },
+   "POST /.well-known/oauth-protected-resource": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "resource": "http://localhost:PUBLIC/mcp",
+     "authorization_servers": [
+      "http://localhost:PUBLIC"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "bearer_methods_supported": [
+      "header"
+     ],
+     "resource_name": "Demo Connector"
+    }
+   },
+   "GET /.well-known/oauth-protected-resource/mcp": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "resource": "http://localhost:PUBLIC/mcp",
+     "authorization_servers": [
+      "http://localhost:PUBLIC"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "bearer_methods_supported": [
+      "header"
+     ],
+     "resource_name": "Demo Connector"
+    }
+   },
+   "POST /.well-known/oauth-protected-resource/mcp": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "resource": "http://localhost:PUBLIC/mcp",
+     "authorization_servers": [
+      "http://localhost:PUBLIC"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "bearer_methods_supported": [
+      "header"
+     ],
+     "resource_name": "Demo Connector"
+    }
+   },
+   "GET /.well-known/openid-configuration/mcp": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /.well-known/openid-configuration/mcp": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /mcp/.well-known/openid-configuration": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /mcp/.well-known/openid-configuration": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /authorize": {
+    "status": 400,
+    "headers": {
+     "content-type": "text/html; charset=utf-8",
+     "content-security-policy": "default-src 'none'; script-src 'nonce-N' 'self'; style-src 'nonce-N'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Sign-in error</title>\n<style nonce=\"N\">body{font:16px system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;color:#222}code{background:#eee;padding:2px 4px;border-radius:3px}a.btn,button{display:inline-block;padding:10px 16px;background:#185;color:#fff;border:0;border-radius:6px;text-decoration:none;font-size:16px;cursor:pointer}button.danger{background:#a22}.big{font-size:30px;letter-spacing:4px;font-family:monospace}dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px}dt{color:#666}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:4px;text-align:left;font-size:14px}.muted{color:#666;font-size:14px}</style></head><body><h1>Sign-in failed</h1><p>Unknown or invalid client.</p><p class=\"muted\">Start the connection again from the client app.</p></body></html>"
+   },
+   "POST /authorize": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /authorize/status": {
+    "status": 403,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "forbidden"
+    }
+   },
+   "POST /authorize/status": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /resume": {
+    "status": 400,
+    "headers": {
+     "content-type": "text/html; charset=utf-8",
+     "content-security-policy": "default-src 'none'; script-src 'nonce-N' 'self'; style-src 'nonce-N'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Sign-in error</title>\n<style nonce=\"N\">body{font:16px system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;color:#222}code{background:#eee;padding:2px 4px;border-radius:3px}a.btn,button{display:inline-block;padding:10px 16px;background:#185;color:#fff;border:0;border-radius:6px;text-decoration:none;font-size:16px;cursor:pointer}button.danger{background:#a22}.big{font-size:30px;letter-spacing:4px;font-family:monospace}dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px}dt{color:#666}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:4px;text-align:left;font-size:14px}.muted{color:#666;font-size:14px}</style></head><body><h1>Sign-in failed</h1><p>This sign-in is invalid, expired or was opened in a different browser.</p><p class=\"muted\">Start the connection again from the client app.</p></body></html>"
+   },
+   "POST /resume": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /token": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /token": {
+    "status": 401,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "invalid_client",
+     "error_description": "private_key_jwt_required"
+    }
+   },
+   "GET /revoke": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /revoke": {
+    "status": 401,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "invalid_client",
+     "error_description": "private_key_jwt_required"
+    }
+   },
+   "GET /mcp": {
+    "status": 405,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "allow": "POST",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "method_not_allowed"
+    }
+   },
+   "POST /mcp": {
+    "status": 401,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "www-authenticate": "Bearer resource_metadata=\"http://localhost:PUBLIC/.well-known/oauth-protected-resource/mcp\", scope=\"connector:read connector:write\"",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "unauthorized"
+    }
+   },
+   "GET /enroll": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /enroll": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /authorize/vendor/swa.js": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /authorize/vendor/swa.js": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /authorize/passkey/options": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /authorize/passkey/options": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /nope": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /nope": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   }
+  },
+  "unauthorized": {
+   "status": 401,
+   "headers": {
+    "content-type": "application/json",
+    "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    "cache-control": "no-store",
+    "www-authenticate": "Bearer resource_metadata=\"http://localhost:PUBLIC/.well-known/oauth-protected-resource/mcp\", scope=\"connector:read connector:write\"",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer"
+   },
+   "body": {
+    "error": "unauthorized"
+   }
+  },
+  "invalidToken": {
+   "status": 401,
+   "headers": {
+    "content-type": "application/json",
+    "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    "cache-control": "no-store",
+    "www-authenticate": "Bearer resource_metadata=\"http://localhost:PUBLIC/.well-known/oauth-protected-resource/mcp\", scope=\"connector:read connector:write\", error=\"invalid_token\", error_description=\"token_unknown\"",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer"
+   },
+   "body": {
+    "error": "invalid_token"
+   }
+  },
+  "authorize": {
+   "status": 302,
+   "headers": {
+    "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    "cache-control": "no-store",
+    "location": "http://localhost:LOCAL/login#handoff=H",
+    "set-cookie": "demo_tx=C; HttpOnly; SameSite=Lax; Path=/; Max-Age=300",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer"
+   },
+   "body": ""
+  },
+  "resume": {
+   "status": 302,
+   "headers": {
+    "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    "cache-control": "no-store",
+    "location": "https://client.example/cb?code=X&state=X&iss=http%3A%2F%2Flocalhost%3APUBLIC",
+    "set-cookie": "demo_tx=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer"
+   },
+   "body": ""
+  },
+  "token": {
+   "status": 200,
+   "keys": [
+    "access_token",
+    "expires_in",
+    "refresh_token",
+    "scope",
+    "token_type"
+   ],
+   "token_type": "Bearer",
+   "scope": "connector:read connector:write",
+   "expires_in": 60
+  },
+  "tools": [
+   "demo_read",
+   "demo_write"
+  ]
+ },
+ "button": {
+  "routes": {
+   "GET /.well-known/oauth-authorization-server": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "POST /.well-known/oauth-authorization-server": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "GET /.well-known/openid-configuration": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "POST /.well-known/openid-configuration": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "GET /.well-known/oauth-authorization-server/mcp": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "POST /.well-known/oauth-authorization-server/mcp": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "GET /.well-known/oauth-protected-resource": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "resource": "http://localhost:PUBLIC/mcp",
+     "authorization_servers": [
+      "http://localhost:PUBLIC"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "bearer_methods_supported": [
+      "header"
+     ],
+     "resource_name": "Demo Connector"
+    }
+   },
+   "POST /.well-known/oauth-protected-resource": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "resource": "http://localhost:PUBLIC/mcp",
+     "authorization_servers": [
+      "http://localhost:PUBLIC"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "bearer_methods_supported": [
+      "header"
+     ],
+     "resource_name": "Demo Connector"
+    }
+   },
+   "GET /.well-known/oauth-protected-resource/mcp": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "resource": "http://localhost:PUBLIC/mcp",
+     "authorization_servers": [
+      "http://localhost:PUBLIC"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "bearer_methods_supported": [
+      "header"
+     ],
+     "resource_name": "Demo Connector"
+    }
+   },
+   "POST /.well-known/oauth-protected-resource/mcp": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "resource": "http://localhost:PUBLIC/mcp",
+     "authorization_servers": [
+      "http://localhost:PUBLIC"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "bearer_methods_supported": [
+      "header"
+     ],
+     "resource_name": "Demo Connector"
+    }
+   },
+   "GET /.well-known/openid-configuration/mcp": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /.well-known/openid-configuration/mcp": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /mcp/.well-known/openid-configuration": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /mcp/.well-known/openid-configuration": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /authorize": {
+    "status": 400,
+    "headers": {
+     "content-type": "text/html; charset=utf-8",
+     "content-security-policy": "default-src 'none'; script-src 'nonce-N' 'self'; style-src 'nonce-N'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Sign-in error</title>\n<style nonce=\"N\">body{font:16px system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;color:#222}code{background:#eee;padding:2px 4px;border-radius:3px}a.btn,button{display:inline-block;padding:10px 16px;background:#185;color:#fff;border:0;border-radius:6px;text-decoration:none;font-size:16px;cursor:pointer}button.danger{background:#a22}.big{font-size:30px;letter-spacing:4px;font-family:monospace}dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px}dt{color:#666}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:4px;text-align:left;font-size:14px}.muted{color:#666;font-size:14px}</style></head><body><h1>Sign-in failed</h1><p>Unknown or invalid client.</p><p class=\"muted\">Start the connection again from the client app.</p></body></html>"
+   },
+   "POST /authorize": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /authorize/status": {
+    "status": 403,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "forbidden"
+    }
+   },
+   "POST /authorize/status": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /resume": {
+    "status": 400,
+    "headers": {
+     "content-type": "text/html; charset=utf-8",
+     "content-security-policy": "default-src 'none'; script-src 'nonce-N' 'self'; style-src 'nonce-N'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Sign-in error</title>\n<style nonce=\"N\">body{font:16px system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;color:#222}code{background:#eee;padding:2px 4px;border-radius:3px}a.btn,button{display:inline-block;padding:10px 16px;background:#185;color:#fff;border:0;border-radius:6px;text-decoration:none;font-size:16px;cursor:pointer}button.danger{background:#a22}.big{font-size:30px;letter-spacing:4px;font-family:monospace}dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px}dt{color:#666}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:4px;text-align:left;font-size:14px}.muted{color:#666;font-size:14px}</style></head><body><h1>Sign-in failed</h1><p>This sign-in is invalid, expired or was opened in a different browser.</p><p class=\"muted\">Start the connection again from the client app.</p></body></html>"
+   },
+   "POST /resume": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /token": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /token": {
+    "status": 401,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "invalid_client",
+     "error_description": "private_key_jwt_required"
+    }
+   },
+   "GET /revoke": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /revoke": {
+    "status": 401,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "invalid_client",
+     "error_description": "private_key_jwt_required"
+    }
+   },
+   "GET /mcp": {
+    "status": 405,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "allow": "POST",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "method_not_allowed"
+    }
+   },
+   "POST /mcp": {
+    "status": 401,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "www-authenticate": "Bearer resource_metadata=\"http://localhost:PUBLIC/.well-known/oauth-protected-resource/mcp\", scope=\"connector:read connector:write\"",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "unauthorized"
+    }
+   },
+   "GET /enroll": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /enroll": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /authorize/vendor/swa.js": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /authorize/vendor/swa.js": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /authorize/passkey/options": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /authorize/passkey/options": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /nope": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /nope": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   }
+  },
+  "unauthorized": {
+   "status": 401,
+   "headers": {
+    "content-type": "application/json",
+    "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    "cache-control": "no-store",
+    "www-authenticate": "Bearer resource_metadata=\"http://localhost:PUBLIC/.well-known/oauth-protected-resource/mcp\", scope=\"connector:read connector:write\"",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer"
+   },
+   "body": {
+    "error": "unauthorized"
+   }
+  },
+  "invalidToken": {
+   "status": 401,
+   "headers": {
+    "content-type": "application/json",
+    "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    "cache-control": "no-store",
+    "www-authenticate": "Bearer resource_metadata=\"http://localhost:PUBLIC/.well-known/oauth-protected-resource/mcp\", scope=\"connector:read connector:write\", error=\"invalid_token\", error_description=\"token_unknown\"",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer"
+   },
+   "body": {
+    "error": "invalid_token"
+   }
+  },
+  "authorize": {
+   "status": 200,
+   "headers": {
+    "content-type": "text/html; charset=utf-8",
+    "content-security-policy": "default-src 'none'; script-src 'nonce-N' 'self'; style-src 'nonce-N'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    "cache-control": "no-store",
+    "set-cookie": "demo_tx=C; HttpOnly; SameSite=Lax; Path=/; Max-Age=300",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer"
+   },
+   "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Sign in</title>\n<style nonce=\"N\">body{font:16px system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;color:#222}code{background:#eee;padding:2px 4px;border-radius:3px}a.btn,button{display:inline-block;padding:10px 16px;background:#185;color:#fff;border:0;border-radius:6px;text-decoration:none;font-size:16px;cursor:pointer}button.danger{background:#a22}.big{font-size:30px;letter-spacing:4px;font-family:monospace}dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px}dt{color:#666}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:4px;text-align:left;font-size:14px}.muted{color:#666;font-size:14px}</style></head><body><h1>Demo Connector sign-in</h1>\n<dl><dt>Client</dt><dd>Fake client <span class=\"muted\">(https://client.example/oauth/client.json)</span></dd><dt>Access</dt><dd>connector:read connector:write</dd></dl>\n<p>Approve this sign-in with your passkey on the local control panel of <b>this computer</b>.</p><p><a class=\"btn\" href=\"http://localhost:LOCAL/login#handoff=H\">Open local control (localhost)</a></p>\n<p class=\"muted\">If the button does not work: open <code>http://localhost:LOCAL/login</code> in a browser on this computer and enter the code <span class=\"big\">OOB</span>. Keep this page open; it continues by itself.</p>\n<p id=\"s\" class=\"muted\"></p>\n<script nonce=\"N\">const id=\"ID\";async function poll(){try{const r=await fetch('/authorize/status?tx='+encodeURIComponent(id),{credentials:'same-origin'});const v=await r.json();if(v.approved){location.replace('/resume?tx='+encodeURIComponent(id));return;}if(v.error){document.getElementById('s').textContent='Sign-in expired. Start again from the client app.';return;}}catch(e){}setTimeout(poll,1500);}poll();</script></body></html>"
+  },
+  "resume": {
+   "status": 302,
+   "headers": {
+    "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    "cache-control": "no-store",
+    "location": "https://client.example/cb?code=X&state=X&iss=http%3A%2F%2Flocalhost%3APUBLIC",
+    "set-cookie": "demo_tx=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer"
+   },
+   "body": ""
+  },
+  "token": {
+   "status": 200,
+   "keys": [
+    "access_token",
+    "expires_in",
+    "refresh_token",
+    "scope",
+    "token_type"
+   ],
+   "token_type": "Bearer",
+   "scope": "connector:read connector:write",
+   "expires_in": 60
+  },
+  "tools": [
+   "demo_read",
+   "demo_write"
+  ]
+ },
+ "oob": {
+  "routes": {
+   "GET /.well-known/oauth-authorization-server": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "POST /.well-known/oauth-authorization-server": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "GET /.well-known/openid-configuration": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "POST /.well-known/openid-configuration": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "GET /.well-known/oauth-authorization-server/mcp": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "POST /.well-known/oauth-authorization-server/mcp": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "http://localhost:PUBLIC",
+     "authorization_endpoint": "http://localhost:PUBLIC/authorize",
+     "token_endpoint": "http://localhost:PUBLIC/token",
+     "revocation_endpoint": "http://localhost:PUBLIC/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "GET /.well-known/oauth-protected-resource": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "resource": "http://localhost:PUBLIC/mcp",
+     "authorization_servers": [
+      "http://localhost:PUBLIC"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "bearer_methods_supported": [
+      "header"
+     ],
+     "resource_name": "Demo Connector"
+    }
+   },
+   "POST /.well-known/oauth-protected-resource": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "resource": "http://localhost:PUBLIC/mcp",
+     "authorization_servers": [
+      "http://localhost:PUBLIC"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "bearer_methods_supported": [
+      "header"
+     ],
+     "resource_name": "Demo Connector"
+    }
+   },
+   "GET /.well-known/oauth-protected-resource/mcp": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "resource": "http://localhost:PUBLIC/mcp",
+     "authorization_servers": [
+      "http://localhost:PUBLIC"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "bearer_methods_supported": [
+      "header"
+     ],
+     "resource_name": "Demo Connector"
+    }
+   },
+   "POST /.well-known/oauth-protected-resource/mcp": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "resource": "http://localhost:PUBLIC/mcp",
+     "authorization_servers": [
+      "http://localhost:PUBLIC"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "bearer_methods_supported": [
+      "header"
+     ],
+     "resource_name": "Demo Connector"
+    }
+   },
+   "GET /.well-known/openid-configuration/mcp": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /.well-known/openid-configuration/mcp": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /mcp/.well-known/openid-configuration": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /mcp/.well-known/openid-configuration": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /authorize": {
+    "status": 400,
+    "headers": {
+     "content-type": "text/html; charset=utf-8",
+     "content-security-policy": "default-src 'none'; script-src 'nonce-N' 'self'; style-src 'nonce-N'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Sign-in error</title>\n<style nonce=\"N\">body{font:16px system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;color:#222}code{background:#eee;padding:2px 4px;border-radius:3px}a.btn,button{display:inline-block;padding:10px 16px;background:#185;color:#fff;border:0;border-radius:6px;text-decoration:none;font-size:16px;cursor:pointer}button.danger{background:#a22}.big{font-size:30px;letter-spacing:4px;font-family:monospace}dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px}dt{color:#666}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:4px;text-align:left;font-size:14px}.muted{color:#666;font-size:14px}</style></head><body><h1>Sign-in failed</h1><p>Unknown or invalid client.</p><p class=\"muted\">Start the connection again from the client app.</p></body></html>"
+   },
+   "POST /authorize": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /authorize/status": {
+    "status": 403,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "forbidden"
+    }
+   },
+   "POST /authorize/status": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /resume": {
+    "status": 400,
+    "headers": {
+     "content-type": "text/html; charset=utf-8",
+     "content-security-policy": "default-src 'none'; script-src 'nonce-N' 'self'; style-src 'nonce-N'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Sign-in error</title>\n<style nonce=\"N\">body{font:16px system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;color:#222}code{background:#eee;padding:2px 4px;border-radius:3px}a.btn,button{display:inline-block;padding:10px 16px;background:#185;color:#fff;border:0;border-radius:6px;text-decoration:none;font-size:16px;cursor:pointer}button.danger{background:#a22}.big{font-size:30px;letter-spacing:4px;font-family:monospace}dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px}dt{color:#666}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:4px;text-align:left;font-size:14px}.muted{color:#666;font-size:14px}</style></head><body><h1>Sign-in failed</h1><p>This sign-in is invalid, expired or was opened in a different browser.</p><p class=\"muted\">Start the connection again from the client app.</p></body></html>"
+   },
+   "POST /resume": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /token": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /token": {
+    "status": 401,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "invalid_client",
+     "error_description": "private_key_jwt_required"
+    }
+   },
+   "GET /revoke": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /revoke": {
+    "status": 401,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "invalid_client",
+     "error_description": "private_key_jwt_required"
+    }
+   },
+   "GET /mcp": {
+    "status": 405,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "allow": "POST",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "method_not_allowed"
+    }
+   },
+   "POST /mcp": {
+    "status": 401,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "www-authenticate": "Bearer resource_metadata=\"http://localhost:PUBLIC/.well-known/oauth-protected-resource/mcp\", scope=\"connector:read connector:write\"",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "unauthorized"
+    }
+   },
+   "GET /enroll": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /enroll": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /authorize/vendor/swa.js": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /authorize/vendor/swa.js": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /authorize/passkey/options": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /authorize/passkey/options": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /nope": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /nope": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "POST /": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   }
+  },
+  "unauthorized": {
+   "status": 401,
+   "headers": {
+    "content-type": "application/json",
+    "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    "cache-control": "no-store",
+    "www-authenticate": "Bearer resource_metadata=\"http://localhost:PUBLIC/.well-known/oauth-protected-resource/mcp\", scope=\"connector:read connector:write\"",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer"
+   },
+   "body": {
+    "error": "unauthorized"
+   }
+  },
+  "invalidToken": {
+   "status": 401,
+   "headers": {
+    "content-type": "application/json",
+    "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    "cache-control": "no-store",
+    "www-authenticate": "Bearer resource_metadata=\"http://localhost:PUBLIC/.well-known/oauth-protected-resource/mcp\", scope=\"connector:read connector:write\", error=\"invalid_token\", error_description=\"token_unknown\"",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer"
+   },
+   "body": {
+    "error": "invalid_token"
+   }
+  },
+  "authorize": {
+   "status": 200,
+   "headers": {
+    "content-type": "text/html; charset=utf-8",
+    "content-security-policy": "default-src 'none'; script-src 'nonce-N' 'self'; style-src 'nonce-N'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    "cache-control": "no-store",
+    "set-cookie": "demo_tx=C; HttpOnly; SameSite=Lax; Path=/; Max-Age=300",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer"
+   },
+   "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Sign in</title>\n<style nonce=\"N\">body{font:16px system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;color:#222}code{background:#eee;padding:2px 4px;border-radius:3px}a.btn,button{display:inline-block;padding:10px 16px;background:#185;color:#fff;border:0;border-radius:6px;text-decoration:none;font-size:16px;cursor:pointer}button.danger{background:#a22}.big{font-size:30px;letter-spacing:4px;font-family:monospace}dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px}dt{color:#666}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:4px;text-align:left;font-size:14px}.muted{color:#666;font-size:14px}</style></head><body><h1>Demo Connector sign-in</h1>\n<dl><dt>Client</dt><dd>Fake client <span class=\"muted\">(https://client.example/oauth/client.json)</span></dd><dt>Access</dt><dd>connector:read connector:write</dd></dl>\n\n<p class=\"muted\">open <code>http://localhost:LOCAL/login</code> in a browser on this computer and enter the code <span class=\"big\">OOB</span>. Keep this page open; it continues by itself.</p>\n<p id=\"s\" class=\"muted\"></p>\n<script nonce=\"N\">const id=\"ID\";async function poll(){try{const r=await fetch('/authorize/status?tx='+encodeURIComponent(id),{credentials:'same-origin'});const v=await r.json();if(v.approved){location.replace('/resume?tx='+encodeURIComponent(id));return;}if(v.error){document.getElementById('s').textContent='Sign-in expired. Start again from the client app.';return;}}catch(e){}setTimeout(poll,1500);}poll();</script></body></html>"
+  },
+  "resume": {
+   "status": 302,
+   "headers": {
+    "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    "cache-control": "no-store",
+    "location": "https://client.example/cb?code=X&state=X&iss=http%3A%2F%2Flocalhost%3APUBLIC",
+    "set-cookie": "demo_tx=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer"
+   },
+   "body": ""
+  },
+  "token": {
+   "status": 200,
+   "keys": [
+    "access_token",
+    "expires_in",
+    "refresh_token",
+    "scope",
+    "token_type"
+   ],
+   "token_type": "Bearer",
+   "scope": "connector:read connector:write",
+   "expires_in": 60
+  },
+  "tools": [
+   "demo_read",
+   "demo_write"
+  ]
+ },
+ "public": {
+  "routes": {
+   "GET /.well-known/oauth-authorization-server": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "https://issuer.example.test",
+     "authorization_endpoint": "https://issuer.example.test/authorize",
+     "token_endpoint": "https://issuer.example.test/token",
+     "revocation_endpoint": "https://issuer.example.test/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "GET /.well-known/openid-configuration": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "https://issuer.example.test",
+     "authorization_endpoint": "https://issuer.example.test/authorize",
+     "token_endpoint": "https://issuer.example.test/token",
+     "revocation_endpoint": "https://issuer.example.test/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "GET /.well-known/oauth-authorization-server/mcp": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "issuer": "https://issuer.example.test",
+     "authorization_endpoint": "https://issuer.example.test/authorize",
+     "token_endpoint": "https://issuer.example.test/token",
+     "revocation_endpoint": "https://issuer.example.test/revoke",
+     "response_types_supported": [
+      "code"
+     ],
+     "response_modes_supported": [
+      "query"
+     ],
+     "grant_types_supported": [
+      "authorization_code",
+      "refresh_token"
+     ],
+     "code_challenge_methods_supported": [
+      "S256"
+     ],
+     "token_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "token_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "revocation_endpoint_auth_methods_supported": [
+      "private_key_jwt"
+     ],
+     "revocation_endpoint_auth_signing_alg_values_supported": [
+      "ES256",
+      "RS256",
+      "PS256"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "authorization_response_iss_parameter_supported": true,
+     "client_id_metadata_document_supported": true
+    }
+   },
+   "GET /.well-known/oauth-protected-resource": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "resource": "https://issuer.example.test/mcp",
+     "authorization_servers": [
+      "https://issuer.example.test"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "bearer_methods_supported": [
+      "header"
+     ],
+     "resource_name": "Demo Connector"
+    }
+   },
+   "GET /.well-known/oauth-protected-resource/mcp": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "resource": "https://issuer.example.test/mcp",
+     "authorization_servers": [
+      "https://issuer.example.test"
+     ],
+     "scopes_supported": [
+      "connector:read",
+      "connector:write"
+     ],
+     "bearer_methods_supported": [
+      "header"
+     ],
+     "resource_name": "Demo Connector"
+    }
+   },
+   "GET /.well-known/openid-configuration/mcp": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /mcp/.well-known/openid-configuration": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /authorize": {
+    "status": 400,
+    "headers": {
+     "content-type": "text/html; charset=utf-8",
+     "content-security-policy": "default-src 'none'; script-src 'nonce-N' 'self'; style-src 'nonce-N'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Sign-in error</title>\n<style nonce=\"N\">body{font:16px system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;color:#222}code{background:#eee;padding:2px 4px;border-radius:3px}a.btn,button{display:inline-block;padding:10px 16px;background:#185;color:#fff;border:0;border-radius:6px;text-decoration:none;font-size:16px;cursor:pointer}button.danger{background:#a22}.big{font-size:30px;letter-spacing:4px;font-family:monospace}dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px}dt{color:#666}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:4px;text-align:left;font-size:14px}.muted{color:#666;font-size:14px}</style></head><body><h1>Sign-in failed</h1><p>Unknown or invalid client.</p><p class=\"muted\">Start the connection again from the client app.</p></body></html>"
+   },
+   "GET /authorize/status": {
+    "status": 403,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "forbidden"
+    }
+   },
+   "GET /resume": {
+    "status": 400,
+    "headers": {
+     "content-type": "text/html; charset=utf-8",
+     "content-security-policy": "default-src 'none'; script-src 'nonce-N' 'self'; style-src 'nonce-N'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Sign-in error</title>\n<style nonce=\"N\">body{font:16px system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;color:#222}code{background:#eee;padding:2px 4px;border-radius:3px}a.btn,button{display:inline-block;padding:10px 16px;background:#185;color:#fff;border:0;border-radius:6px;text-decoration:none;font-size:16px;cursor:pointer}button.danger{background:#a22}.big{font-size:30px;letter-spacing:4px;font-family:monospace}dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px}dt{color:#666}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:4px;text-align:left;font-size:14px}.muted{color:#666;font-size:14px}</style></head><body><h1>Sign-in failed</h1><p>This sign-in is invalid, expired or was opened in a different browser.</p><p class=\"muted\">Start the connection again from the client app.</p></body></html>"
+   },
+   "GET /token": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /revoke": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /mcp": {
+    "status": 405,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "allow": "POST",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "method_not_allowed"
+    }
+   },
+   "GET /enroll": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /authorize/vendor/swa.js": {
+    "status": 200,
+    "headers": {
+     "content-type": "text/javascript",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": "sha256:cf4469953efcb5617a870ae3f022b3ad48aee8c06012ccdafcabc73058f123a0"
+   },
+   "GET /authorize/passkey/options": {
+    "status": 405,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "method_not_allowed"
+    }
+   },
+   "GET /nope": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   },
+   "GET /": {
+    "status": 404,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "error": "not_found"
+    }
+   }
+  },
+  "authorize": {
+   "status": 200,
+   "headers": {
+    "content-type": "text/html; charset=utf-8",
+    "content-security-policy": "default-src 'none'; script-src 'nonce-N' 'self'; style-src 'nonce-N'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    "cache-control": "no-store",
+    "set-cookie": "__Host-demo_tx=C; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=300",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer"
+   },
+   "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Sign in</title>\n<style nonce=\"N\">body{font:16px system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;color:#222}code{background:#eee;padding:2px 4px;border-radius:3px}a.btn,button{display:inline-block;padding:10px 16px;background:#185;color:#fff;border:0;border-radius:6px;text-decoration:none;font-size:16px;cursor:pointer}button.danger{background:#a22}.big{font-size:30px;letter-spacing:4px;font-family:monospace}dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px}dt{color:#666}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:4px;text-align:left;font-size:14px}.muted{color:#666;font-size:14px}</style></head><body><h1>Demo Connector sign-in</h1><dl><dt>Client</dt><dd>Fake client (https://client.example/oauth/client.json)</dd><dt>Returns to</dt><dd>client.example</dd><dt>Access</dt><dd>connector:read connector:write</dd><dt>Resource</dt><dd>https://issuer.example.test/mcp</dd></dl>\n<p>Authenticate with your passkey, then review and explicitly approve the requested access.</p><button id=\"authenticate\">Authenticate with passkey</button><dl id=\"consent\"></dl><button id=\"approve\" hidden>Approve connection</button><p id=\"status\"></p>\n<script nonce=\"N\" src=\"/authorize/vendor/swa.js\"></script><script nonce=\"N\">const api=async(p,d)=>{const r=await fetch(p,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});const v=await r.json();if(!r.ok)throw new Error(v.error||r.status);return v;};const $=id=>document.getElementById(id);const say=t=>$('status').textContent=t;\nconst tx=\"ID\";\nfunction row(k,v){const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=k;dd.textContent=v;$('consent').append(dt,dd);}\n$('authenticate').onclick=async()=>{try{say('Waiting for passkey…');const options=await api('/authorize/passkey/options',{tx});const response=await SimpleWebAuthnBrowser.startAuthentication({optionsJSON:options});const r=await api('/authorize/passkey/verify',{tx,response});const v=r.view;$('consent').textContent='';row('Client',(v.clientName||'')+' ('+v.clientId+')');row('Returns to',v.returnsTo);row('Resource',v.resource);row('Access',v.scope);row('Consent',v.writes.consent);for(const e of v.writes.environments)row('Environment: '+e.alias,e.environmentId+' '+e.destination+'; '+(e.projects?e.projects.join(', '):'all current and future projects')+(v.scope.split(' ').includes('connector:write')&&e.actions>0?'; '+e.actions+' actions, full-access':''));for(const u of v.writes.unavailable)row('Unavailable',(u.alias||'')+' '+u.reason);$('approve').hidden=false;$('authenticate').hidden=true;say('Review the access above before approving.');}catch(e){say(e.message==='enrollment_required'?'Administrative enrollment of a public passkey is required.':e.message);}};\n$('approve').onclick=async()=>{try{$('approve').disabled=true;const r=await api('/authorize/consent',{tx,accept:true});location.replace(r.resume);}catch(e){say(e.message);$('approve').disabled=false;$('approve').hidden=true;$('authenticate').hidden=false;}};\n</script></body></html>"
+  },
+  "enrollmentLink": "https://issuer.example.test/enroll#ticket=T",
+  "enrollPage": {
+   "status": 200,
+   "headers": {
+    "content-type": "text/html; charset=utf-8",
+    "content-security-policy": "default-src 'none'; script-src 'nonce-N' 'self'; style-src 'nonce-N'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    "cache-control": "no-store",
+    "set-cookie": "__Host-demo_enroll=C; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=900",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer"
+   },
+   "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Enroll public passkey</title>\n<style nonce=\"N\">body{font:16px system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 16px;color:#222}code{background:#eee;padding:2px 4px;border-radius:3px}a.btn,button{display:inline-block;padding:10px 16px;background:#185;color:#fff;border:0;border-radius:6px;text-decoration:none;font-size:16px;cursor:pointer}button.danger{background:#a22}.big{font-size:30px;letter-spacing:4px;font-family:monospace}dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px}dt{color:#666}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:4px;text-align:left;font-size:14px}.muted{color:#666;font-size:14px}</style></head><body><h1>Enroll a public passkey</h1><p>This enrollment was authorized on the connector's administrative control page. The link is single use.</p><button id=\"enroll\">Create passkey</button><p id=\"status\"></p><script nonce=\"N\" src=\"/authorize/vendor/swa.js\"></script><script nonce=\"N\">const api=async(p,d)=>{const r=await fetch(p,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});const v=await r.json();if(!r.ok)throw new Error(v.error||r.status);return v;};const $=id=>document.getElementById(id);const say=t=>$('status').textContent=t;\nconst ticket=new URLSearchParams(location.hash.slice(1)).get('ticket');history.replaceState(null,'',location.pathname);\n$('enroll').onclick=async()=>{try{const options=await api('/enroll/options',{ticket});const response=await SimpleWebAuthnBrowser.startRegistration({optionsJSON:options});await api('/enroll/verify',{ticket,response});$('enroll').hidden=true;say('Public passkey enrolled. Start the connection from your client.');}catch(e){say(e.message);}};\n</script></body></html>"
+  },
+  "enrollVerify": 200,
+  "publicSignIn": {
+   "options": 200,
+   "verify": 200,
+   "consent": {
+    "status": 200,
+    "headers": {
+     "content-type": "application/json",
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": {
+     "resume": "https://issuer.example.test/resume?h=X"
+    }
+   },
+   "resume": {
+    "status": 302,
+    "headers": {
+     "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+     "cache-control": "no-store",
+     "location": "https://client.example/cb?code=X&state=X&iss=https%3A%2F%2Fissuer.example.test",
+     "set-cookie": "__Host-demo_tx=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0",
+     "x-frame-options": "DENY",
+     "referrer-policy": "no-referrer"
+    },
+    "body": ""
+   },
+   "token": 200
+  },
+  "unauthorized": {
+   "status": 401,
+   "headers": {
+    "content-type": "application/json",
+    "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    "cache-control": "no-store",
+    "www-authenticate": "Bearer resource_metadata=\"https://issuer.example.test/.well-known/oauth-protected-resource/mcp\", scope=\"connector:read connector:write\"",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer"
+   },
+   "body": {
+    "error": "unauthorized"
+   }
+  }
+ }
+}

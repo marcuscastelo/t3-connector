@@ -54,6 +54,37 @@
   `incompleteReason`; per-environment `snapshotSequence`, `readAt` and counts by state are in
   `queriedEnvironments`. One shell read per environment, no per-thread read. Existing tools
   are unchanged. The environment sweep lives in `src/varredura.mjs`.
+- `mcp-connector-kit` 0.3.0: the OAuth issuer may carry a mount path (`https://host/fleet`), so
+  several connectors share one host behind a path-routing ingress. Discovery uses RFC 8414 path
+  insertion, endpoints and pages live under the mount, WebAuthn uses the bare origin, and the root
+  protected-resource alias is served only without a mount. Without a path the public surface is
+  identical to 0.2.0 (snapshot test). A mounted connector routes only canonical origin-form
+  request-targets (no dot segments, backslash, authority or absolute form), so the connector that
+  answers is always the one the ingress chose from the raw path.
+- OAuth client authentication: a `private_key_jwt` assertion is accepted only when every `aud` value
+  names this authorization server (its issuer, token or revocation endpoint). Before, one matching
+  value was enough, so an assertion naming two servers authenticated at both. Assertions with a single
+  audience, or with several that all name this server, work as before.
+- **Read tools: no default environment.** Before, every read tool without `environment` silently
+  read the config `default` (normally the local machine), so a thread, project or provider
+  that existed only in another environment looked absent. Now `t3_projetos`, `t3_threads`,
+  `t3_atencao` and `t3_providers` without `environment` query every configured environment
+  (4 s each, 10 s total, like `t3_buscar_threads`) and every item carries
+  `environment: {alias, environmentId, name}`; the response adds `complete`,
+  `queriedEnvironments` (with `found`) and `environmentFailures`, so a partial answer never
+  looks complete. An environment that refuses the query (for example `woke` undecidable there,
+  or a `projectId` it does not authorize) is reported as `refused`. `environment` is now an
+  optional filter: with it, only that environment is read and a failure there is still an
+  error. `t3_thread` and `t3_mensagens` without `environment` locate the ID across every
+  environment and read it only when every environment answered and exactly one has it
+  (`environmentDiscovery` in the response); they refuse when it exists in more than one, when
+  every environment answered and none has it, and when any environment failed or timed out,
+  since the ID could also live there (the message never claims absence in that case). `t3_aguardar_thread` keeps requiring
+  `environment`, and every write action still does. Pagination keys gain the environment as a
+  tiebreaker and cursors are bound to the set of environments that answered; cursors issued by
+  0.12.0 are rejected with the usual message. `t3_ambientes` no longer returns `default`
+  (the config key stays, informational for the CLI). The `resolver` of the environment
+  registry refuses a missing key instead of substituting the default. ADR 0005.
 
 ## 0.12.1
 

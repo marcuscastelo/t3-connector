@@ -41,7 +41,10 @@ test('claims: aud, exp, lifetime, iat, sub, jti and replay', async () => {
   const a = k.assertion();
   await reg.authenticate(form(a), { audiences: [TOKEN] });
   await assert.rejects(reg.authenticate(form(a), { audiences: [TOKEN] }), /assertion_replayed/);
-  await reg.authenticate(form(k.assertion({ aud: ['https://as.example', TOKEN] })), { audiences: [TOKEN] });
+  // An array is accepted when every value names this server; one foreign value refuses it (it could
+  // be replayed at that other recipient).
+  await reg.authenticate(form(k.assertion({ aud: ['https://as.example', TOKEN] })), { audiences: [TOKEN, 'https://as.example'] });
+  for (const aud of [['https://as.example', TOKEN], [TOKEN, 'https://other/token'], []]) await assert.rejects(reg.authenticate(form(k.assertion({ aud })), { audiences: [TOKEN] }), /audience_invalid/);
 });
 
 test('no private_key_jwt means invalid_client (no downgrade to none or secrets)', async () => {

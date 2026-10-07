@@ -1,6 +1,8 @@
 // Registro dos environments configurados: resolve o alias da chamada, conecta sob
 // demanda, confere identidade e escopo do token e aplica a ACL daquele environment.
-// Não há fallback entre environments: um ID ausente aqui não é procurado em outro.
+// Não há environment padrão: `resolver` exige a chave, e a leitura sem `environment`
+// varre todos (varredura.mjs). Não há fallback entre environments: um ID pedido num
+// environment não é procurado em outro.
 
 import { Cancelada, ErroT3, criarCliente, lerToken, verificarConexao } from './t3.mjs';
 import { criarTransporteSsh, criarTransporteUrl } from './transporte.mjs';
@@ -57,11 +59,15 @@ export function criarAmbientes(config, {
     conexao: null, // Promise<{cliente, info}>
   }));
 
+  /** Registro pelo alias ou environmentId. Sem chave não há padrão: é erro de quem chama. */
   function resolver(chave) {
-    const alvo = chave ?? config.padrao;
-    const r = registros.find((x) => x.alias === alvo || x.environmentId === alvo);
+    const disponiveis = registros.map((x) => x.alias).join(', ');
+    if (chave === undefined || chave === null) {
+      throw new ForaDoEscopo(`environment is required here (alias or environmentId); available: ${disponiveis}`);
+    }
+    const r = registros.find((x) => x.alias === chave || x.environmentId === chave);
     if (!r) {
-      throw new ForaDoEscopo(`environment "${alvo}" is not configured; available: ${registros.map((x) => x.alias).join(', ')}`);
+      throw new ForaDoEscopo(`environment "${chave}" is not configured; available: ${disponiveis}`);
     }
     return r;
   }
@@ -115,6 +121,7 @@ export function criarAmbientes(config, {
   const identidade = (r) => ({ alias: r.alias, environmentId: r.environmentId });
 
   return {
+    // Só informativo (banner e JSON da CLI): nenhuma leitura cai nele.
     padrao: config.padrao,
     registros,
     resolver,
@@ -122,12 +129,11 @@ export function criarAmbientes(config, {
     usar,
     falhou,
     identidade,
-    /** Lista os ambientes configurados; com `verificar`, tenta conectar a cada um dentro do prazo. */
+    /** Lista os ambientes configurados (sem marcar padrão); com `verificar`, tenta conectar a cada um dentro do prazo. */
     async listar({ verificar = false, prazoMs = 4000, signal } = {}) {
       return Promise.all(registros.map(async (r) => {
         const item = {
           ...identidade(r),
-          default: r.alias === config.padrao,
           transport: r.ssh ? `ssh ${r.ssh.host}` : 'url',
           allowedProjectCount: r.projetosPermitidos.length,
         };

@@ -126,7 +126,10 @@ export class ClientRegistry {
     }
     if (!ok) throw new OAuthError('invalid_client', 'assertion_signature_invalid', 401);
     const now = Math.floor(this.wall() / 1000), aud = [].concat(claims.aud ?? []);
-    if (!aud.some(a => audiences.includes(a))) throw new OAuthError('invalid_client', 'assertion_audience_invalid', 401);
+    // Every audience must name this authorization server: an assertion that also names another
+    // recipient (another issuer on the same host, say) could be replayed there, since each server
+    // keeps its own jti record.
+    if (!aud.length || !aud.every(a => audiences.includes(a))) throw new OAuthError('invalid_client', 'assertion_audience_invalid', 401);
     const time = v => v === undefined || Number.isFinite(v);
     if (!Number.isFinite(claims.exp) || !time(claims.iat) || !time(claims.nbf)) throw new OAuthError('invalid_client', 'assertion_time_claims_invalid', 401);
     if (claims.exp + SKEW_S <= now) throw new OAuthError('invalid_client', 'assertion_expired', 401);

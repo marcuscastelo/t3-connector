@@ -23,7 +23,7 @@ export class CoberturaMudou extends CursorInvalido {
 }
 
 /** Rejeita quando `signal` aborta, mesmo que a promessa ignore o sinal. */
-function correrComSinal(promessa, signal) {
+export function correrComSinal(promessa, signal) {
   return new Promise((resolve, reject) => {
     const aoAbortar = () => reject(signal.reason);
     if (signal.aborted) return aoAbortar();

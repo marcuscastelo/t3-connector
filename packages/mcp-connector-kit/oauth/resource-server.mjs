@@ -61,8 +61,9 @@ export function perInvocationSource(createServer) {
 // canonical resource lives on the tunnel service and the local route stays /mcp. Metadata is served
 // at the RFC 9728 well-known path for the route (and the root alias); metadata and challenge name
 // the advertised resource when one is set (tunnel mode), otherwise the canonical resource, while
-// tokens are accepted only for the canonical resource.
-export function resourceServer({ issuer, resource, advertisedResource = null, route, scopes, tokens, authority, sources, serverInfo = { name: 'mcp-connector', version: '0.0.0' }, allowedOrigins = ['https://chatgpt.com'], audit = () => {}, brand }) {
+// tokens are accepted only for the canonical resource. `rootAlias: false` drops the root alias, which
+// belongs to the host and not to a connector mounted under a path of it.
+export function resourceServer({ issuer, resource, advertisedResource = null, route, rootAlias = true, scopes, tokens, authority, sources, serverInfo = { name: 'mcp-connector', version: '0.0.0' }, allowedOrigins = ['https://chatgpt.com'], audit = () => {}, brand }) {
   const path = route ?? new URL(resource).pathname;
   // Metadata and challenge name the advertised resource when one is configured (tunnel mode); tokens
   // are still checked against `resource` only.
@@ -137,7 +138,7 @@ export function resourceServer({ issuer, resource, advertisedResource = null, ro
 
   return async function handle(req, res, url) {
     const p = url.pathname;
-    if (p === '/.well-known/oauth-protected-resource' || p === `/.well-known/oauth-protected-resource${path}`) { json(res, 200, prmd); return true; }
+    if ((rootAlias && p === '/.well-known/oauth-protected-resource') || p === `/.well-known/oauth-protected-resource${path}`) { json(res, 200, prmd); return true; }
     if (p === path) { await mcp(req, res); return true; }
     return false;
   };

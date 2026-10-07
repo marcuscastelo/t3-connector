@@ -26,12 +26,18 @@ test('a espera exige environment e timeoutMs com teto de 5 s', async () => {
   assert.equal(r.isError, true);
 });
 
-test('sem ambiente vale o padrão local, e a resposta diz qual foi', async () => {
+test('sem environment não há padrão: a listagem varre os dois e cada item diz de onde veio', async () => {
   const c = await conectarMcp(ambientesFalsos());
   const p = dados(await c.callTool({ name: 't3_projetos', arguments: {} }));
-  assert.deepEqual(p.environment, { alias: 'local', environmentId: LOCAL.environmentId });
-  assert.deepEqual(p.projects.map((x) => x.projectId), [LOCAL.projeto]);
+  assert.equal('environment' in p, false);
+  assert.equal(p.complete, true);
+  assert.deepEqual(p.queriedEnvironments.map((a) => [a.alias, a.found]), [['local', 1], ['remoto', 1]]);
+  assert.deepEqual(p.projects.map((x) => `${x.environment.alias}:${x.projectId}`), [`local:${LOCAL.projeto}`, `remoto:${REMOTO.projeto}`]);
   assert.equal(p.projects[0].threadsNeedingIntervention, 1);
+  // Com environment explícito, a resposta continua dizendo qual foi.
+  const so = dados(await c.callTool({ name: 't3_projetos', arguments: { environment: 'local' } }));
+  assert.deepEqual(so.environment, { alias: 'local', environmentId: LOCAL.environmentId });
+  assert.deepEqual(so.projects.map((x) => x.projectId), [LOCAL.projeto]);
 });
 
 test('ambiente explícito remoto lê o projeto e as threads do Remoto', async () => {
@@ -48,19 +54,22 @@ test('ambiente explícito remoto lê o projeto e as threads do Remoto', async ()
   assert.equal(porId.environment.alias, 'remoto');
 });
 
-test('o mesmo threadId nos dois environments não se mistura', async () => {
+test('o mesmo threadId nos dois environments não se mistura, e sem environment é recusado em vez de escolhido', async () => {
   const c = await conectarMcp(ambientesFalsos());
-  const pol = dados(await c.callTool({ name: 't3_thread', arguments: { threadId: 't-comum' } }));
+  const pol = dados(await c.callTool({ name: 't3_thread', arguments: { environment: 'local', threadId: 't-comum' } }));
   const sir = dados(await c.callTool({ name: 't3_threads', arguments: { environment: 'remoto' } }));
   assert.equal(pol.title, 'Comum no Local');
   assert.equal(pol.project.projectId, LOCAL.projeto);
   assert.equal(sir.threads.find((t) => t.threadId === 't-comum').title, 'Comum no Remoto');
+  const ambiguo = await c.callTool({ name: 't3_thread', arguments: { threadId: 't-comum' } });
+  assert.equal(ambiguo.isError, true);
+  assert.match(ambiguo.content[0].text, /exists in more than one environment \(local, remoto\); pass `environment`/);
 });
 
 test('thread do Remoto pedida no Local é recusada sem procurar no Remoto', async () => {
   const chamadas = [];
   const c = await conectarMcp(ambientesFalsos(undefined, { chamadas }));
-  const r = await c.callTool({ name: 't3_thread', arguments: { threadId: 't-llm' } });
+  const r = await c.callTool({ name: 't3_thread', arguments: { environment: 'local', threadId: 't-llm' } });
   assert.equal(r.isError, true);
   assert.match(r.content[0].text, /not found in the authorized projects of environment local/);
   assert.ok(!chamadas.some((x) => x.startsWith('remoto:')), 'não deve consultar outro environment');
@@ -110,15 +119,16 @@ test('t3_atencao traz intervenções do escopo e ignora falha de outro projeto',
   assert.deepEqual(d.threads.map((t) => t.threadId), ['t-local']);
 });
 
-test('t3_ambientes lista os dois, com padrão e transporte, sem tokens', async () => {
+test('t3_ambientes lista os dois, com transporte, sem padrão e sem tokens', async () => {
   const c = await conectarMcp(ambientesFalsos());
   const r = await c.callTool({ name: 't3_ambientes', arguments: {} });
   const d = dados(r);
-  assert.equal(d.default, 'local');
-  assert.deepEqual(d.environments.map((a) => [a.alias, a.default, a.transport, a.available]), [
-    ['local', true, 'url', true],
-    ['remoto', false, 'ssh remoto', true],
+  assert.equal('default' in d, false);
+  assert.deepEqual(d.environments.map((a) => [a.alias, a.transport, a.available]), [
+    ['local', 'url', true],
+    ['remoto', 'ssh remoto', true],
   ]);
+  assert.ok(d.environments.every((a) => !('default' in a)));
   assert.doesNotMatch(r.content[0].text, /token|tokenFile|\/tmp\//i);
 });
 

@@ -1,6 +1,7 @@
 # ADR 0001: one endpoint per environment, chosen on every call
 
-Date: 2026-10-03. Status: accepted.
+Date: 2026-10-03. Status: accepted; the config `default` and the by-ID fallback rules are
+superseded by [ADR 0005](0005-reads-span-environments.md) (2026-10-06).
 
 ## Context
 

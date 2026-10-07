@@ -56,7 +56,9 @@ published to npm.
 Local file, outside Git: `~/.config/t3-connector/config.json` (or `T3_CONNECTOR_CONFIG`).
 See [examples/config.json](examples/config.json).
 
-- `default`: environment used when a call omits `environment`.
+- `default`: optional and informational only (CLI banner and `t3-connector environments`).
+  No read tool uses it: a call without `environment` queries every environment
+  ([ADR 0005](docs/adr/0005-reads-span-environments.md)).
 - `environments`: one entry per alias, each with:
   - `environmentId`: expected ID. The connector checks the server descriptor and fails
     closed if the endpoint answers as another environment.
@@ -111,9 +113,8 @@ SMOKE_THREAD_REMOTO=<id> [SMOKE_AMBIENTE_REMOTO=<alias>] [SMOKE_THREAD_ATIVA=<id
 ```
 
 It runs against the configuration in use (`T3_CONNECTOR_CONFIG` or the installed file) and
-takes the aliases from it: the `default` environment, and as the remote one
-`SMOKE_AMBIENTE_REMOTO` or else the first alias that is not the default. It needs at
-least two environments.
+takes the aliases from it: the first alias as the local one, and as the remote one
+`SMOKE_AMBIENTE_REMOTO` or else the second alias. It needs at least two environments.
 
 ## Exposing the connector through an MCP tunnel
 
@@ -126,46 +127,68 @@ version), and refresh the tool list in the client.
 
 ## How a client should read
 
-1. **Pick the environment.** `t3_ambientes` lists the configured ones. Threads and
-   projects belong to one environment: a remote thread ID does not exist locally, and the
-   same repository has a different projectId in each environment.
-2. **"Thread not found"** means it does not exist in *that* environment or is not in one
-   of its authorized projects. Reads by ID never fall back to other environments.
-   **To find a thread without knowing its environment**, call `t3_buscar_threads` (find
-   threads): each result carries the environment where the thread lives. When `total` is
-   above 1, ask the user which one; never pick by order, recency or the default
-   environment. Then read with that `environment` and `threadId`.
-3. **To follow a thread**, call `t3_aguardar_thread` with `timeoutMs` between 1000 and 2000
-   for voice (max 5000). `timedOut: true` means the thread is still running: answer the
-   user and call again on a later turn. Do not chain waits in the same turn.
-4. **`needs_intervention`** (approval, question, plan) is not an end
+1. **There is no default environment.** `t3_ambientes` lists the configured ones.
+   Listing and discovery tools (`t3_projetos`, `t3_threads`, `t3_atencao`,
+   `t3_providers`, `t3_buscar_threads`) called without `environment` query every
+   environment and put `environment: {alias, environmentId, name}` on each item; pass
+   `environment` only to restrict a read to one. Threads and projects belong to one
+   environment: a remote thread ID does not exist locally, and the same repository has a
+   different projectId in each environment.
+2. **Partial results are flagged.** Every listing answers with `complete`,
+   `queriedEnvironments` (each with `found`) and `environmentFailures`. With
+   `complete: false` the list is partial: an empty list then does not prove absence.
+   Tell the user which environment did not answer. With `environment` given, a failure
+   there is an error instead.
+3. **Reads by ID** (`t3_thread`, `t3_mensagens`) with `environment` read only there and
+   never fall back to another environment: "thread not found" means it does not exist in
+   *that* environment or is not in one of its authorized projects. Without `environment`
+   the connector locates the ID across every environment (shell only, each environment's
+   ACL) and reads it only when every environment answered and exactly one has it; the
+   response carries `environment` and `environmentDiscovery`. It refuses when the ID
+   exists in more than one environment (ask the user, then pass `environment`), when
+   every environment answered and none has it (definitive absence), and when any
+   environment failed or timed out, even if one that answered has the ID: the ID could
+   also live in the one that did not answer, so the message names it and asks for
+   `environment` or a retry, without claiming absence.
+   **To find a thread by title**, call `t3_buscar_threads` (find threads): each result
+   carries the environment where the thread lives. When `total` is above 1, ask the user
+   which one; never pick by order or recency.
+4. **To follow a thread**, call `t3_aguardar_thread` (which requires `environment`) with
+   `timeoutMs` between 1000 and 2000 for voice (max 5000). `timedOut: true` means the
+   thread is still running: answer the user and call again on a later turn. Do not chain
+   waits in the same turn.
+5. **`needs_intervention`** (approval, question, plan) is not an end
    state. The connector only reports it; answering requires T3 itself.
-5. **To browse providers or models**, call `t3_providers` in the target environment. A write
+6. **To browse providers or models**, call `t3_providers` in the target environment. A write
    with `modelSelection` does not need it first: it validates the selection itself. See
    [Provider instances](#provider-instances-t3_providers).
-6. **To decide what to do next across machines**, call `t3_control_plane` once. Act only
+7. **To decide what to do next across machines**, call `t3_control_plane` once. Act only
    on what it lists; if `complete` is false, say which environments are missing instead
    of reporting that nothing needs attention. See
    [Control plane snapshot](#control-plane-snapshot-t3_control_plane).
 
 ### Read tools
 
-All have `readOnlyHint: true` and `destructiveHint: false`. Every response includes
-`environment: {alias, environmentId}`, except `t3_buscar_threads` and
-`t3_thread_read_batch`, which put it on each thread or item.
+All have `readOnlyHint: true` and `destructiveHint: false`. A response to a call with
+`environment` includes `environment: {alias, environmentId}` at the top; every listed
+item (project, thread, provider instance) always carries its own
+`environment: {alias, environmentId, name}`. Listings and `t3_buscar_threads` also return
+`complete`, `queriedEnvironments` and `environmentFailures`
+([scope contract](#scope-reads-without-environment)). `t3_thread_read_batch` puts
+`environment` on each item.
 
 | Tool | Input | Main output |
 |---|---|---|
-| `t3_ambientes` (environments) | `check?` (default true) | `default` and `environments` with alias, `default`, `transport`, `allowedProjectCount`, `available`, `name`, `version` or `error` |
-| `t3_projetos` (projects) | `environment?`, `search?`, `limit?`, `cursor?` | `total`, `returned`, `truncated`, `nextCursor?`, `projects` (ordered by title) |
-| `t3_threads` | `environment?`, `projectId?`, `state?`, `includeNoRun?` (include threads without a run, default false), `woke?` (Woke marker filter), `search?`, `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `nextCursor?`, `changedSinceStart?`, `hiddenNoRun?`, `threads` |
+| `t3_ambientes` (environments) | `check?` (default true) | `environments` with alias, `environmentId`, `transport`, `allowedProjectCount`, `available`, `name`, `version` or `error` |
+| `t3_projetos` (projects) | `environment?` (omitted: every environment), `search?`, `limit?`, `cursor?` | `total`, `returned`, `truncated`, `nextCursor?`, `complete`, `queriedEnvironments`, `environmentFailures`, `projects` (ordered by title, then environment) |
+| `t3_threads` | `environment?` (omitted: every environment), `projectId?`, `state?`, `includeNoRun?` (include threads without a run, default false), `woke?` (Woke marker filter), `search?`, `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `nextCursor?`, `changedSinceStart?`, `hiddenNoRun?`, `complete`, `queriedEnvironments`, `environmentFailures`, `threads` |
 | `t3_buscar_threads` (find threads) | exactly one of `search?` or `threadId?` (exact), `match?` (`partial` = substring, default; `exact` = whole title), `environment?` (restricts; omitted: every environment), `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `complete`, `nextCursor?`, `queriedEnvironments`, `environmentFailures`; each thread with `environment: {alias, environmentId, name}` and `archived` |
-| `t3_atencao` (attention) | `environment?` | threads that need intervention, or failed and were not settled |
+| `t3_atencao` (attention) | `environment?` (omitted: every environment) | `total`, `complete`, `queriedEnvironments`, `environmentFailures`, `threads` that need intervention, or failed and were not settled |
 | `t3_control_plane` (control plane snapshot) | `environment?` (restricts; omitted: every environment), `limit?` (per list, 1-100, 20) | `contractVersion`, `scope`, `complete`, `incompleteReason?`, `coherence`, `queriedEnvironments` (with `snapshotSequence`, `readAt`, `byState`), `environmentFailures`, and the lists `needsIntervention`, `running` and `ready` (each `total`, `returned`, `truncated`, `threads`) |
-| `t3_thread` | `environment?`, `threadId`, `maxCharacters?` (200-6000, 1500) | thread summary, `pendingRequests`, `providerSession` (informational), `activeRun?`, `latestRun`, `latestResponse`, `history` |
+| `t3_thread` | `environment?` (omitted: the ID is located across every environment), `threadId`, `maxCharacters?` (200-6000, 1500) | `environment`, `environmentDiscovery?`, thread summary, `pendingRequests`, `providerSession` (informational), `activeRun?`, `latestRun`, `latestResponse`, `history` |
 | `t3_thread_read_batch` (read several threads) | `items` (1-20 `{environment, threadId}`, environment required per item), `maxCharacters?` (200-6000, 1500), `timeoutMs?` (1000-30000, 10000) | `returned`, `summary`, `allSucceeded`, `complete`, `environments`, `items` in input order, each `ok` with `thread` (the `t3_thread` result) or `error: {code, reason}` |
-| `t3_mensagens` (messages) | `environment?`, `threadId`, `limit?` (1-20, 6), `maxCharacters?` (100-4000, 800) | `messages` and `history.complete` |
-| `t3_providers` (provider instances) | `environment?`, `instanceId?` (exact, case-sensitive), `includeModels?` (include models, default false) | `source`, `total`, `providers` in T3 order, each with the T3 field names (see below) |
+| `t3_mensagens` (messages) | `environment?` (omitted: located as above), `threadId`, `limit?` (1-20, 6), `maxCharacters?` (100-4000, 800) | `environment`, `environmentDiscovery?`, `messages` and `history.complete` |
+| `t3_providers` (provider instances) | `environment?` (omitted: every environment), `instanceId?` (exact, case-sensitive), `includeModels?` (include models, default false) | `source`, `total`, `complete`, `queriedEnvironments`, `environmentFailures`, `providers` in environment order, then T3 order, each with the T3 field names (see below) |
 | `t3_aguardar_thread` (wait) | **`environment`**, `threadId`, **`timeoutMs`** (1-5000), `runId?`, `includeLatestResponse?`, `maxCharacters?` | `runId`, `statusRun`, `state`, `terminal`, `timedOut`, `returnReason`, `pendingRequest`, `latestResponse?` |
 
 States (`state`, also the filter of `t3_threads`): `running`, `needs_intervention`,
@@ -363,39 +386,51 @@ V2 backend double: full payload on read, concurrent send leaves the request pend
 answering option 1 with its existing ID clears the request and resumes the same run.
 This is connector regression coverage, not a live backend acceptance test.
 
+### Scope: reads without `environment`
+
+`t3_projetos`, `t3_threads`, `t3_atencao`, `t3_providers` and `t3_buscar_threads` called
+without `environment` read every configured environment (at most 4 at a time), apply
+each environment's ACL and merge the results; each item carries
+`environment: {alias, environmentId, name}`. `t3_thread` and `t3_mensagens` without
+`environment` locate the thread ID the same way (shell only) and read it only when every
+environment answered and exactly one has it
+([ADR 0005](docs/adr/0005-reads-span-environments.md)).
+
+- **Deadlines:** 4 s per environment (connection, shell and retry) and 10 s for the
+  whole call. Environments that fail, time out, answer as another environment or refuse
+  the query (for example a `woke` filter the server cannot decide, or a `projectId` that
+  environment does not authorize) go to `environmentFailures` (`code`: `timeout`,
+  `global_timeout`, `unavailable`, `environment_mismatch`, `http_<status>`,
+  `connection_refused`, `refused` or `failed`; `reason`; never token paths or transport
+  output), and `complete` is false. `total` counts matches in the environments that
+  answered, so an empty or short list with `complete: false` does not prove absence. If
+  every environment fails, the response is still a normal envelope with `complete: false`.
+- **With `environment`** only that environment is read, with no deadline beyond the
+  connection's, and a failure there is a tool error, as before.
+- **Ambiguity:** the same title or ID can exist in several environments and projects;
+  listings return every match with its environment, and reads by ID refuse to choose.
+
 ### Search and pagination
 
-Clients may cut long responses silently. `t3_projetos` and `t3_threads` answer in pages:
-`total` counts every match and comes before the list; `truncated: true` means more items
-follow; repeat the call with `cursor` set to `nextCursor` and
-the same `environment` and filters. `search` matches part of the title or ID, ignoring case
-and accents. The cursor stores the key of the last item and is bound to the environment, the
-tool and the filters; it is rejected in any other query. It is opaque but not secret.
+Clients may cut long responses silently. `t3_projetos`, `t3_threads` and
+`t3_buscar_threads` answer in pages: `total` counts every match and comes before the list;
+`truncated: true` means more items follow; repeat the call with `cursor` set to
+`nextCursor` and the same `environment` (or none) and filters. `search` matches part of
+the title or ID, ignoring case and accents. Order is total and stable: `t3_threads` by
+`updatedAt` descending, then `environmentId`, then `threadId`; `t3_projetos` by title,
+then `environmentId`, then `projectId`; `t3_buscar_threads` by `environmentId`, then
+`threadId`. The cursor stores the key of the last item and is bound to the tool, the
+filters, the environment filter and the set of environments that answered; it is
+rejected in any other query, and when only that set changed between pages the message
+says so and the query must start again. Pages are not a snapshot. The cursor is opaque
+but not secret.
 
 ### Finding threads across environments (`t3_buscar_threads`)
 
-The connector reads the shell of every configured environment (at most 4 at a time),
-applies each environment's ACL and merges the results. It searches archived threads and
-threads without a run too, so an ID that `t3_thread` accepts is not reported missing. It
-never reads `/bounded` per candidate.
-
-- **Deadlines:** 4 s per environment (connection, shell and retry) and 10 s for the
-  whole search. Environments that fail, time out or answer as another environment go to
-  `environmentFailures` (`code`: `timeout`, `global_timeout`, `unavailable`,
-  `environment_mismatch`, `http_<status>`, `connection_refused` or `failed`; `reason`;
-  never token paths or transport output), and `complete` is false. `total` counts matches
-  in the environments that answered, so zero results with `complete: false` do not prove
-  the thread is missing. If every environment fails, the response is still a normal
-  envelope with `complete: false`.
-- **Ambiguity:** the same title or ID can exist in several environments and projects;
-  every match is returned. Use `total`, not the page size, to decide whether the result
-  is unique.
-- **Order and pages:** by `environmentId`, then `threadId`, independent of response time.
-  The cursor is bound to the search, the environment filter and the set of environments
-  that answered; if that set changes between pages, the cursor is rejected and the search
-  must start again. Pages are not a snapshot.
-- **Actions** in the write bridge still require `environment`; the search only finds
-  candidates.
+Finds threads by title or exact ID with the scope contract above. It searches archived
+threads and threads without a run too, so an ID that `t3_thread` accepts is not reported
+missing, and it never reads `/bounded` per candidate. Actions in the write bridge still
+require `environment`; the search only finds candidates.
 
 ### Control plane snapshot (`t3_control_plane`)
 
