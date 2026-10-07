@@ -47,16 +47,20 @@ const { tools } = await cliente.listTools();
 caso('ferramentas', tools.length === 9, tools.map((t) => t.name));
 
 const amb = await chamar('t3_ambientes', {});
-caso('t3_ambientes', amb.environments?.every((a) => a.available), amb.environments?.map((a) => ({ alias: a.alias, default: a.default, transport: a.transport, available: a.available, version: a.version, error: a.error })));
+caso('t3_ambientes', amb.environments?.every((a) => a.available) && !('default' in amb), amb.environments?.map((a) => ({ alias: a.alias, transport: a.transport, available: a.available, version: a.version, error: a.error })));
 
-const padrao = amb.default;
 const aliases = (amb.environments ?? []).map((a) => a.alias);
+const padrao = aliases[0];
 const nomeRemoto = process.env.SMOKE_AMBIENTE_REMOTO ?? aliases.find((a) => a !== padrao);
-caso('config com default e outro environment', Boolean(padrao && nomeRemoto && aliases.includes(nomeRemoto)), { default: padrao, remoto: nomeRemoto, aliases });
+caso('config com dois environments', Boolean(padrao && nomeRemoto && aliases.includes(nomeRemoto)), { local: padrao, remoto: nomeRemoto, aliases });
 
-for (const ambiente of [undefined, ...aliases]) {
-  const p = await chamar('t3_projetos', ambiente ? { environment: ambiente } : {});
-  caso(`t3_projetos ${ambiente ?? '(padrão)'}`, !p.error && p.projects.length > 0, p.error ?? { environment: p.environment, projects: p.projects.map((x) => [x.projectId, x.title, x.directory, x.runningThreads]) });
+// Sem environment: varre todos; cada projeto diz de onde veio e a resposta diz se foi completa.
+const todos = await chamar('t3_projetos', {});
+caso('t3_projetos (todos os environments)', !todos.error && todos.complete === true && todos.queriedEnvironments?.length === aliases.length && todos.projects.every((x) => x.environment?.alias),
+  todos.error ?? { complete: todos.complete, queried: todos.queriedEnvironments, failures: todos.environmentFailures, projects: todos.projects.map((x) => [x.environment.alias, x.projectId, x.title, x.runningThreads]) });
+for (const ambiente of aliases) {
+  const p = await chamar('t3_projetos', { environment: ambiente });
+  caso(`t3_projetos ${ambiente}`, !p.error && p.projects.length > 0, p.error ?? { environment: p.environment, projects: p.projects.map((x) => [x.projectId, x.title, x.directory, x.runningThreads]) });
 }
 
 for (const alias of aliases) {

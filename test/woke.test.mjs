@@ -138,7 +138,8 @@ test('t3_threads: cursor distingue woke omitido, true e false; sem woke continua
   const c = await conectarMcp(ambientesFalsos(remotoComSnooze()));
   const sem = dados(await c.callTool({ name: 't3_threads', arguments: { environment: 'remoto', limit: 1 } }));
   const q = JSON.parse(Buffer.from(sem.nextCursor, 'base64url').toString()).q;
-  assert.equal(q, JSON.stringify(['t3_threads', 'env-remoto', null, null, false, '']));
+  // Filtros, depois environment pedido, selecionados e os que responderam (cobertura).
+  assert.equal(q, JSON.stringify(['t3_threads', null, null, false, '', 'env-remoto', ['env-remoto'], ['env-remoto']]));
   const comTrue = await c.callTool({ name: 't3_threads', arguments: { environment: 'remoto', woke: true, limit: 1, cursor: sem.nextCursor } });
   assert.match(comTrue.content[0].text, /^invalid cursor/);
   const t = dados(await c.callTool({ name: 't3_threads', arguments: { environment: 'remoto', woke: true, limit: 1 } }));

@@ -74,7 +74,9 @@ async function conectar(opcoes) {
   return { mcp, rpc, chamadas };
 }
 
-const providers = (mcp, args = {}) => mcp.callTool({ name: 't3_providers', arguments: args });
+// Sem `environment` a leitura varre os dois environments; estes testes olham um só.
+const providers = (mcp, args = {}) => mcp.callTool({ name: 't3_providers', arguments: { environment: 'local', ...args } });
+const varrendo = (mcp, args = {}) => mcp.callTool({ name: 't3_providers', arguments: args });
 
 test('t3_providers: lista do environment escolhido, na ordem do T3, sem filtrar desabilitados nem indisponíveis', async () => {
   const { mcp, rpc, chamadas } = await conectar();
@@ -91,6 +93,7 @@ test('t3_providers: lista do environment escolhido, na ordem do T3, sem filtrar 
     instanceId: 'sumido', driver: 'driver-novo', displayName: 'sumido', enabled: false, installed: false, status: 'error',
     availability: 'unavailable', unavailableReason: 'Driver not registered', version: '1.2.3', checkedAt: '2026-10-05T10:00:00.000Z',
     continuation: { groupKey: 'codex' }, auth: { status: 'authenticated' }, models: [],
+    environment: { alias: 'local', environmentId: LOCAL.environmentId, name: 'local' },
   });
   assert.equal(d.providers[3].message, 'Cursor is disabled in T3 Code settings.');
   assert.deepEqual(rpc.pedidos.map(({ baseUrl, ticket, tag, payload }) => ({ baseUrl, ticket, tag, payload })),
@@ -130,7 +133,7 @@ test('t3_providers: não repassa conta, caminhos, quota, skills nem settings', a
     assert.ok(!texto.includes(vazamento), `não deveria conter ${vazamento}`);
   }
   for (const p of dados(r).providers) {
-    for (const chave of Object.keys(p)) assert.ok([...CAMPOS, 'auth', 'models'].includes(chave), chave);
+    for (const chave of Object.keys(p)) assert.ok([...CAMPOS, 'auth', 'models', 'environment'].includes(chave), chave);
     assert.deepEqual(Object.keys(p.auth), ['status']);
   }
 });
@@ -180,6 +183,28 @@ test('t3_providers: erros viram isError com mensagem, sem derrubar o servidor', 
   const fora = await providers(mcp, { environment: 'nenhum' });
   assert.equal(fora.isError, true);
   assert.match(fora.content[0].text, /environment "nenhum" is not configured/);
+});
+
+test('t3_providers: sem environment varre os dois, cada instance com o seu; falha de um vira escopo incompleto', async () => {
+  const { mcp, rpc } = await conectar();
+  const d = dados(await varrendo(mcp));
+  assert.equal(d.complete, true);
+  assert.equal(d.total, 6);
+  assert.equal('environment' in d, false, 'sem environment de topo: cada item diz o seu');
+  assert.deepEqual(d.queriedEnvironments.map((a) => [a.alias, a.found]), [['local', 5], ['remoto', 1]]);
+  assert.deepEqual(d.providers.map((p) => `${p.environment.alias}:${p.instanceId}`), ['local:codex', 'local:codex_galm', 'local:claudeAgent_custom', 'local:cursor', 'local:sumido', 'remoto:codex_galm']);
+  assert.deepEqual(d.providers[0].environment, { alias: 'local', environmentId: LOCAL.environmentId, name: 'local' });
+  assert.deepEqual(rpc.pedidos.map((x) => x.baseUrl).sort(), ['http://127.0.0.1:3773/', 'http://127.0.0.1:43773/']);
+  // O mesmo instanceId em dois environments não se funde.
+  const galm = dados(await varrendo(mcp, { instanceId: 'codex_galm' }));
+  assert.deepEqual(galm.providers.map((p) => [p.environment.alias, p.displayName]), [['local', 'Codex Galm'], ['remoto', 'Codex GALM']]);
+
+  const { mcp: parcial } = await conectar({ responder: (env) => { if (env === REMOTO.environmentId) throw new ErroT3('T3 refused server.getConfig', { status: 403 }); return structuredClone(configs[env]); } });
+  const p = dados(await varrendo(parcial));
+  assert.equal(p.isError, undefined);
+  assert.equal(p.complete, false);
+  assert.equal(p.total, 5);
+  assert.deepEqual(p.environmentFailures, [{ alias: 'remoto', environmentId: REMOTO.environmentId, code: 'http_403', reason: 'T3 refused the token of this environment' }]);
 });
 
 test('t3_providers: transporte caído repete uma vez com conexão nova', async () => {
