@@ -251,6 +251,46 @@ export const NATIVE_READS = {
 };
 export const NATIVE_READ_TOOLS = Object.freeze(Object.keys(NATIVE_READS));
 
+// ---- operator-only wrappers (src/ops.mjs) ------------------------------------------------------
+// Thin wrappers reached only by the operator core, never registered as MCP tools nor offered to an
+// OAuth session: the MCP catalogs and consents stay as they were. Same contract as the native tools
+// (T3 8ed276c2 mcp/toolkits/previewControls), with the calling thread as an explicit `threadId`.
+export const OPS_NATIVE_READS = {
+  t3_preview_list: {
+    description: 'List the preview browser tabs (sessions) of threadId, paginated like the native tool.',
+    schema: z.object({ threadId: id, cursor: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(50).optional() }).strict(),
+    async run({ input, native }) {
+      const result = await native.rpc('preview.list', { threadId: input.threadId });
+      const start = input.cursor ?? 0, end = start + (input.limit ?? 20);
+      return { ...result, sessions: result.sessions.slice(start, end), nextCursor: end < result.sessions.length ? end : null };
+    },
+  },
+};
+export const OPS_NATIVE_WRITES = {
+  // T3 9bd1d800 mcp/toolkits/thread/handlers.ts t3_thread_configure + shared/model.ts
+  // modelSelectionCommandType: same instance → thread.model-selection.set, another → provider.switch.
+  t3_thread_configure: {
+    refs: ['threadId'],
+    description: 'Change the model selection (instance = account, model, options such as effort) of threadId as the native t3_thread_configure does: thread.model-selection.set when the instance is the thread\'s current provider instance, provider.switch when it is another one. modelSelection is checked against the environment catalog first; runtime and interaction modes are kept. T3 decides how the running session transitions; a change is not promised inside the current run.',
+    schema: z.object({ threadId: id, modelSelection: model }).strict(),
+    async build({ input, native, commandId }) {
+      const { projection: { thread } } = await native.thread(input.threadId);
+      const current = thread.providerInstanceId ?? thread.modelSelection?.instanceId;
+      const type = current === input.modelSelection.instanceId ? 'thread.model-selection.set' : 'provider.switch';
+      return { method: 'orchestration.dispatchCommand', payload: { type, commandId, threadId: thread.id, modelSelection: input.modelSelection } };
+    },
+    async result({ raw, payload }) { return { sequence: raw.sequence, command: payload.type }; },
+  },
+  t3_preview_close: {
+    description: 'Close one preview browser tab of threadId (tabId from t3_preview_list). T3 accepts no commandId here: repeating closes again (a closed tab answers a typed refusal).',
+    schema: z.object({ threadId: id, tabId: id }).strict(),
+    async build({ input }) { return { method: 'preview.close', payload: { threadId: input.threadId, tabId: input.tabId } }; },
+    async result() { return {}; },
+  },
+};
+export const OPS_NATIVE_READ_TOOLS = Object.freeze(Object.keys(OPS_NATIVE_READS));
+export const OPS_NATIVE_WRITE_ACTIONS = Object.freeze(Object.keys(OPS_NATIVE_WRITES));
+
 // Native tools consciously not wrapped, with the reason (see the inventory for the full table).
 export const NATIVE_OMITTED = Object.freeze({
   t3_attachment_prepare_upload: 'the bytes go to the T3 server origin, which a remote MCP client cannot reach through the connector',

@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+## 0.15.0
+
+- Operator core (`src/ops.mjs`, `t3-connector-ops`) reaches the whole connector surface:
+  `actions()` lists every action and read from the tables that define them (kind, description,
+  idempotent); `act(action, input, {operationId, namespace})` runs every action of
+  `ALL_ACTIONS` (T3 commands, `thread.send` with the four deliveries, `thread.launch`/`fork`,
+  project delete with the same count guard, native-tool writes) with the same zod validation and
+  the `modelSelection` check against `server.getConfig`; `query(name, input)` runs the native-tool
+  reads and the MCP reads by stable names (`thread`, `pending_requests`, `messages`, `search`,
+  `threads`, `projects`, `providers`, `attention`, `control_plane`, `wait`, `read_batch`) through
+  the same code as the MCP tools. ops stays stateless: ids derive from (namespace, environmentId,
+  action, operationId), so a repeated operation is replayed by T3; the message ids of
+  `thread.send` (also its commandId) and of the `thread.launch` brief are `<namespace>:<hash>`,
+  as in `send`/`create`, so watchers can recognize them by prefix. CLI: `<env> actions`,
+  `<env> act`, `<env> query`. Unwrapped native tools are listed with the reason in `OPS_OMITTED`.
+- Operator-only actions, absent from every MCP catalog and consent: `t3_thread_configure`
+  (change account/instance, model and effort: `thread.model-selection.set` on the same instance,
+  `provider.switch` on another, as the native tool decides), `thread.pull-request.watch` and
+  `t3_preview_close`; read `t3_preview_list`.
+- Composed operations decided as the native MCP tools decide them: `configure(threadId,
+  {instanceId?, model?, effort?, options?}, {operationId})` (t3_thread_configure; omitted
+  instance/model keep the current ones and the other options, `{command, before, after}` after a
+  confirming read), `interrupt(threadId, {operationId, reason?, runId?})` (t3_thread_interrupt run
+  selection; no active run is an explicit no-op) and `organize(threadId, action, {snoozedUntil?,
+  operationId})` (t3_thread_organize actions, confirmed by reading the thread). CLI: `<env>
+  configure`, `<env> interrupt`, `<env> organize`.
+- `list({settled, archived})` (`--settled`, `--archived`) lists settled or archived threads (the
+  archived ones from `orchestration.getArchivedShellSnapshot`); thread lookups find archived
+  threads too, so archive/unarchive work end to end. Every summary carries `effort`.
+- Reads over the WebSocket (`server.getConfig`, archived snapshot, native reads) need only
+  `orchestration:read`, as in T3; anything sent still needs `orchestration:operate`.
+- Fix: with `"insecureHttp": true` (e.g. `http://*.ts.net`) WebSocket operations failed because
+  the RPC transport accepted `ws:` only on `127.0.0.1`; it now accepts `ws:` when the
+  environment declared `insecureHttp`.
+- Internal: the MCP read tools' shapes, listings, `t3_thread` and `t3_mensagens` are exported
+  from `servidor.mjs` (`formasLeitura`, `executarListagem`, `LISTAGEM_*`, `lerThreadDetalhada`,
+  `mensagensDaThread`) so MCP and ops share one implementation; MCP schemas and results are
+  unchanged. `aguardarThread` takes a `tetoMs` ceiling (MCP keeps 5 s).
+
 ## 0.14.0
 
 - New operator core `src/ops.mjs` and CLI `t3-connector-ops`: list, read, timeline (with

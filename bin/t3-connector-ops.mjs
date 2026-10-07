@@ -4,7 +4,7 @@
 // with exit 1 (operation failed or refused) or 2 (usage).
 //
 //   t3-connector-ops environments
-//   t3-connector-ops <env> list
+//   t3-connector-ops <env> list [--settled] [--archived]
 //   t3-connector-ops <env> thread <threadId>
 //   t3-connector-ops <env> read <threadId> [--since P] [--last N]
 //   t3-connector-ops <env> timeline <threadId> [--message-ids ID,ID] [--not-before ISO]
@@ -15,13 +15,24 @@
 //                                 [--runtime-mode M] [--worktree BASE[:BRANCH]] --client-request-id ID < brief
 //   t3-connector-ops <env> settle <threadId>...
 //   t3-connector-ops <env> snooze <threadId> <ISO datetime with offset>
+//   t3-connector-ops <env> configure <threadId> [--instance I] [--model M] [--effort E] [--option id=value]... --operation-id ID
+//   t3-connector-ops <env> interrupt <threadId> --operation-id ID [--run-id R] [--reason TEXT]
+//   t3-connector-ops <env> organize <threadId> <pin|unpin|snooze|unsnooze|settle|unsettle|archive|unarchive|mark_unread> --operation-id ID [--until ISO]
+//   t3-connector-ops <env> actions
+//   t3-connector-ops <env> act <action> [--operation-id ID] [--namespace NS] [--input JSON | < JSON]
+//   t3-connector-ops <env> query <name> [--input JSON | < JSON]
+//
+// `actions` lists every action and read that `act` and `query` accept (kind, description,
+// idempotent). `act` input is the action's JSON object; --operation-id is the idempotency key
+// (for thread.send it defaults to input.clientRequestId): repeating it replays, not repeats.
 //
 // <env> is an alias, an extra alias or an environmentId from the ops config (src/ops.mjs).
 
 import { readFileSync } from 'node:fs';
 import { createOps, loadOpsConfig, OpsError, resolveEnvironment } from '../src/ops.mjs';
 
-const USAGE = 'usage: t3-connector-ops environments | <env> list|thread|read|timeline|projects|providers|send|create|settle|snooze … (see the header of bin/t3-connector-ops.mjs)';
+const USAGE = 'usage: t3-connector-ops environments | <env> list|thread|read|timeline|projects|providers|send|create|settle|snooze|configure|interrupt|organize|actions|act|query … (see the header of bin/t3-connector-ops.mjs)';
+const BOOLEAN_FLAGS = new Set(['settled', 'archived']);
 const out = (v) => process.stdout.write(JSON.stringify(v, null, 1) + '\n');
 const usage = (m) => { throw new OpsError('usage', m ?? USAGE); };
 
@@ -29,7 +40,9 @@ function parse(args) {
   const positional = [], flags = {}, options = [];
   for (let i = 0; i < args.length; i++) {
     if (!args[i].startsWith('--')) { positional.push(args[i]); continue; }
-    const name = args[i].slice(2), value = args[++i];
+    const name = args[i].slice(2);
+    if (BOOLEAN_FLAGS.has(name)) { flags[name] = true; continue; }
+    const value = args[++i];
     if (value === undefined) usage(`--${name} needs a value`);
     if (name === 'option') options.push(value); else flags[name] = value;
   }
@@ -42,6 +55,12 @@ const int = (v, name, min) => {
   return n;
 };
 const stdin = () => readFileSync(0, 'utf8');
+// JSON input from --input, else from stdin when it is not a terminal, else {}.
+const jsonInput = (flag) => {
+  const text = flag ?? (process.stdin.isTTY ? '' : stdin());
+  if (!text.trim()) return {};
+  try { return JSON.parse(text); } catch { usage('input must be a JSON object'); }
+};
 const option = (s) => {
   const i = s.indexOf('=');
   if (i < 1) usage(`--option ${s}: use id=value`);
@@ -59,7 +78,22 @@ async function main() {
   const { positional: [id, ...ids], flags, options } = parse(rest);
   try {
     switch (command) {
-      case 'list': return out(await ops.list());
+      case 'list': return out(await ops.list({ settled: Boolean(flags.settled), archived: Boolean(flags.archived) }));
+      case 'actions': return out(ops.actions());
+      case 'configure': return out(await ops.configure(id ?? usage('configure needs <threadId>'),
+        { instanceId: flags.instance, model: flags.model, effort: flags.effort, options: options.map(option) }, { operationId: flags['operation-id'], ...(flags.namespace ? { namespace: flags.namespace } : {}) }));
+      case 'interrupt': {
+        const r = await ops.interrupt(id ?? usage('interrupt needs <threadId>'), { operationId: flags['operation-id'], reason: flags.reason, runId: flags['run-id'], ...(flags.namespace ? { namespace: flags.namespace } : {}) });
+        return out(r);
+      }
+      case 'organize': {
+        const action = ids[0] ?? usage('organize needs <threadId> <action>');
+        if (flags.until !== undefined && (Number.isNaN(Date.parse(flags.until)) || !/(Z|[+-]\d{2}:\d{2})$/.test(flags.until))) usage('--until must be ISO with offset');
+        const r = await ops.organize(id, action, { snoozedUntil: flags.until, operationId: flags['operation-id'], ...(flags.namespace ? { namespace: flags.namespace } : {}) });
+        out(r); if (!r.ok) process.exitCode = 1; return;
+      }
+      case 'act': return out(await ops.act(id ?? usage('act needs <action>'), jsonInput(flags.input), { operationId: flags['operation-id'], ...(flags.namespace ? { namespace: flags.namespace } : {}) }));
+      case 'query': return out(await ops.query(id ?? usage('query needs <name>'), jsonInput(flags.input)));
       case 'thread': return out(await ops.thread(id ?? usage('thread needs <threadId>')));
       case 'read': return out(await ops.read(id ?? usage('read needs <threadId>'), { since: int(flags.since, 'since', 0), last: int(flags.last, 'last', 1) }));
       case 'timeline': return out(await ops.timeline(id ?? usage('timeline needs <threadId>'), { messageIds: flags['message-ids']?.split(',').filter(Boolean) ?? [], notBefore: flags['not-before'] ? Date.parse(flags['not-before']) : 0 }));

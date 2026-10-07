@@ -47,6 +47,25 @@ export function criarEscopo(alias, projetosPermitidos) {
   };
 }
 
+/**
+ * Escopo do operador (núcleo ops, token do próprio operador): todos os projetos do environment.
+ * Mesma interface de criarEscopo; `exigirThread` também acha threads arquivadas que a shell
+ * tenha trazido em `archivedThreads`.
+ */
+export function criarEscopoOperador(alias) {
+  return {
+    permitidos: null,
+    projetoPermitido: () => true,
+    threadsVisiveis: (shell) => shell.threads.filter((t) => !t.deletedAt && !t.archivedAt),
+    exigirProjeto() {},
+    exigirThread(shell, threadId) {
+      const thread = [...shell.threads, ...(shell.archivedThreads ?? [])].find((t) => t.id === threadId && !t.deletedAt);
+      if (!thread) throw new ForaDoEscopo(`thread ${threadId} not found in environment ${alias}`);
+      return thread;
+    },
+  };
+}
+
 export function criarAmbientes(config, {
   criarClienteImpl = criarCliente,
   lerTokenImpl = lerToken,
