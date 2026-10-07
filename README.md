@@ -9,8 +9,8 @@ several T3 environments.
   messages and the latest response, lists the provider instances of each environment, and waits a few seconds for a run to finish. It never
   creates, sends, approves, interrupts or changes threads, and only accepts tokens scoped
   to exactly `orchestration:read`.
-- **Write** (`t3-connector-write gate|bridge`): 42 thread actions, each with a mandatory
-  `environment`. Nothing is dispatched without a 60-minute lease approved with a
+- **Write** (`t3-connector-write gate|bridge`): 42 thread actions and a conditional send
+  built on them, each with a mandatory `environment`. Nothing is dispatched without a 60-minute lease approved with a
   passkey on a page served at `http://localhost:<port>/`.
 
 Both work with several T3 environments (for example this machine and a server reached over
@@ -159,8 +159,13 @@ version), and refresh the tool list in the client.
    waits in the same turn.
 5. **`needs_intervention`** (approval, question, plan) is not an end
    state. The connector only reports it; answering requires T3 itself.
-6. **Before choosing a provider or model**, call `t3_providers` with the target environment.
-   See [Provider instances](#provider-instances-t3_providers).
+6. **To browse providers or models**, call `t3_providers` in the target environment. A write
+   with `modelSelection` does not need it first: it validates the selection itself. See
+   [Provider instances](#provider-instances-t3_providers).
+7. **To decide what to do next across machines**, call `t3_control_plane` once. Act only
+   on what it lists; if `complete` is false, say which environments are missing instead
+   of reporting that nothing needs attention. See
+   [Control plane snapshot](#control-plane-snapshot-t3_control_plane).
 
 ### Read tools
 
@@ -169,7 +174,8 @@ All have `readOnlyHint: true` and `destructiveHint: false`. A response to a call
 item (project, thread, provider instance) always carries its own
 `environment: {alias, environmentId, name}`. Listings and `t3_buscar_threads` also return
 `complete`, `queriedEnvironments` and `environmentFailures`
-([scope contract](#scope-reads-without-environment)).
+([scope contract](#scope-reads-without-environment)). `t3_thread_read_batch` puts
+`environment` on each item.
 
 | Tool | Input | Main output |
 |---|---|---|
@@ -178,7 +184,9 @@ item (project, thread, provider instance) always carries its own
 | `t3_threads` | `environment?` (omitted: every environment), `projectId?`, `state?`, `includeNoRun?` (include threads without a run, default false), `woke?` (Woke marker filter), `search?`, `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `nextCursor?`, `changedSinceStart?`, `hiddenNoRun?`, `complete`, `queriedEnvironments`, `environmentFailures`, `threads` |
 | `t3_buscar_threads` (find threads) | exactly one of `search?` or `threadId?` (exact), `match?` (`partial` = substring, default; `exact` = whole title), `environment?` (restricts; omitted: every environment), `limit?` (1-50, 20), `cursor?` | `total`, `returned`, `truncated`, `complete`, `nextCursor?`, `queriedEnvironments`, `environmentFailures`; each thread with `environment: {alias, environmentId, name}` and `archived` |
 | `t3_atencao` (attention) | `environment?` (omitted: every environment) | `total`, `complete`, `queriedEnvironments`, `environmentFailures`, `threads` that need intervention, or failed and were not settled |
+| `t3_control_plane` (control plane snapshot) | `environment?` (restricts; omitted: every environment), `limit?` (per list, 1-100, 20) | `contractVersion`, `scope`, `complete`, `incompleteReason?`, `coherence`, `queriedEnvironments` (with `snapshotSequence`, `readAt`, `byState`), `environmentFailures`, and the lists `needsIntervention`, `running` and `ready` (each `total`, `returned`, `truncated`, `threads`) |
 | `t3_thread` | `environment?` (omitted: the ID is located across every environment), `threadId`, `maxCharacters?` (200-6000, 1500) | `environment`, `environmentDiscovery?`, thread summary, `pendingRequests`, `providerSession` (informational), `activeRun?`, `latestRun`, `latestResponse`, `history` |
+| `t3_thread_read_batch` (read several threads) | `items` (1-20 `{environment, threadId}`, environment required per item), `maxCharacters?` (200-6000, 1500), `timeoutMs?` (1000-30000, 10000) | `returned`, `summary`, `allSucceeded`, `complete`, `environments`, `items` in input order, each `ok` with `thread` (the `t3_thread` result) or `error: {code, reason}` |
 | `t3_mensagens` (messages) | `environment?` (omitted: located as above), `threadId`, `limit?` (1-20, 6), `maxCharacters?` (100-4000, 800) | `environment`, `environmentDiscovery?`, `messages` and `history.complete` |
 | `t3_providers` (provider instances) | `environment?` (omitted: every environment), `instanceId?` (exact, case-sensitive), `includeModels?` (include models, default false) | `source`, `total`, `complete`, `queriedEnvironments`, `environmentFailures`, `providers` in environment order, then T3 order, each with the T3 field names (see below) |
 | `t3_aguardar_thread` (wait) | **`environment`**, `threadId`, **`timeoutMs`** (1-5000), `runId?`, `includeLatestResponse?`, `maxCharacters?` | `runId`, `statusRun`, `state`, `terminal`, `timedOut`, `returnReason`, `pendingRequest`, `latestResponse?` |
@@ -214,6 +222,44 @@ requested. `providerSession` (`status`, `model`) is the provider process as last
 and carries `informational: true`. It can keep the previous model after a model change
 (a `note` says so) and read `ready` while a run is active, so it never decides the model
 or the state. Message `streaming` flags do not decide the state either.
+
+### Batch thread read (`t3_thread_read_batch`)
+
+One call reads up to 20 threads, each named by `{environment, threadId}`; threads of
+different environments can be mixed. It is meant for a control plane that follows
+several owner threads at once. Each item that succeeds carries in `thread` exactly what
+`t3_thread` returns for that thread (the same code builds both): `state` and
+`stateSource`, `activeRun`, `latestRun`, `pendingRequests` with `requestId`, content and
+`nextAction`, `latestResponse` and `history`. The state contract above applies unchanged.
+
+Failure is per item. `items` has one entry per input, in input order (`index`), with
+`status: "ok"` or `status: "error"` and `error: {code, reason}`. One broken target never
+hides the others, and a failed item is never an empty success:
+
+| `error.code` | Meaning |
+|---|---|
+| `environment_not_allowed` | The environment is not configured (or is outside the OAuth policy); `environment` is `null` and `requestedEnvironment` echoes the input |
+| `thread_not_found` | Missing, deleted or outside the authorized projects of that environment (one answer for all three); never looked up in another environment |
+| `unavailable`, `timeout`, `environment_mismatch`, `http_<status>`, `connection_refused` | The environment or the thread projection could not be read; same codes as `environmentFailures` in `t3_buscar_threads` |
+| `global_timeout` | `timeoutMs` (whole call, default 10000, max 30000) ran out before this item was read |
+| `failed` | Any other failure, without internal detail |
+
+`summary` counts `ok` and `error`. `allSucceeded` is true only when every item is `ok`.
+`complete` is false when some item failed for a transient reason (anything except
+`thread_not_found` and `environment_not_allowed`), so rereading those items may succeed.
+`environments` lists each environment touched, with `status` and `observedAt`.
+
+Coherence: each environment is read from **one shell observation per call**, shared by
+all its items (`observedAt` on the item and on `environments`), so states of threads of
+the same environment are judged at the same instant. Each thread projection is read right
+after, as in `t3_thread`; there is no cross-environment snapshot. A repeated target is read
+once and answered at each of its positions. Up to 4 projections per environment are read
+in parallel, and environments in parallel with each other.
+
+Reading never answers, approves or acknowledges anything: pending requests are answered
+one by one with the write actions, as in `t3_thread`. The tool exists on the read server
+and on the OAuth profile; the write plugin's lease reads (one environment per lease) keep
+`t3_thread`.
 
 ### Woke marker (`woke`, `wokeAt`)
 
@@ -386,6 +432,43 @@ threads and threads without a run too, so an ID that `t3_thread` accepts is not 
 missing, and it never reads `/bounded` per candidate. Actions in the write bridge still
 require `environment`; the search only finds candidates.
 
+### Control plane snapshot (`t3_control_plane`)
+
+One call returns what an operator or orchestrator needs to pick the next action, across
+every configured environment (or only `environment`), each under its own ACL. It reuses
+the sweep of `t3_buscar_threads` (4 s per environment, 10 s in total, at most 4 at a time,
+sanitized failures) and the thread summary of `t3_threads`.
+
+- **Lists.** `needsIntervention` and `running` are the canonical `state` (the same rule as
+  `t3_threads` and `t3_atencao`). `ready` is work that is *potentially* actionable and can
+  be derived from the shell without guessing: the latest run is `completed`, `failed` or
+  `cancelled` and the thread is neither settled nor snoozed (`readyReasons`:
+  `latest_run_<state>_unsettled`), or the thread is woke (`woke`). Threads without a run,
+  in `unknown` state, settled or still snoozed are left out of the lists but counted in
+  `queriedEnvironments[].byState`; archived threads and other projects are not counted.
+- **Items.** Each item is the `t3_threads` summary plus `environment: {alias,
+  environmentId, name}`, `activeRun` (`runId`, `status` or null), `pendingRequest`
+  (`requestId`, `kind`, `reason`, `since`; the question or approval content and the answer
+  path are read with `t3_thread`), `snoozedUntil` when snoozed, and `next`, the
+  `t3_thread` call (`environment`, `threadId`) that reads it. `ready` items add
+  `readyReasons`, `blockers` and `actionableNow`: `blockers: ["background_work_pending"]`
+  means the shell reports background tasks (`backgroundTasks`).
+- **Not acceptance.** `ready` does not mean the work is correct or that the thread is idle.
+  Background work the shell has not published yet is only visible in `t3_thread`. Read the
+  thread before continuing or settling it.
+- **Partial failures.** Environments that fail or time out are in `environmentFailures`
+  (same codes as `t3_buscar_threads`), `complete` is false and `incompleteReason` says the
+  answer is not a global view: those environments' threads are missing from every list and
+  count. If every environment fails the envelope is still a normal result. Empty lists only
+  mean "nothing to do" when `complete` is true.
+- **Coherence.** Each environment is one shell read, a single backend snapshot
+  (`snapshotSequence` when T3 sends it, `readAt`). Environments are read concurrently, not
+  at one instant (`coherence.mode: "per_environment"`); a thread can change right after its
+  environment was read.
+- **Size.** Each list is ordered by `updatedAt` (newest first, then environmentId and
+  threadId) and cut at `limit`; `total` and `truncated` say how much was left out. There is
+  no cursor: for more, call `t3_threads` with `state` in that environment.
+
 ### Waiting (`t3_aguardar_thread`)
 
 Returns immediately when there is no run, when the run already finished or when a request
@@ -427,7 +510,9 @@ carries no providers.
 
 **Using it before a write.** `thread.launch`, `thread.model-selection.set`,
 `provider.switch` and `delegated_task.request` take
-`modelSelection: {instanceId, model, options?}`:
+`modelSelection: {instanceId, model, options?}`. A client that already knows the exact IDs
+(for example `{instanceId: "claudeAgent_custom", model: "claude-opus-5-5", options: [{id:
+"fastMode", value: true}]}`) can write directly; otherwise:
 
 1. `t3_providers {environment}` and pick the instance by `instanceId`
    or `displayName` (ask the user if more than one fits).
@@ -436,9 +521,23 @@ carries no providers.
    `models[].capabilities.optionDescriptors[].id` and `value` one of that descriptor's
    `options[].id` (select) or a boolean.
 
-Copy the IDs exactly. The connector keeps no allowlist: whether an instance or model can
-run is decided by T3 when the write arrives, and `status`/`enabled` here are information,
-not a gate.
+Copy the IDs exactly. Before sending, the write reads the same `server.getConfig` of the
+environment (fresh on every write, so a capability change applies to the next write) and
+refuses, with nothing sent, a selection the environment does not offer. Each refusal names
+the problem and the offered values:
+
+| Code | Meaning |
+|---|---|
+| `provider_instance_unavailable` | `instanceId` is not configured in this environment (lists the configured ones) |
+| `provider_model_unavailable` | `model` is not a `models[].slug` of that instance (lists the offered ones) |
+| `model_option_unsupported` | an option `id` is not offered by that model, or is repeated (lists the offered options and types) |
+| `model_option_value_unsupported` | a boolean option got a non-boolean, or a select option a value outside its choices (lists them) |
+| `model_capabilities_unknown` | T3 did not declare the models or option descriptors needed to check, or uses a descriptor type the connector does not interpret |
+| `model_capabilities_unavailable` | the provider configuration could not be read |
+
+The selection is sent exactly as given: no option is added, removed or defaulted (omitted
+options keep T3's defaults). `status`/`enabled` here are information, not a gate: whether a
+valid instance can run is still decided by T3 when the write arrives.
 
 ## Writes
 
@@ -486,8 +585,8 @@ are refused at start-up with the new name in the message.
    `operationId`.
 4. `reconciliation_required` means the result is uncertain: do not retry; call
    `t3_reconciliar_escrita` with the same `environment` and `operationId`.
-5. For `modelSelection`, take `instanceId` and `model` from the read tool `t3_providers`
-   in the same environment; see
+5. `modelSelection` is validated by the write against the environment's provider
+   configuration; `t3_providers` is optional, for browsing. See
    [Using it before a write](#provider-instances-t3_providers).
 
 Write results carry `environment: {alias, environmentId}`. Routing errors:
@@ -507,6 +606,44 @@ MCP SDK with error `-32602` before anything reaches the gate.
 
 A correction of the current work uses `steer_active`; it is never deferred until after the
 work it is meant to correct. Refused steer/restart requests never fall back to a queue.
+
+### Conditional send (`t3_escrever_thread_conditional_send`)
+
+"When run R ends, switch the model (for example to Fast Mode), then send this instruction" in
+one call, with one `clientRequestId` (equal to `operationId`). Input: `threadId`,
+`afterRunId` (the active run read from `t3_thread`), optional `modelSelection`, `text` and
+optional `waitMs` (0–10000) to wait for R to end inside the call.
+
+- Precondition: R is terminal, is still the thread's latest run and no run is active. It is
+  checked before the first step and again right before the send, so a run started by anyone
+  in between refuses the send instead of letting T3 queue it.
+- Steps are the existing writes, journaled under `<clientRequestId>:model-selection`
+  (`thread.model-selection.set`) and `<clientRequestId>:send` (`thread.send`
+  `start_immediately`); each can be reconciled with `t3_reconciliar_escrita`. The lease (or
+  OAuth consent) must include those actions; no new action is consented.
+- Retrying the same request never sends twice. A step's state is always read from the write
+  journal of its operationId, never assumed: `precondition_pending` and `uncertain` are evaluated
+  again on retry, and a final answer is replayed only while the journal still agrees with its
+  steps. Concurrent duplicates in one process share one execution.
+- "Not sent" (`sent: false`, `precondition_failed`, a refused step) is stated only for a step whose
+  journal record is a refusal. When the request itself concludes it (precondition, model not
+  reflected, an earlier step refused), it first reserves the step's operationId as refused with
+  the journal's atomic reservation, the one the Dispatcher uses to own an operationId: a later
+  write under it is refused and never sends, and if another writer already holds it, that
+  writer's state is reported instead. A refusal that leaves no record (lease, scope) refuses the
+  call and states nothing about the step. Replaying a negative answer recorded before this rule
+  closes its steps the same way first; if another writer holds one, the answer is rebuilt as
+  `uncertain` (`step_changed_after_result`).
+- `state`: `precondition_pending` (R still active), `precondition_failed` (`reason`
+  `other_run_active`, `run_superseded`, `run_unknown`; terminal, nothing sent), `failed`
+  (`failedStep` refused before sending, proven by the journal; earlier steps stay applied and
+  are listed), `uncertain` (`failedOperationId` may have been or may still be sent:
+  `step_in_progress` while another call holds it, `reconciliation_required` without an
+  acknowledgement, `step_changed_after_result`; never resend under another id, reconcile or
+  retry the same `clientRequestId`) or `completed`. The result keeps every
+  observation and step; `delivery` reports the run T3 created for the message
+  (`deliveredAs: started | queued_behind_active`, `runModelMatches`): T3 can still queue it
+  if a run started after the last check, and that is reported, not hidden.
 
 ## OAuth session profile (experimental)
 

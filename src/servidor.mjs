@@ -24,8 +24,10 @@ import { lerProviders, resumoProvider } from './providers.mjs';
 import { casaBusca, comparador, CursorInvalido, normalizar, paginar } from './paginacao.mjs';
 import { Cancelada, ErroT3 } from './t3.mjs';
 import { resumirPedidosRuntime } from './pedidos-runtime.mjs';
+import { lerThreadsEmLote, MAX_ALVOS, PRAZO_MAX_MS, PRAZO_PADRAO_MS } from './leitura-lote.mjs';
+import { LIMITE_MAXIMO, LIMITE_PADRAO, snapshotPlanoControle } from './plano-controle.mjs';
 
-export const VERSAO = '0.12.1';
+export const VERSAO = '0.13.0';
 const ESTADOS = ['running', 'needs_intervention', 'completed', 'failed', 'cancelled', 'no_run', 'unknown'];
 const SO_LEITURA = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
@@ -89,6 +91,40 @@ export function resumoSessao(projecao, thread, modeloCanonico) {
     model: sessao.model,
     informational: true,
     ...(divergente ? { note: `provider session still reports ${sessao.model}; the thread uses ${modeloCanonico.model} (\`activeRun.model\` while a run is active, otherwise \`model\`)` } : {}),
+  };
+}
+
+/**
+ * Detalhe de uma thread autorizada (o resultado de t3_thread), julgado sobre `shell`.
+ * Compartilhado por t3_thread e t3_thread_read_batch para manter um contrato só.
+ */
+export async function detalheDaThread({ r, cliente, shell, threadId, signal, maxCaracteres = 1500 }) {
+  const thread = r.escopo.exigirThread(shell, threadId);
+  const projeto = projetosPorId(shell).get(thread.projectId);
+  const bounded = await cliente.thread(threadId, { signal });
+  const projecao = bounded.projection;
+  const pendentes = pedidosPendentes(projecao);
+  const resumo = resumoDaThread(thread, projeto, pendentes);
+  const ativo = runAtivoDaShell(thread);
+  const runDoAtivo = ativo && (projecao.runs ?? []).find((x) => x.id === ativo.runId);
+  const runDoUltimo = (projecao.runs ?? []).find((x) => x.id === thread.latestRunId);
+  const activeRun = ativo
+    ? {
+        runId: ativo.runId,
+        ordinal: runDoAtivo?.ordinal ?? null,
+        status: runDoAtivo?.status ?? ativo.status,
+        model: resumoModelo(runDoAtivo?.modelSelection),
+      }
+    : null;
+  return {
+    ...resumo,
+    pendingRequests: resumirPedidosRuntime(projecao, thread),
+    providerSession: resumoSessao(projecao, thread, activeRun?.model ?? resumo.model),
+    activeRun,
+    // Último run pela shell (a mesma regra do T3); o snapshot pode não trazer todos os runs.
+    latestRun: thread.latestRunId ? { runId: thread.latestRunId, ordinal: runDoUltimo?.ordinal ?? null, status: thread.status } : null,
+    latestResponse: ultimaResposta(projecao, maxCaracteres),
+    history: { complete: !bounded.hasMoreHistory, payloadBudgetExceeded: Boolean(bounded.payloadBudgetExceeded) },
   };
 }
 
@@ -427,7 +463,7 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       title: 'Provider instances of the T3 environments',
       description:
         'Lists the provider instances of every T3 environment (or only of `environment`), each with its `environment`, from the same source as T3 Settings > Providers (`server.getConfig`), in T3 order and with nothing filtered: configured, default, disabled and unavailable instances all appear, with `enabled`, `installed`, `status` and `availability` as T3 reports them. ' +
-        'Call it before the write actions thread.launch, thread.model-selection.set, provider.switch and delegated_task.request: `modelSelection.instanceId` is the exact `instanceId` here and `modelSelection.model` is a `models[].slug` of that instance; option ids and values come from `models[].capabilities.optionDescriptors`. ' +
+        'Optional before the write actions thread.launch, thread.model-selection.set, provider.switch and delegated_task.request, which validate modelSelection themselves and answer an invalid one with the offered values; use it to browse. `modelSelection.instanceId` is the exact `instanceId` here and `modelSelection.model` is a `models[].slug` of that instance; option ids and values come from `models[].capabilities.optionDescriptors`. ' +
         'IDs, display names and models belong to this environment only and are returned exactly as T3 sends them (keep case, underscores and hyphens); the same instanceId can have another display name or other models elsewhere. ' +
         'Each item keeps the T3 field names, limited to identity, state, runtime modes and models; `auth` carries only `status`. ' +
         'By default only the instances are listed; models with capabilities are large (tens of kB per environment), so pass `includeModels: true` with the chosen `instanceId` and `environment`. ' + CONTRATO_ESCOPO + ' Read-only.',
@@ -480,6 +516,31 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
   );
 
   registrar(
+    't3_control_plane',
+    {
+      title: 'Control plane snapshot across environments',
+      description:
+        'One call for what to act on next, across every configured environment (or only `environment`), each with its own ACL: threads `running`, threads in `needsIntervention`, and `ready` threads (latest run completed, failed or cancelled and not settled nor snoozed, or woke), each with `environment: {alias, environmentId, name}`, project, branch, directory, model, the canonical `state`, `activeRun`, a `pendingRequest` summary (requestId, kind, reason, since) and `next` (the t3_thread call that reads it). ' +
+        '`ready` is potentially actionable, not acceptance: `readyReasons` says why and `blockers: [background_work_pending]` (with `actionableNow: false`) marks background work the shell reports. ' +
+        `Each environment has ${PRAZO_AMBIENTE_MS} ms and the whole call ${PRAZO_TOTAL_MS} ms. Environments that fail or time out are listed in \`environmentFailures\` and \`complete\` is false: their threads are missing from every list and count, so the answer is NOT a global view; never conclude that nothing needs attention from an incomplete snapshot. ` +
+        'Each environment is one shell read (`snapshotSequence`, `readAt`, counts by state in `queriedEnvironments`); environments are not read at one instant. Each list is ordered by `updatedAt` (newest first) and cut at `limit` with `total` and `truncated`; for more use t3_threads with `state` in that environment. Request content and answers are read with t3_thread. ' +
+        CONTRATO_ESTADO + ' ' + CONTRATO_WOKE + ' Read-only.',
+      shape: {
+        environment: z.string().min(1).optional().describe(`Restrict the snapshot to one environment (alias or environmentId): ${nomes}. Omitted: every configured environment`),
+        limit: z.number().int().min(1).max(LIMITE_MAXIMO).optional().describe(`Maximum threads per list (needsIntervention, running, ready); default ${LIMITE_PADRAO}. \`total\` counts every match in the environments that answered`),
+      },
+      annotations: SO_LEITURA,
+    },
+    async (args, extra) => {
+      try {
+        return resposta(await snapshotPlanoControle(ambientes, args, { ...opcoesBusca, signal: extra?.signal, resumir: resumoDaThread }));
+      } catch (e) {
+        return erro(e);
+      }
+    },
+  );
+
+  registrar(
     't3_thread',
     {
       title: 'Thread state and latest response',
@@ -496,36 +557,43 @@ export function criarServidor({ ambientes, opcoesBusca = {}, opcoesProviders = {
       },
       annotations: SO_LEITURA,
     },
-    naThread(async ({ r, cliente, signal, threadId, maxCharacters: maxCaracteres = 1500 }) => {
-      const shell = await cliente.shell({ signal });
-      const thread = r.escopo.exigirThread(shell, threadId);
-      const projeto = projetosPorId(shell).get(thread.projectId);
-      const bounded = await cliente.thread(threadId, { signal });
-      const projecao = bounded.projection;
-      const pendentes = pedidosPendentes(projecao);
-      const resumo = resumoDaThread(thread, projeto, pendentes);
-      const ativo = runAtivoDaShell(thread);
-      const runDoAtivo = ativo && (projecao.runs ?? []).find((x) => x.id === ativo.runId);
-      const runDoUltimo = (projecao.runs ?? []).find((x) => x.id === thread.latestRunId);
-      const activeRun = ativo
-        ? {
-            runId: ativo.runId,
-            ordinal: runDoAtivo?.ordinal ?? null,
-            status: runDoAtivo?.status ?? ativo.status,
-            model: resumoModelo(runDoAtivo?.modelSelection),
-          }
-        : null;
-      return {
-        ...resumo,
-        pendingRequests: resumirPedidosRuntime(projecao, thread),
-        providerSession: resumoSessao(projecao, thread, activeRun?.model ?? resumo.model),
-        activeRun,
-        // Último run pela shell (a mesma regra do T3); o snapshot pode não trazer todos os runs.
-        latestRun: thread.latestRunId ? { runId: thread.latestRunId, ordinal: runDoUltimo?.ordinal ?? null, status: thread.status } : null,
-        latestResponse: ultimaResposta(projecao, maxCaracteres),
-        history: { complete: !bounded.hasMoreHistory, payloadBudgetExceeded: Boolean(bounded.payloadBudgetExceeded) },
-      };
-    }),
+    naThread(async ({ r, cliente, signal, threadId, maxCharacters: maxCaracteres = 1500 }) =>
+      detalheDaThread({ r, cliente, shell: await cliente.shell({ signal }), threadId, signal, maxCaracteres })),
+  );
+
+  registrar(
+    't3_thread_read_batch',
+    {
+      title: 'State of several threads in one call',
+      description:
+        `Reads up to ${MAX_ALVOS} threads in one call, each named by \`{environment, threadId}\` (environment required per item; threads of different environments can be mixed). ` +
+        'Each successful item carries in `thread` exactly what t3_thread returns for it: canonical `state`, `activeRun`, `latestRun`, `pendingRequests` with requestId/content/nextAction, `latestResponse` and `history`. ' +
+        'Failure is per item: `items` keeps the input order with one entry per input (`index`), `status: "ok"` with `thread`, or `status: "error"` with `error: {code, reason}` ' +
+        '(environment_not_allowed, thread_not_found, timeout, unavailable, environment_mismatch, http_<status>, connection_refused, global_timeout, failed); a broken target never hides the others and is never an empty success. ' +
+        '`allSucceeded` is true only when every item is ok; `complete` is false when some item failed for a transient reason (deadline, environment down) and rereading it may succeed. ' +
+        'Each environment is read from one shell observation per call (`environments[].observedAt`, also on each item); the thread projection is read right after, as in t3_thread. A repeated target is read once and answered at each position. ' +
+        `\`timeoutMs\` (default ${PRAZO_PADRAO_MS}, max ${PRAZO_MAX_MS}) bounds the whole call, not each item. Reading never answers, approves or acknowledges anything. ` +
+        CONTRATO_ESTADO + ' ' + CONTRATO_WOKE + ' Read-only.',
+      shape: {
+        items: z.array(z.object({
+          environment: z.string().min(1).describe(`Environment of this thread (alias or environmentId): ${nomes}`),
+          threadId: z.string().min(1),
+        }).strict()).min(1).max(MAX_ALVOS).describe(`Targets to read, 1-${MAX_ALVOS}; the answer keeps this order`),
+        maxCharacters: z.number().int().min(200).max(6000).optional().describe('Maximum length of each latest response; default 1500'),
+        timeoutMs: z.number().int().min(1000).max(PRAZO_MAX_MS).optional().describe(`Deadline for the whole call in ms; default ${PRAZO_PADRAO_MS}`),
+      },
+      annotations: SO_LEITURA,
+    },
+    async ({ items, maxCharacters: maxCaracteres = 1500, timeoutMs }, extra) => {
+      try {
+        return resposta(await lerThreadsEmLote(ambientes, { items, timeoutMs }, {
+          signal: extra?.signal,
+          ler: ({ r, cliente, shell, threadId, signal }) => detalheDaThread({ r, cliente, shell, threadId, signal, maxCaracteres }),
+        }));
+      } catch (e) {
+        return erro(e);
+      }
+    },
   );
 
   registrar(

@@ -146,6 +146,13 @@ export function criarConexaoEscrita(registro, {
         const socket = await prepararSocket();
         return lerOcupacao({ projectId, readActive: () => clienteLeitura.shell(), readArchived: () => socket.invoke('orchestration.getArchivedShellSnapshot', {}) });
       },
+      // Canonical provider configuration (server.getConfig, same source as t3_providers), read
+      // fresh for each modelSelection write. Another environment answering is a failure.
+      providers: async () => {
+        const config = await (await prepararSocket()).invoke('server.getConfig', {}, { nativeErrors: true });
+        if (config?.environment?.environmentId !== registro.environmentId || !Array.isArray(config.providers)) throw new Error('providers_unavailable');
+        return config.providers;
+      },
       projectForThread: async (id) => (await clienteLeitura.shell()).threads?.find((t) => t.id === id && !t.deletedAt)?.projectId,
       // Canonicalização de caminho só vale no domínio de execução: local para loopback,
       // no host SSH para environment remoto. Mesma regra nos dois: caminho canônico igual a

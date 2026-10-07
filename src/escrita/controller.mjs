@@ -5,6 +5,7 @@ import {grantFromInventory,escopoDosGrants} from './scope.mjs';
 import {identidadeCanal,exigirIdentidade} from './identidade.mjs';
 import {resolverAmbiente} from './config.mjs';
 import {leituraProtegida} from './read-guarded.mjs';
+import {conditionalSend} from './conditional.mjs';
 // Private relay only. Its fixed binding is provisioned by the operator bootstrap,
 // never selected by a tool argument/sessionId/callId. No generic RPC forwarding.
 //
@@ -55,6 +56,30 @@ export function controller({conexoes,passkeys,journal,organization,tunnelId,inve
   if(request.op==='dispatch'){
    const result=await dispatchers.get(r.alias).dispatch(identity,request.leaseId,{operationId:request.operationId,action:request.action,input:request.input});
    return {ambiente:identidade(r),...result};
+  }
+  if(request.op==='conditional-send'){
+   // Steps go through this environment's Dispatcher; the shell reads are limited to the
+   // lease's write projects of this environment and re-check the lease around the read.
+   const caller=exigirIdentidade(identity),d=dispatchers.get(r.alias);
+   const grantAtivo=()=>{
+    const s=gate.status(request.leaseId);
+    if(!s.active||s.scope.caller!==caller)throw new Error('lease_closed');
+    const grant=grantDoAmbiente(s.scope,{environmentId:r.environmentId,destination:r.destination});
+    if(!grant)throw new Error('ambiente_fora_da_lease');
+    return grant;
+   };
+   const host={caller,environment:{environmentId:r.environmentId,destination:r.destination},journal,audit:e=>gate.audit(e),failClosed:()=>gate.close(),
+    authorize:(actions,projectId)=>{const grant=grantAtivo();if(actions.some(a=>!grant.actions.includes(a))||(projectId!==undefined&&!grant.projects.some(p=>p.id===projectId)))throw new Error('scope_denied');},
+    observe:async threadId=>{
+     const grant=grantAtivo(),shell=await (await c.cliente()).shell();
+     const thread=(shell.threads??[]).find(t=>t.id===threadId&&!t.deletedAt);
+     if(!thread)throw new Error('thread_not_found');
+     if(!grant.projects.some(p=>p.id===thread.projectId)||!grantAtivo().projects.some(p=>p.id===thread.projectId))throw new Error('scope_denied');
+     return thread;
+    },
+    readThread:async threadId=>{grantAtivo();const t=await (await c.cliente()).threadCompleto(threadId);grantAtivo();return t;},
+    dispatch:(action,operationId,input)=>d.dispatch(identity,request.leaseId,{operationId,action,input})};
+   return {ambiente:identidade(r),...await conditionalSend(host,request.operationId,request.input)};
   }
   if(request.op==='reconcile')return {ambiente:identidade(r),...await dispatchers.get(r.alias).reconcile(identity,request.leaseId,request.operationId)};
   if(request.op==='read'){

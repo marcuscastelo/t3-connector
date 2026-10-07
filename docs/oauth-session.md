@@ -24,7 +24,7 @@ immediate.
 | Public sign-in / enrollment | `src/oauth/public-login.mjs`, `src/oauth/public-enrollment.mjs` | Separate issuer RP, UV then explicit consent, no private inventory before UV; locally authorized temporary browser-bound enrollment. |
 | Credential administration / storage | `src/oauth/credential-admin.mjs`, `src/oauth/credential-storage.mjs`, `src/oauth/passkeys.mjs` | Local action-bound UV, independent RP maps/files, canonical subject, bounded serialized verification/mutation and synchronous guarded persistence. |
 | Resource server | `src/oauth/resource-server.mjs` | Streamable HTTP, stateless, JSON responses. Global OAuth (initialize and tools/list too). Facade over inner catalogs: scope per tool, activity admitted per `tools/call`, session re-checked before a result leaves. |
-| T3 catalog | `src/oauth/t3-tools.mjs`, `src/oauth/session-writes.mjs` | The eight existing read tools and optional write catalog without `leaseId`. OAuth/all authorizes live inventory in consented environments; restricted mode retains the read ACL and write snapshot. |
+| T3 catalog | `src/oauth/t3-tools.mjs`, `src/oauth/session-writes.mjs` | The read tools of the read server and the optional write catalog without `leaseId`. OAuth/all authorizes live inventory in consented environments; restricted mode retains the read ACL and write snapshot. |
 | Rehearsal tools | `src/oauth/rehearsal-tools.mjs` | `rehearsal_now`, `rehearsal_echo`, `rehearsal_notes` (read) and `rehearsal_note_write` (write, in memory). No backend. |
 | Entry point | `bin/t3-connector-oauth.mjs` | `serve`, `rehearsal`, `--version`. |
 
@@ -240,6 +240,11 @@ the existing `full-access` default, including the setter's old no-parameter beha
 provider support; the connector forwards the selected mode without upgrading it. The consent's
 `full-access` is the authorization ceiling, not a requirement to use that execution mode.
 Interaction mode behavior is unchanged.
+
+A thread on a new branch and worktree is opened by `thread.launch` alone:
+`workspaceStrategy: {type: 'worktree', baseRef, branch?, startFromOrigin?}` makes T3 create the
+branch, the worktree and the thread in one call. There is no separate branch or worktree creation
+tool; `t3_worktree_status` and `t3_worktree_list` only read.
 
 #### Native T3 tools (opt-in)
 

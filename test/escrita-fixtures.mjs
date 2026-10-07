@@ -18,3 +18,13 @@ export function setup() {
  const target={environmentId:env.environmentId,destination:env.destination,projectIds:['app'],action:'thread.send'};
  return {gate,passkeys,auth,audit,caller,scope,env,grant,target,advance:ms=>now+=ms,moveWall:ms=>wallOffset+=ms};
 }
+// server.getConfig providers offering exactly the given selections (ServerProvider shape of T3
+// 8ed276c2): a string option value becomes a select descriptor, a boolean one a boolean descriptor.
+export function providersFor(...selections) {
+ const porInstancia=new Map();
+ for(const {instanceId,model,options=[]} of selections) {
+  const p=porInstancia.get(instanceId)??{instanceId,driver:'codex',enabled:true,installed:true,status:'ready',models:[]};porInstancia.set(instanceId,p);
+  p.models.push({slug:model,name:model,isCustom:false,capabilities:{optionDescriptors:options.map(o=>typeof o.value==='boolean'?{id:o.id,label:o.id,type:'boolean'}:{id:o.id,label:o.id,type:'select',options:[{id:o.value,label:o.value}]})}});
+ }
+ return [...porInstancia.values()];
+}

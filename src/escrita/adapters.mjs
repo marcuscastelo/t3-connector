@@ -5,8 +5,9 @@ import { digest, grantDoAmbiente } from './gate.mjs';
 import { exigirIdentidade } from './identidade.mjs';
 import { PROJECT_ACTIONS, PROJECT_SCHEMAS, isProjectAction, guardProjectDelete, lockProject } from './project-admin.mjs';
 import { NATIVE_WRITES, NATIVE_WRITE_ACTIONS, NativeToolError, NativeRpcError } from './native.mjs';
+import { validarModelSelection } from './model-selection.mjs';
 const str=z.string().trim().min(1).max(1024), id=str;
-const model=z.object({instanceId:str.describe('Exact ID of the provider instance configured in the chosen environment, as listed by the read tool t3_providers (instanceId); keep case, underscores and hyphens, for example claudeAgent_custom.'),model:str.describe('Exact model ID for that instance (models[].slug in t3_providers), including custom models, for example claude-opus-5-5. The connector has no model enum or allowlist; availability is decided by T3 in that environment.'),options:z.array(z.object({id:str,value:z.union([z.string(),z.boolean()])}).strict()).optional()}).strict();
+const model=z.object({instanceId:str.describe('Exact ID of the provider instance configured in the chosen environment (instanceId in t3_providers); keep case, underscores and hyphens, for example claudeAgent_custom.'),model:str.describe('Exact model ID for that instance (models[].slug in t3_providers), including custom models, for example claude-opus-5-5.'),options:z.array(z.object({id:str,value:z.union([z.string(),z.boolean()])}).strict()).optional().describe('Model options by exact descriptor id, for example [{id:"fastMode",value:true},{id:"reasoningEffort",value:"high"}]: boolean descriptors take true/false, select descriptors the id of one choice. Omitted options keep T3 defaults; the connector adds none.')}).strict().describe('No prior t3_providers call is needed: before sending, the write checks instanceId, model and options against the live provider configuration of the environment and refuses with the exact problem and the offered values (provider_instance_unavailable, provider_model_unavailable, model_option_unsupported, model_option_value_unsupported, model_capabilities_unknown); nothing is sent then.');
 const runtimeMode=z.enum(['approval-required','auto-accept-edits','auto','full-access']).default('full-access').describe('T3 execution mode; omitted preserves the connector default full-access. Supported modes are decided by the selected provider in T3.');
 const base={threadId:id};
 const specs=new Map();
@@ -40,6 +41,8 @@ const workspace=z.discriminatedUnion('type',[
  z.object({type:z.literal('root'),branch:str.optional()}).strict(),
  z.object({type:z.literal('existing_worktree'),worktreePath:str,branch:str.optional()}).strict(),
  z.object({type:z.literal('worktree'),baseRef:str,branch:str.optional(),startFromOrigin:z.boolean().optional()}).strict()]);
+// Canonical path for a new branch + worktree: agents must not go looking for a separate creation tool.
+export const LAUNCH_DESCRIPTION='Launches a new thread in projectId. This is the canonical way to open an implementation thread on a NEW branch and worktree: workspaceStrategy {type:\'worktree\', baseRef, branch?, startFromOrigin?} makes T3 create the branch from baseRef and its worktree and bind the thread to it in this one call. There is no separate branch or worktree creation tool; do not look for one. {type:\'existing_worktree\', worktreePath} reuses an approved worktree; {type:\'root\'} uses the project checkout. text is the first message.';
 specs.set('thread.launch',{method:'orchestration.launchThread',refs:[],schema:z.object({projectId:id,title:str,modelSelection:model,workspaceStrategy:workspace,runtimeMode,text:z.string().max(100000).optional()}).strict(),encode:p=>{const {text,...rest}=p;return {...rest,commandId:randomUUID(),threadId:randomUUID(),interactionMode:'default',...(text!==undefined?{initialMessage:{messageId:randomUUID(),text,attachments:[]}}:{})};}});
 // One branch per mode: tools/list carries conditional requirements, not just runtime refinements.
 export const SEND_DESCRIPTIONS=Object.freeze({
@@ -151,6 +154,8 @@ export class Dispatcher {
    // Conexão do environment aberta ainda em 'preparing' (falha aqui não enviou nada) e antes
    // da checagem final: entre a checagem e o envio não há await.
    if(this.adapter.prepare) await this.adapter.prepare();
+   // Read fresh on every write: the client need not look capabilities up first.
+   if(parsed.input.modelSelection) await validarModelSelection(this.adapter,parsed.input.modelSelection);
    // Fresh full count (active + archived). The native force:false refusal still applies.
    if(this.validateTarget) await this.validateTarget({target,input:parsed.input,spec:parsed.spec,validateWorkspace:g=>this.#workspace(g,[...projects],action,parsed.input)});
    // Last read before the send: a count taken before the target validation could be stale.

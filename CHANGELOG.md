@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+## 0.13.0
+
+- Tool descriptions: `t3_escrever_thread_launch` now states that it is the canonical path to open
+  a thread on a new branch and worktree (`workspaceStrategy.type: 'worktree'` creates both in one
+  call) and that no separate creation tool exists; `t3_worktree_status` and `t3_worktree_list` say
+  they are read-only and point to it. Descriptions only; schemas and behavior are unchanged.
+- Writes with `modelSelection` (`thread.launch`, `thread.model-selection.set`,
+  `provider.switch`, `delegated_task.request`) validate it themselves against the
+  environment's `server.getConfig`, read fresh on every write: a client no longer needs
+  `t3_providers` first to learn whether an option such as `fastMode` is offered. An
+  unsupported instance, model, option or value is refused before sending with a precise code
+  (`provider_instance_unavailable`, `provider_model_unavailable`, `model_option_unsupported`,
+  `model_option_value_unsupported`, `model_capabilities_unknown`,
+  `model_capabilities_unavailable`) and a message naming the offered values, on both the
+  lease and OAuth paths. Valid selections are sent unchanged, with no default added.
+- New write tool `t3_escrever_thread_conditional_send` (lease bridge and OAuth): "after run
+  `afterRunId` ends, optionally apply `modelSelection`, then send `text`" as one request with one
+  `clientRequestId`. The precondition (run terminal, still the latest, nothing active) is checked
+  before the first step and again right before the send; a run started in between refuses the
+  send instead of letting T3 queue it. Steps reuse `thread.model-selection.set` and `thread.send`
+  `start_immediately` through the existing dispatch (journal, scope, stable commandId, fail-closed
+  uncertainty) under `<clientRequestId>:model-selection` and `<clientRequestId>:send`. A manifest in
+  the same journal records every observation and step. Each step's state is read from the write
+  journal of its operationId (a step another call still holds, or one without acknowledgement, is
+  `uncertain`, never "not sent"); retries never send twice, re-evaluate `precondition_pending` and
+  `uncertain`, and replay a final answer only while the journal agrees with it. "Not sent" is
+  stated only for a step whose journal record is a refusal: before concluding it, the request
+  reserves the step's operationId as refused (atomic, like the Dispatcher's own reservation), so no
+  later write sends under it; a refusal that leaves no record refuses the call instead. A replayed
+  negative answer recorded without that refusal closes the steps first or is rebuilt as uncertain. Concurrent
+  duplicates share one execution, and the
+  result states `precondition_pending | precondition_failed | failed | uncertain | completed`, with
+  `delivery.deliveredAs` from the run T3 created. No new consented action; existing tools unchanged.
+- Read tools: new `t3_thread_read_batch` reads up to 20 threads in one call, each named by
+  `{environment, threadId}` (environments can be mixed). Each successful item carries the
+  same result as `t3_thread` (state, active/latest run, pending requests, latest response),
+  built by the same code. Failure is per item with a code (`thread_not_found`,
+  `environment_not_allowed`, `unavailable`, `global_timeout`, ...), so one broken target does
+  not hide the others; `allSucceeded` and `complete` summarize. One shell observation per
+  environment per call; a repeated target is read once. Available on the read server and the
+  OAuth profile, not in the write plugin's lease reads. `t3_thread` output is unchanged. See
+  ADR 0006.
+- New read tool `t3_control_plane`: a control plane snapshot in one call across every
+  configured environment (or only `environment`), each with its own ACL. It returns
+  `needsIntervention`, `running` and `ready` lists (ready = latest run completed, failed or
+  cancelled and not settled nor snoozed, or woke; with `readyReasons`, `blockers` and
+  `actionableNow`). Items carry the `t3_threads` summary plus `environment`, `activeRun`, a
+  `pendingRequest` summary from the shell and `next` (the `t3_thread` call). Environments
+  that fail or time out are listed in `environmentFailures` with `complete: false` and an
+  `incompleteReason`; per-environment `snapshotSequence`, `readAt` and counts by state are in
+  `queriedEnvironments`. One shell read per environment, no per-thread read. Existing tools
+  are unchanged. The environment sweep lives in `src/varredura.mjs`.
 - `mcp-connector-kit` 0.3.0: the OAuth issuer may carry a mount path (`https://host/fleet`), so
   several connectors share one host behind a path-routing ingress. Discovery uses RFC 8414 path
   insertion, endpoints and pages live under the mount, WebAuthn uses the bare origin, and the root
@@ -9,6 +61,9 @@
   identical to 0.2.0 (snapshot test). A mounted connector routes only canonical origin-form
   request-targets (no dot segments, backslash, authority or absolute form), so the connector that
   answers is always the one the ingress chose from the raw path.
+- OAuth writes work with an issuer mounted on a path: the session write identity now accepts the
+  same issuer form as the OAuth server (`https://host/mount`). Before, every write in a mounted
+  connector was refused with `oauth_identity_invalid` while reads worked.
 - OAuth client authentication: a `private_key_jwt` assertion is accepted only when every `aud` value
   names this authorization server (its issuer, token or revocation endpoint). Before, one matching
   value was enough, so an assertion naming two servers authenticated at both. Assertions with a single

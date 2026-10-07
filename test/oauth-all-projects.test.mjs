@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { ambientesFalsos, dadosPadrao, config, conectarMcp } from './apoio.mjs';
 import { startConnector, http } from './oauth-apoio.mjs';
 import { thread, projecao, mensagem } from './fixtures.mjs';
-import { memoryJournal } from './escrita-fixtures.mjs';
+import { memoryJournal, providersFor } from './escrita-fixtures.mjs';
 import { t3Tools } from '../src/oauth/t3-tools.mjs';
 import { loadOAuthConfig } from '../src/oauth/config.mjs';
 import { carregarConfigOAuthAll, validarConfigOAuthAll, assertEnvironmentParity, consentAll, liveReadContext } from '../src/oauth/project-policy.mjs';
@@ -24,7 +24,7 @@ async function fixture(t, { empty = false, config = {} } = {}) {
     const c = { registro: { ...r, destination: `t3://${r.environmentId}`, acoes: ACTIONS }, calls: [],
       inventario: async () => { throw new Error('all login must not snapshot inventory'); },
       cliente: async () => ({ shell: async () => { await c.inventoryHook?.(); if (c.offline) throw new Error('ambiente_indisponivel'); return structuredClone(d.shell); } }),
-      adapter: { prepare: async () => { c.calls.push('prepare'); await c.prepareHook?.(); }, invoke: async (method, payload) => { c.calls.push({ method, payload }); return { sequence: 1 }; }, receipt: r => r, verifyWorkspace: async (path, roots) => { await c.workspaceHook?.(); return roots.includes(path); }, reconcile: async r => ({ found: !!r.receipt, state: 'unknown' }) }, fechar() {} };
+      adapter: { prepare: async () => { c.calls.push('prepare'); await c.prepareHook?.(); }, providers: async () => providersFor({ instanceId: 'codex', model: 'test' }), invoke: async (method, payload) => { c.calls.push({ method, payload }); return { sequence: 1 }; }, receipt: r => r, verifyWorkspace: async (path, roots) => { await c.workspaceHook?.(); return roots.includes(path); }, reconcile: async r => ({ found: !!r.receipt, state: 'unknown' }) }, fechar() {} };
     return c;
   });
   const c = await startConnector({ config, tools: t3Tools({ ambientes: reads, conexoes: connections, journal, projectPolicy: 'all' }) }); t.after(c.close);
@@ -61,6 +61,23 @@ test('all: same sign-in reads every tool and writes projects created later in bo
   }
   assert.equal(body(await f.c.callTool(at, 't3_ambientes', { check: true })).environments.length, 2);
   assert.deepEqual(f.c.connector.authority.check(f.c.connector.tokens.resolveAccess(at).sid).grants, grants);
+});
+
+test('all: t3_control_plane spans both environments with projects created after login and names a host that fails', async t => {
+  const f = await fixture(t); const at = (await f.c.signIn()).tokens.access_token;
+  const local = f.add('local'), remoto = f.add('remoto');
+  const x = body(await f.c.callTool(at, 't3_control_plane', {}));
+  assert.equal(x.complete, true);
+  assert.deepEqual(x.queriedEnvironments.map(e => e.alias), ['local', 'remoto']);
+  for (const [env, id] of [['local', local], ['remoto', remoto]]) {
+    const item = x.needsIntervention.threads.find(i => i.threadId === `t-${id}`);
+    assert.equal(item.environment.alias, env); assert.equal(item.pendingRequest.kind, 'user_input');
+  }
+  f.data.remoto.shell = () => Promise.reject(new Error('down'));
+  const y = body(await f.c.callTool(at, 't3_control_plane', {}));
+  assert.equal(y.complete, false);
+  assert.deepEqual(y.environmentFailures.map(e => e.alias), ['remoto']);
+  assert.ok(y.needsIntervention.threads.every(i => i.environment.alias === 'local'));
 });
 
 test('all: reads without environment span both consented environments; by-ID discovery resolves, refuses ambiguity and refuses when a host is offline', async t => {
@@ -108,6 +125,21 @@ test('all: unknown environment, foreign thread and absent/deleted project fail w
   f.data.remoto.shell.projects.find(p => p.id === id).deletedAt = 'now';
   assert.equal((await f.send(at, 'remoto', id, 'deleted')).data.result.isError, true);
   assert.equal(body(await f.c.callTool(at, 't3_buscar_threads', { threadId: `t-${id}` })).total, 0);
+  assert.equal(f.connections.reduce((n, c) => n + invokes(c), 0), 0);
+});
+
+test('all: batch read spans both environments under the live policy, failing only the foreign and unknown items', async t => {
+  const f = await fixture(t); const at = (await f.c.signIn()).tokens.access_token;
+  const local = f.add('local'), remoto = f.add('remoto');
+  const r = body(await f.c.callTool(at, 't3_thread_read_batch', { items: [
+    { environment: 'local', threadId: `t-${local}` },
+    { environment: 'remoto', threadId: `t-${remoto}` },
+    { environment: 'local', threadId: `t-${remoto}` },
+    { environment: 'unknown', threadId: `t-${local}` },
+  ] }));
+  assert.deepEqual(r.items.map(x => [x.status, x.error?.code ?? null]), [['ok', null], ['ok', null], ['error', 'thread_not_found'], ['error', 'environment_not_allowed']]);
+  assert.equal(r.items[1].thread.state, 'needs_intervention');
+  assert.equal(r.items[0].thread.latestResponse.text, `message-${local}`);
   assert.equal(f.connections.reduce((n, c) => n + invokes(c), 0), 0);
 });
 

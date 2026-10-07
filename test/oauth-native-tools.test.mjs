@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ambientesFalsos, dadosPadrao } from './apoio.mjs';
 import { startConnector } from './oauth-apoio.mjs';
-import { memoryJournal } from './escrita-fixtures.mjs';
+import { memoryJournal, providersFor } from './escrita-fixtures.mjs';
 import { t3Tools } from '../src/oauth/t3-tools.mjs';
 import { loadOAuthConfig } from '../src/oauth/config.mjs';
 import { ACTIONS } from '../src/escrita/adapters.mjs';
@@ -65,7 +65,7 @@ async function fixture(t, { nativeTools = true, scope } = {}) {
     return { registro: { ...r, destination: `t3://${r.environmentId}`, acoes: ACTIONS },
       inventario: async () => { throw new Error('unused'); },
       cliente: async () => ({ shell: async () => structuredClone(e.shell()) }),
-      adapter: { prepare: async () => {}, invoke: e.invoke, native: e.native, receipt: r => r, verifyWorkspace: async () => true, reconcile: async () => ({ found: false, state: 'unknown' }) }, fechar() {} };
+      adapter: { prepare: async () => {}, providers: async () => providersFor(MODEL), invoke: e.invoke, native: e.native, receipt: r => r, verifyWorkspace: async () => true, reconcile: async () => ({ found: false, state: 'unknown' }) }, fechar() {} };
   });
   const c = await startConnector({ tools: t3Tools({ ambientes: reads, conexoes: connections, journal, projectPolicy: 'all', nativeTools }) }); t.after(c.close);
   const s = await c.signIn(scope ? { scope } : {}), at = s.tokens.access_token;
@@ -273,4 +273,12 @@ test('OAuth public schema and dispatch expose native runtime modes with backward
   const r = body(await f.write('t3_escrever_thread_launch', {projectId:'p',title:'restricted run',modelSelection:MODEL,workspaceStrategy:{type:'worktree',baseRef:'main'},runtimeMode:'approval-required'}, 'restricted-launch'));
   assert.equal(r.state, 'completed');
   assert.equal(f.e.sends[0].payload.runtimeMode, 'approval-required');
+});
+
+test('OAuth tools/list points branch/worktree creation to thread.launch, from launch and from the worktree reads', async t => {
+  const f = await fixture(t);
+  const list = await f.list(), d = name => list.find(x => x.name === name).description;
+  assert.match(d('t3_escrever_thread_launch'), /canonical way to open an implementation thread on a NEW branch and worktree/);
+  assert.match(d('t3_escrever_thread_launch'), /no separate branch or worktree creation tool/);
+  for (const name of ['t3_worktree_status', 't3_worktree_list']) assert.match(d(name), /Read-only; to create a new branch and worktree with a thread, use thread\.launch \(t3_escrever_thread_launch\) with workspaceStrategy\.type='worktree'/);
 });
