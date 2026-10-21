@@ -62,22 +62,30 @@ export function criarCliente({ url, token, timeoutMs = 15000, fetchImpl = fetch,
     const headers = { authorization: `Bearer ${token}` };
     if (orquestracao) headers['x-t3-orchestration-protocol'] = PROTOCOLO;
     let resposta;
+    const started = performance.now();
+    const requestSignal = sinalCom(signal, timeoutMs);
     try {
-      resposta = await fetchImpl(new URL(caminho, base), { method: metodo, headers, signal: sinalCom(signal, timeoutMs) });
+      resposta = await fetchImpl(new URL(caminho, base), { method: metodo, headers, signal: requestSignal });
+      // Reading the body is part of the same request deadline.
+      const body = await resposta.json().catch((error) => {
+        if (requestSignal.aborted || resposta.ok) throw error;
+        return null;
+      });
+      if (!resposta.ok) {
+        throw new ErroT3(`T3 answered ${resposta.status} at ${caminho.split('?')[0]}`, {
+          status: resposta.status, codigo: body?.code ?? body?.error ?? body?._tag ?? null,
+        });
+      }
+      return body;
     } catch (erro) {
+      if (erro instanceof ErroT3 || erro instanceof SyntaxError) throw erro;
       // Prazo de quem chama não é falha do servidor: não derruba conexão nem túnel.
       if (signal?.aborted) throw signal.reason?.name === 'TimeoutError' ? new ErroT3('call deadline exceeded', { codigo: 'prazo' }) : new Cancelada();
+      if (requestSignal.aborted && requestSignal.reason?.name === 'TimeoutError') {
+        throw new ErroT3(`T3 request deadline exceeded at ${caminho.split('?')[0]} after ${Math.round(performance.now() - started)} ms (limit ${timeoutMs} ms)`, { codigo: 'prazo' });
+      }
       throw new ErroT3(`T3 unavailable at ${base.origin} (${erro.name})`, { codigo: 'indisponivel' });
     }
-    if (!resposta.ok) {
-      let codigo = null;
-      try {
-        const corpo = await resposta.json();
-        codigo = corpo?.code ?? corpo?.error ?? corpo?._tag ?? null;
-      } catch {}
-      throw new ErroT3(`T3 answered ${resposta.status} at ${caminho.split('?')[0]}`, { status: resposta.status, codigo });
-    }
-    return resposta.json();
   }
 
   return {

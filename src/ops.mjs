@@ -285,6 +285,7 @@ export function createOps(environment, {
   readToken = lerTokenPrivado,
   WebSocketImpl = globalThis.WebSocket,
   rpcTimeoutMs = 60000,
+  httpTimeoutMs = 20000,
 } = {}) {
   let session = null; // {client, base, environmentId}
   let rpc = null;
@@ -292,7 +293,7 @@ export function createOps(environment, {
   async function open() {
     if (session) return session;
     const base = await transport.baseUrl({ signal: AbortSignal.timeout(20000) });
-    const client = criarCliente({ url: base, token: readToken(environment.tokenFile), timeoutMs: 20000, allowInsecureHttp: environment.insecureHttp });
+    const client = criarCliente({ url: base, token: readToken(environment.tokenFile), timeoutMs: httpTimeoutMs, allowInsecureHttp: environment.insecureHttp });
     const desc = await client.ambiente();
     if (desc.orchestrationProtocolVersion !== 2) throw new OpsError('protocol_unsupported', `T3 server with protocol ${desc.orchestrationProtocolVersion}; 2 is required`);
     if (environment.environmentId && desc.environmentId !== environment.environmentId) {

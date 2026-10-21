@@ -122,3 +122,24 @@ test('túnel SSH que não abre vira erro de indisponibilidade com a última linh
   const t = criarTransporteSsh({ host: 'remoto', spawnImpl, prontoEmMs: 2000 });
   await assert.rejects(t.baseUrl(), (e) => e.codigo === 'indisponivel' && /Operation timed out/.test(e.message));
 });
+
+
+test('own HTTP deadline reports the route and elapsed time, without secrets', async () => {
+  const hold = setTimeout(() => {}, 500);
+  try {
+    const c = criarCliente({url:'http://127.0.0.1:1',token:'private-token',timeoutMs:15,
+      fetchImpl: (url, o) => new Promise((_, reject) => o.signal.addEventListener('abort', () => reject(o.signal.reason)))});
+    await assert.rejects(c.shell(), e => e.codigo === 'prazo' &&
+      /api\/orchestration\/shell.*ms \(limit 15 ms\)/.test(e.message) && !e.message.includes('private-token'));
+  } finally { clearTimeout(hold); }
+});
+
+test('response body is covered by the same deadline', async () => {
+  const hold = setTimeout(() => {}, 500);
+  try {
+    const c = criarCliente({url:'http://127.0.0.1:1',token:'private-token',timeoutMs:15,
+      fetchImpl: async (url, o) => ({ok:true,json:() => new Promise((_, reject) =>
+        o.signal.addEventListener('abort', () => reject(o.signal.reason)))})});
+    await assert.rejects(c.shell(), e => e.codigo === 'prazo' && /limit 15 ms/.test(e.message));
+  } finally { clearTimeout(hold); }
+});

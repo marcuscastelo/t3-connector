@@ -797,3 +797,7 @@ directory or tunnel keys.
 
 [MIT](LICENSE). `reference/` keeps T3 Code's MIT license
 ([reference/LICENSE.t3code](reference/LICENSE.t3code)).
+
+Operator integrations may pass `httpTimeoutMs` to `createOps` (default 20000 ms).
+An HTTP request that exceeds its own deadline reports `timeout` through ops, with
+the route and elapsed milliseconds; this does not prove the server is unavailable.

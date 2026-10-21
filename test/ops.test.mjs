@@ -79,7 +79,7 @@ before(async () => {
     if (url.pathname === '/.well-known/t3/environment') return json({ environmentId: ENV_ID, label: 'test', orchestrationProtocolVersion: 2 });
     if (url.pathname === '/api/auth/session') return json({ scopes: state.scopes });
     if (url.pathname === '/api/auth/websocket-ticket') return json({ ticket: 'tk' });
-    if (url.pathname === '/api/orchestration/shell') return json({ snapshotSequence: state.seq, threads: state.threads.filter((t) => !t.archivedAt), projects: state.projects });
+    if (url.pathname === '/api/orchestration/shell') return setTimeout(() => json({ snapshotSequence: state.seq, threads: state.threads.filter((t) => !t.archivedAt), projects: state.projects }), state.shellDelayMs ?? 0);
     if (url.pathname === '/api/projects') return json({ projects: state.projects.map((p) => ({ deletedAt: null, ...p })) });
     const m = /^\/api\/orchestration\/threads\/([^/]+)(\/bounded|\/history)?$/.exec(url.pathname);
     if (m) {
@@ -489,4 +489,16 @@ test('organize: native action names, confirmed by reading the thread (archived i
   await assert.rejects(o.organize('t-idle', 'nap', { operationId: 'o-10' }), { code: 'organize_action_invalid' });
   await assert.rejects(o.organize('nope', 'pin', { operationId: 'o-11' }), { code: 'thread_not_found' });
   o.close();
+});
+
+
+test('operator HTTP budget is configurable and slow responses do not mean unavailable', async () => {
+  const environment = {alias:'test',aliases:[],environmentId:ENV_ID,url:base,ssh:null,tokenFile:'/x'};
+  state.shellDelayMs = 150;
+  const short = createOps(environment, {readToken:()=>'tok',WebSocketImpl:FakeSocket,httpTimeoutMs:50});
+  const long = createOps(environment, {readToken:()=>'tok',WebSocketImpl:FakeSocket,httpTimeoutMs:1000});
+  try {
+    await assert.rejects(short.list(), e => e.codigo === 'prazo' && /api\/orchestration\/shell/.test(e.message));
+    assert.equal((await long.list()).length, 3);
+  } finally { short.close(); long.close(); }
 });

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.15.1-fleet-timeout.1
+
+- Operator core accepts `httpTimeoutMs` (default unchanged: 20000 ms).
+- HTTP deadlines include response bodies and report code `prazo`, route and elapsed time.
+  A request deadline no longer claims the environment is unavailable.
+
 ## 0.15.0
 
 - Operator core (`src/ops.mjs`, `t3-connector-ops`) reaches the whole connector surface:
