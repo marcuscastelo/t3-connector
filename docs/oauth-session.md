@@ -569,7 +569,7 @@ The rehearsal state directory is separate from `serve`'s.
 
 ## 7. Acceptance criteria
 
-Automated (in `npm test`), including `test/oauth-public.test.mjs` with software authenticators,
+Automated (in `pnpm test`), including `test/oauth-public.test.mjs` with software authenticators,
 synthetic keys/state, controlled HTTPS issuer identity over ephemeral loopback HTTP ingress and
 mutable fake inventories:
 
@@ -621,7 +621,7 @@ mutable fake inventories:
   never accepted by the session gate; no secret or raw identifier in the event log, including
   client-controlled strings.
 
-Composition harness (not in `npm test`): `node test/composition/harness.mjs <supervisionar-transporte.mjs>`
+Composition harness (not in `pnpm test`): `node test/composition/harness.mjs <supervisionar-transporte.mjs>`
 runs a synthetic OAuth client through an ingress proxy supervised by the Ponte's transport
 supervisor helper, into this AS/RS and the session writes over a real SQLite journal and a doubled
 backend that counts sends. It covers an ingress outage (same session after refresh, idle not

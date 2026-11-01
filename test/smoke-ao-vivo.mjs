@@ -10,7 +10,7 @@
 //
 // Os aliases vêm de t3_ambientes, ou seja, da config em uso (T3_CONNECTOR_CONFIG ou a
 // instalada); nenhum nome de environment é fixo aqui.
-//   [T3_CONNECTOR_CMD=<executável>] npm run smoke
+//   [T3_CONNECTOR_CMD=<executável>] pnpm run smoke
 //
 // Sai com código 1 se algum caso falhar.
 

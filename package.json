@@ -36,7 +36,7 @@
     "@modelcontextprotocol/sdk": "1.32.0",
     "@simplewebauthn/browser": "13.3.0",
     "@simplewebauthn/server": "13.3.3",
-    "mcp-connector-kit": "0.3.0",
+    "mcp-connector-kit": "workspace:*",
     "qrcode": "1.5.4",
     "zod": "4.6.5"
   },
@@ -58,7 +58,5 @@
   "bundleDependencies": [
     "mcp-connector-kit"
   ],
-  "workspaces": [
-    "packages/mcp-connector-kit"
-  ]
+  "packageManager": "pnpm@12.6.0"
 }

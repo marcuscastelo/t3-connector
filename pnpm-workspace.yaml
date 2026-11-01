@@ -1,0 +1,4 @@
+packages:
+  - packages/mcp-connector-kit
+# Release artifacts bundle the local kit; pnpm requires hoisted linking for bundling.
+nodeLinker: hoisted

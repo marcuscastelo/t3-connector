@@ -23,7 +23,6 @@ function inputs(over = {}) {
   return {
     tag: 'v1.2.0',
     pkg: { version: '1.2.0' },
-    lock: { version: '1.2.0', packages: { '': { version: '1.2.0' } } },
     sources: { 'src/servidor.mjs': '1.2.0', 'src/escrita/ponte-mcp.mjs': '1.2.0' },
     changelog: CHANGELOG,
     ...over,
@@ -47,8 +46,7 @@ test('tag diferente da versão falha', () => {
   assert.match(checkRelease(inputs({ tag: '1.2.0' })).join('\n'), /tag 1\.2\.0/);
 });
 
-test('lock, VERSAO e VERSAO_ESCRITA precisam acompanhar o package.json', () => {
-  assert.match(checkRelease(inputs({ lock: { version: '1.2.0', packages: { '': { version: '1.1.0' } } } })).join('\n'), /package-lock/);
+test('VERSAO e VERSAO_ESCRITA precisam acompanhar o package.json', () => {
   const f = checkRelease(inputs({ sources: { 'src/servidor.mjs': '1.1.0', 'src/escrita/ponte-mcp.mjs': undefined } }));
   assert.equal(f.length, 2);
   assert.match(f[0], /src\/servidor\.mjs declares 1\.1\.0/);
@@ -63,16 +61,15 @@ test('CHANGELOG precisa da seção da versão, não vazia, e Unreleased vazio', 
 
 test('só SemVer 2.0.0 sem build metadata passa', () => {
   const comVersao = (v) => checkRelease(inputs({ tag: `v${v}`, pkg: { version: v },
-    lock: { version: v, packages: { '': { version: v } } }, sources: {}, changelog: `## ${v}\n\n- x\n` }));
+    sources: {}, changelog: `## ${v}\n\n- x\n` }));
   for (const v of ['1.2.0', '0.6.0', '1.0.0-rc.1', '1.0.0-alpha-1.0']) assert.deepEqual(comVersao(v), [], v);
   for (const v of ['1.2', '01.2.3', '1.2.3-01', '1.2.3-rc..1', '1.2.3+build.1']) assert.match(comVersao(v).join('\n'), /not semver/, v);
 });
 
 test('as fontes reais de versão são lidas e concordam com o package.json', () => {
-  const { pkg, lock, sources } = readInputs();
+  const { pkg, sources } = readInputs();
   assert.ok(Object.keys(sources).length >= 2);
   for (const [file, v] of Object.entries(sources)) assert.equal(v, pkg.version, file);
-  assert.equal(lock.version, pkg.version);
 });
 
 test('verifyAsset confere checksum, nome do arquivo e versão do pacote', (t) => {
