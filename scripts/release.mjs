@@ -4,7 +4,7 @@
 //
 //   node scripts/release.mjs check [--tag vX.Y.Z]   version, tag, CHANGELOG and VERSAO agree
 //   node scripts/release.mjs pack --tag vX.Y.Z --out <dir>
-//                                                    check + npm pack + .sha256 + release notes
+//                                                    check + pnpm pack + .sha256 + release notes
 //   node scripts/release.mjs dry-run [--tag vX.Y.Z]  pack into a temp dir and run the package
 //                                                    check against that exact artifact
 //   node scripts/release.mjs verify-asset <tgz> --version X.Y.Z
@@ -41,13 +41,11 @@ export function changelogSection(changelog, version) {
 }
 
 // Pure check over already-read inputs; returns the list of failures (empty = ok).
-export function checkRelease({ tag, pkg, lock, sources, changelog }) {
+export function checkRelease({ tag, pkg, sources, changelog }) {
   const failures = [];
   const version = pkg.version;
   if (!SEMVER.test(version ?? '')) failures.push(`package.json version "${version}" is not semver (build metadata is not supported)`);
   if (tag !== undefined && tag !== `v${version}`) failures.push(`tag ${tag} ≠ v${version} from package.json`);
-  if (lock.version !== version || lock.packages?.['']?.version !== version)
-    failures.push(`package-lock.json version ${lock.version}/${lock.packages?.['']?.version} ≠ ${version}`);
   for (const [file, value] of Object.entries(sources))
     if (value !== version) failures.push(`${file} declares ${value ?? 'no version'}, expected ${version}`);
   const section = changelogSection(changelog, version);
@@ -64,7 +62,6 @@ export function readInputs(root = ROOT) {
   for (const [file, re] of VERSION_SOURCES) sources[file] = read(file).match(re)?.[1];
   return {
     pkg: JSON.parse(read('package.json')),
-    lock: JSON.parse(read('package-lock.json')),
     sources,
     changelog: read('CHANGELOG.md'),
   };
@@ -72,14 +69,14 @@ export function readInputs(root = ROOT) {
 
 export const sha256 = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
 
-// npm pack into `out`, then write `<tgz>.sha256` (shasum -c format) and release-notes.md.
+// pnpm pack into `out`, then write `<tgz>.sha256` (shasum -c format) and release-notes.md.
 export function pack(out, inputs, root = ROOT) {
   mkdirSync(out, { recursive: true });
-  const [info] = JSON.parse(execFileSync('npm', ['pack', '--json', '--pack-destination', out],
+  const info = JSON.parse(execFileSync('pnpm', ['pack', '--json', '--pack-destination', out],
     { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
-  const tgz = path.join(out, info.filename);
+  const tgz = path.resolve(out, info.filename);
   const hash = sha256(tgz);
-  writeFileSync(`${tgz}.sha256`, `${hash}  ${info.filename}\n`);
+  writeFileSync(`${tgz}.sha256`, `${hash}  ${path.basename(tgz)}\n`);
   writeFileSync(path.join(out, 'release-notes.md'), `${changelogSection(inputs.changelog, inputs.pkg.version)}\n`);
   return { tgz, hash, files: info.files.length };
 }
@@ -113,7 +110,7 @@ async function main(argv) {
   const tag = option(args, '--tag') ?? (command === 'pack' ? undefined : `v${inputs.pkg.version}`);
   switch (command) {
     case 'check':
-      return report(checkRelease({ tag, ...inputs }), `release ${tag} ok: package.json, lock, VERSAO and CHANGELOG agree`);
+      return report(checkRelease({ tag, ...inputs }), `release ${tag} ok: package.json, VERSAO and CHANGELOG agree`);
     case 'pack': {
       const out = option(args, '--out');
       if (!tag || !out) throw new Error('usage: release.mjs pack --tag vX.Y.Z --out <dir>');

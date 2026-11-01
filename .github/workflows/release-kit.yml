@@ -1,6 +1,6 @@
 name: release-kit
 
-# Pushing a tag mcp-connector-kit-vX.Y.Z publishes a GitHub Release with the npm pack artifact of
+# Pushing a tag mcp-connector-kit-vX.Y.Z publishes a GitHub Release with the pnpm pack artifact of
 # packages/mcp-connector-kit and its checksum, marked as not latest so `v*` stays the latest
 # t3-connector release. Same gates as release.yml; see docs/releasing.md.
 
@@ -43,15 +43,18 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v5
         with:
           node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Pack once, with checksum and release notes
         working-directory: packages/mcp-connector-kit
         run: |
           version="${GITHUB_REF_NAME#mcp-connector-kit-v}"
           mkdir -p ../../dist
-          npm pack --pack-destination ../../dist
+          pnpm pack --pack-destination ../../dist
           cd ../../dist
           tgz="mcp-connector-kit-$version.tgz"
           # Only the kit's own sources: no dependencies, tests or other files.

@@ -1,6 +1,6 @@
 # Releasing
 
-A release is a Git tag `vX.Y.Z` on `main` and a GitHub Release carrying the `npm pack`
+A release is a Git tag `vX.Y.Z` on `main` and a GitHub Release carrying the `pnpm pack`
 artifact `t3-connector-X.Y.Z.tgz` and its `.sha256`. The package is not published to npm.
 Publishing a release never touches a running connector: updating an installation is a
 separate, manual step (below).
@@ -9,19 +9,18 @@ separate, manual step (below).
 
 Set the same version in every place that declares it:
 
-- `package.json` and `package-lock.json` (`npm version X.Y.Z --no-git-tag-version`
-  updates both);
+- `package.json`; pnpm lockfiles do not contain the root package version;
 - `VERSAO` in `src/servidor.mjs` and `VERSAO_ESCRITA` in `src/escrita/ponte-mcp.mjs`.
 
 In `CHANGELOG.md`, move the entries of `## Unreleased` under a new `## X.Y.Z` heading and
 leave `## Unreleased` empty. Then, locally:
 
 ```sh
-npm test
-npm run release:dry-run    # same checks and packaging as the workflow, publishes nothing
+pnpm test
+pnpm run release:dry-run    # same checks and packaging as the workflow, publishes nothing
 ```
 
-The dry run checks that the version, lock, `VERSAO`, `VERSAO_ESCRITA` and CHANGELOG
+The dry run checks that the version, `VERSAO`, `VERSAO_ESCRITA` and CHANGELOG
 agree, packs once, runs the package check (`scripts/check-package.mjs --tgz`) on that
 artifact and prints the release notes. Merge the pull request once CI is green.
 
@@ -58,7 +57,7 @@ release is never overwritten; ship a new patch version instead.
 ## Shared package `mcp-connector-kit`
 
 `packages/mcp-connector-kit` has its own semver and its own tag, `mcp-connector-kit-vX.Y.Z` on
-`main`. Bump `packages/mcp-connector-kit/package.json` and the lock in a pull request; after the
+`main`. Bump `packages/mcp-connector-kit/package.json` and run `pnpm install --lockfile-only` in a pull request; after the
 merge, push the tag. `.github/workflows/release-kit.yml` runs the same verify → ci → package →
 publish gates and creates a Release with `mcp-connector-kit-X.Y.Z.tgz` and its `.sha256`, marked
 as not latest. The `t3-connector` tarball keeps bundling the kit from the workspace, so a kit
@@ -83,7 +82,9 @@ to the current installation, not over it, and keep the previous `.tgz`:
 
 ```sh
 new=<new-dir>
-npm install --omit=dev --ignore-scripts --prefix "$new" "$dir/t3-connector-X.Y.Z.tgz"
+mkdir -p "$new"
+printf '{"private":true}\n' > "$new/package.json"
+pnpm --dir "$new" add --prod --ignore-scripts "$dir/t3-connector-X.Y.Z.tgz"
 ```
 
 Point the MCP client or tunnel profile at `"$new/node_modules/.bin/t3-connector" serve`

@@ -1,6 +1,6 @@
 name: release
 
-# Pushing a tag vX.Y.Z publishes a GitHub Release with the npm pack artifact and its
+# Pushing a tag vX.Y.Z publishes a GitHub Release with the pnpm pack artifact and its
 # checksum. Nothing here installs or updates a running connector: see docs/releasing.md.
 
 on:
@@ -43,11 +43,12 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v5
         with:
           node-version: '24'
-          cache: npm
-      - run: npm ci --no-audit --no-fund
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Pack once, with checksum and release notes
         run: node scripts/release.mjs pack --tag "$GITHUB_REF_NAME" --out dist
       - name: Check the exact artifact that will be published

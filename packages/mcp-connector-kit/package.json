@@ -35,5 +35,6 @@
     "type": "git",
     "url": "git+https://github.com/marcuscastelo/t3-connector.git",
     "directory": "packages/mcp-connector-kit"
-  }
+  },
+  "packageManager": "pnpm@12.6.0"
 }

@@ -41,15 +41,22 @@ SSH), chosen on every call. Architecture decisions:
 
 ```sh
 git clone https://github.com/marcuscastelo/t3-connector.git && cd t3-connector
-npm ci
-npm test
-npm link            # optional: puts t3-connector and t3-connector-write on PATH
+# Install the exact pnpm version declared in packageManager first (12.6.0).
+pnpm install --frozen-lockfile
+pnpm test
+pnpm add --global .            # optional: puts t3-connector and t3-connector-write on PATH
 ```
 
-From an artifact instead: `npm pack` produces `t3-connector-<version>.tgz`, installable
-with `npm install -g ./t3-connector-<version>.tgz`. `npm run test:package` checks the
+From an artifact instead: `pnpm pack` produces `t3-connector-<version>.tgz`, installable
+with `pnpm add --global ./t3-connector-<version>.tgz`. `pnpm run test:package` checks the
 artifact contents and installs it into an isolated directory. The package is not
 published to npm.
+
+Both packages share `pnpm-lock.yaml` and `pnpm-workspace.yaml`. The workspace uses
+`nodeLinker: hoisted` because release tarballs bundle the local `mcp-connector-kit`;
+pnpm still imports dependency files from its shared content-addressable store.
+CI installs pnpm before Node cache setup and uses `pnpm install --frozen-lockfile`.
+There is no compilation step: `pnpm run test:package` builds and verifies the artifact.
 
 ## Read configuration
 
@@ -109,7 +116,7 @@ The original Portuguese subcommands and flags (`ambientes`, `diagnostico`, `--am
 Live smoke test, read-only, printing metadata only (never message text):
 
 ```sh
-SMOKE_THREAD_REMOTO=<id> [SMOKE_AMBIENTE_REMOTO=<alias>] [SMOKE_THREAD_ATIVA=<id>] [SMOKE_THREAD_FORA=<id>] npm run smoke
+SMOKE_THREAD_REMOTO=<id> [SMOKE_AMBIENTE_REMOTO=<alias>] [SMOKE_THREAD_ATIVA=<id>] [SMOKE_THREAD_FORA=<id>] pnpm run smoke
 ```
 
 It runs against the configuration in use (`T3_CONNECTOR_CONFIG` or the installed file) and
@@ -776,9 +783,9 @@ See [`examples/oauth-all-projects.env`](examples/oauth-all-projects.env) for con
 ## Development
 
 ```sh
-npm test               # unit tests (no network, no real T3)
-npm run test:package   # npm pack + file allowlist + isolated install + MCP handshake
-npm run release:dry-run  # release checks and packaging, without publishing
+pnpm test               # unit tests (no network, no real T3)
+pnpm run test:package   # pnpm pack + file allowlist + isolated install + MCP handshake
+pnpm run release:dry-run  # release checks and packaging, without publishing
 ```
 
 Releases are GitHub Releases built from a `vX.Y.Z` tag; see

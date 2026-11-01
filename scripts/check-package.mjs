@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Package check: `npm pack`, file allowlist, consistent version, scan for installation-specific
+// Package check: `pnpm pack`, file allowlist, consistent version, scan for installation-specific
 // data, isolated install and a real MCP handshake with the installed binary.
 //
-//   npm run test:package
+//   pnpm run test:package
 //   node scripts/check-package.mjs --tgz <file>   checks an existing artifact instead of packing
 //
 // Never talks to a real T3 server: the test config points to a loopback port with nothing
@@ -10,7 +10,8 @@
 
 import { execFileSync, spawn } from 'node:child_process';
 import net from 'node:net';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -23,12 +24,12 @@ const given = tgzArg > 0 ? path.resolve(process.argv[tgzArg + 1]) : null;
 const tmp = mkdtempSync(path.join(tmpdir(), 't3-connector-package-'));
 const failures = [];
 const fail = (m) => failures.push(m);
-const npm = (args, cwd) => execFileSync('npm', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+const pnpm = (args, cwd) => execFileSync('pnpm', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const walk = (dir, base = dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
   e.isDirectory() ? walk(path.join(dir, e.name), base) : [path.relative(base, path.join(dir, e.name)).split(path.sep).join('/')]);
 
 try {
-  // 1. Artifact and file list: a fresh `npm pack`, or the artifact given with --tgz (release).
+  // 1. Artifact and file list: a fresh `pnpm pack`, or the artifact given with --tgz (release).
   let info;
   if (given) {
     copyFileSync(given, path.join(tmp, path.basename(given)));
@@ -38,7 +39,7 @@ try {
     info = { name: manifest.name, version: manifest.version, filename: path.basename(given), size: statSync(given).size,
       files: walk(path.join(inner, 'package')).map((p) => ({ path: p })) };
   } else {
-    [info] = JSON.parse(npm(['pack', '--json', '--pack-destination', tmp], ROOT));
+    info = JSON.parse(pnpm(['pack', '--json', '--pack-destination', tmp], ROOT));
   }
   const files = info.files.map((f) => f.path).sort();
   const allowed = [/^bin\/[\w-]+\.mjs$/, /^src\/((escrita|oauth)\/)?[\w-]+\.mjs$/, /^web\/[\w-]+\.(js|html)$/,
@@ -51,7 +52,8 @@ try {
     if (!files.includes(f)) fail(`required file missing: ${f}`);
   if (info.name !== 't3-connector') fail(`package name ${info.name}, expected t3-connector`);
   if (info.version !== pkg.version) fail(`artifact version ${info.version} ≠ package.json ${pkg.version}`);
-  const tgz = path.join(tmp, info.filename);
+  const tgz = path.resolve(tmp, info.filename);
+  info.size ??= statSync(tgz).size;
 
   // 2. Scan the packed content: no IDs, hosts or paths from a real installation.
   const extracted = path.join(tmp, 'extracted');
@@ -79,7 +81,7 @@ try {
   const target = path.join(tmp, 'installed');
   mkdirSync(target);
   writeFileSync(path.join(target, 'package.json'), JSON.stringify({ name: 'package-check', private: true }));
-  npm(['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', tgz], target);
+  pnpm(['add', '--prod', '--ignore-scripts', tgz], target);
   const binDir = path.join(target, 'node_modules', '.bin');
   for (const bin of ['t3-connector', 't3-connector-write', 't3-connector-oauth']) {
     const v = execFileSync(path.join(binDir, bin), ['--version'], { encoding: 'utf8' }).trim();
@@ -97,7 +99,8 @@ try {
   const listed = JSON.parse(execFileSync(path.join(binDir, 't3-connector'), ['environments'], { encoding: 'utf8', env }));
   if (listed.default !== 'local' || listed.environments?.[0]?.available !== false) fail('`t3-connector environments` did not list the unreachable test environment');
 
-  const sdk = (sub) => pathToFileURL(path.join(target, 'node_modules', '@modelcontextprotocol', 'sdk', 'dist', 'esm', sub)).href;
+  const installedRequire = createRequire(realpathSync(path.join(target, 'node_modules', 't3-connector', 'package.json')));
+  const sdk = (sub) => pathToFileURL(installedRequire.resolve(`@modelcontextprotocol/sdk/${sub}`)).href;
   const { Client } = await import(sdk('client/index.js'));
   const { StdioClientTransport } = await import(sdk('client/stdio.js'));
   const transport = new StdioClientTransport({ command: path.join(binDir, 't3-connector'), args: ['serve'], env, stderr: 'pipe' });
