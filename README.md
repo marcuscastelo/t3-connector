@@ -41,7 +41,7 @@ SSH), chosen on every call. Architecture decisions:
 
 ```sh
 git clone https://github.com/marcuscastelo/t3-connector.git && cd t3-connector
-# Install the exact pnpm version declared in packageManager first (12.6.0).
+# Install the exact pnpm version declared in packageManager first (12.7.0).
 pnpm install --frozen-lockfile
 pnpm test
 pnpm add --global .            # optional: puts t3-connector and t3-connector-write on PATH
