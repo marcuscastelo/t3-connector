@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync, statSync, readdirSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startConnector, http, freePort } from './oauth-apoio.mjs';
+import { startConnector, http } from './oauth-apoio.mjs';
 import { CLIENT } from './oauth-fixtures.mjs';
 import { parseResourceCapture, capturableResource, resourceCapture } from '../src/oauth/resource-capture.mjs';
 import { loadOAuthConfig } from '../src/oauth/config.mjs';
@@ -73,7 +73,7 @@ test('resource capture: writes one 0600 file atomically, refuses an unsafe direc
 test('resource capture: /authorize still refuses the unknown resource; only the qualifying value is written', async t => {
   const dir = mkdtempSync(join(tmpdir(), 't3c-cap-')); chmodSync(dir, 0o700);
   const file = join(dir, 'resource.json');
-  const c = await startConnector({ config: { resource: `https://tunnel.example.com/v1/mcp/${T}-configured`, tunnelPort: await freePort(), resourceCapture: { file, match: T } } }); t.after(c.close);
+  const c = await startConnector({ config: { resource: `https://tunnel.example.com/v1/mcp/${T}-configured`, tunnelPort: 'free', resourceCapture: { file, match: T } } }); t.after(c.close);
   const q = new URLSearchParams({ response_type: 'code', client_id: CLIENT, redirect_uri: 'https://client.example/cb', code_challenge: 'a'.repeat(43), code_challenge_method: 'S256', state: 'st4te' });
   q.set('resource', `https://other.example/x?token=${T}`);
   let r = await http('GET', `${c.issuer}/authorize?${q}`);

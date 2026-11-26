@@ -5,8 +5,12 @@ import { OAuthError } from './token-store.mjs';
 
 // OAuth clients identified by a Client ID Metadata Document (CIMD): the client_id is an HTTPS URL
 // whose JSON document lists redirect URIs and the client's public keys. Only allowlisted client IDs
-// are fetched (no arbitrary outbound requests), and this profile requires private_key_jwt at the
-// token endpoint, verified against the document's JWKS. There is no downgrade to "none".
+// are fetched (no arbitrary outbound requests). A client authenticates at the token endpoint with
+// private_key_jwt, verified against the document's JWKS. A public client (document declares
+// token_endpoint_auth_method "none", no key) is accepted only when its client_id is also listed in
+// publicClients; it then proves possession through PKCE alone, which /authorize already requires of
+// every client. The method always comes from the document: a client whose document declares
+// private_key_jwt never authenticates without an assertion, even when it is in publicClients.
 export const CHATGPT_CLIENT_ID = 'https://chatgpt.com/oauth/client.json';
 export const ASSERTION_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
 const MAX_DOC_BYTES = 64 * 1024;
@@ -48,16 +52,18 @@ async function fetchJson(fetchImpl, url) {
 
 // Only a document that was fetched and parsed but failed validation (cimd_*) is authoritative.
 // Network errors, timeouts, any HTTP status and unparseable bodies (an HTML challenge page) are not.
+const clientName = doc => (typeof doc.client_name === 'string' ? doc.client_name.slice(0, 120) : null);
 const transient = e => !/^cimd_/.test(e?.message ?? '');
 
 export class ClientRegistry {
   #cache = new Map();
   #loading = new Map();
   #seenJti = new Map();
-  constructor({ allowedClients = [CHATGPT_CLIENT_ID], fetch: fetchImpl = globalThis.fetch, clock, wall = () => Date.now(), audit = () => {} } = {}) {
+  constructor({ allowedClients = [CHATGPT_CLIENT_ID], publicClients = [], fetch: fetchImpl = globalThis.fetch, clock, wall = () => Date.now(), audit = () => {} } = {}) {
     if (allowedClients.length > 32) throw new Error('client_capacity');
     for (const id of allowedClients) if (new URL(id).protocol !== 'https:' || new URL(id).href !== id) throw new Error(`invalid_client_id:${id}`);
-    Object.assign(this, { allowed: new Set(allowedClients), fetchImpl, wall, audit, time: stopwatch({ clock, wall }) });
+    for (const id of publicClients) if (!allowedClients.includes(id)) throw new Error(`public_client_not_allowed:${id}`);
+    Object.assign(this, { allowed: new Set(allowedClients), publicClients: new Set(publicClients), fetchImpl, wall, audit, time: stopwatch({ clock, wall }) });
   }
 
   // Stale-while-revalidate: past CACHE_MS a cached document is still served at once while one refetch
@@ -89,13 +95,17 @@ export class ClientRegistry {
     if (doc?.client_id !== clientId) throw new Error('cimd_client_id_mismatch');
     const redirectUris = Array.isArray(doc.redirect_uris) ? doc.redirect_uris.filter(u => typeof u === 'string' && new URL(u).protocol === 'https:') : [];
     if (!redirectUris.length || redirectUris.length > 32) throw new Error('cimd_redirect_uris_missing');
-    if (doc.token_endpoint_auth_method !== 'private_key_jwt') throw new Error('cimd_auth_method_unsupported');
+    const method = doc.token_endpoint_auth_method;
+    if (method === 'none' && this.publicClients.has(clientId)) return this.#store(clientId, { clientId, name: clientName(doc), redirectUris, authMethod: 'none', keys: [] });
+    if (method !== 'private_key_jwt') throw new Error('cimd_auth_method_unsupported');
     let jwks = doc.jwks;
     if (!jwks && typeof doc.jwks_uri === 'string') jwks = await fetchJson(this.fetchImpl, doc.jwks_uri);
     if (!Array.isArray(jwks?.keys) || !jwks.keys.length || jwks.keys.length > 16) throw new Error('cimd_jwks_missing');
-    const client = { clientId, name: typeof doc.client_name === 'string' ? doc.client_name.slice(0, 120) : null, redirectUris, keys: jwks.keys };
+    return this.#store(clientId, { clientId, name: clientName(doc), redirectUris, authMethod: 'private_key_jwt', keys: jwks.keys });
+  }
+  #store(clientId, client) {
     this.#cache.set(clientId, { client, at: this.time.mark() });
-    this.audit({ event: 'client_loaded', clientId, keys: jwks.keys.length });
+    this.audit({ event: 'client_loaded', clientId, authMethod: client.authMethod, keys: client.keys.length });
     return client;
   }
 
@@ -105,8 +115,11 @@ export class ClientRegistry {
     try { return await this.#load(clientId); } catch (e) { if (e.status === 429) throw e; const reason = /^[a-z0-9_]{1,64}$/.test(e.message) ? e.message : 'fetch_failed'; throw new OAuthError('invalid_client', `cimd_${reason}`.replace(/^cimd_cimd_/, 'cimd_'), 401); }
   }
 
-  // Token endpoint client authentication (RFC 7523 §3 / RFC 7521 §4.2).
+  // Token endpoint client authentication: private_key_jwt (RFC 7523 §3 / RFC 7521 §4.2), or "none"
+  // (OAuth 2.1 §2.4) for a client in publicClients whose document declares it.
   async authenticate(form, { audiences }) {
+    const credentials = ['client_assertion_type', 'client_assertion', 'client_secret'].some(k => form[k] !== undefined);
+    if (!credentials && this.publicClients.has(form.client_id)) return this.#authenticatePublic(form.client_id);
     if (form.client_assertion_type !== ASSERTION_TYPE || typeof form.client_assertion !== 'string') throw new OAuthError('invalid_client', 'private_key_jwt_required', 401);
     const parts = form.client_assertion.split('.');
     if (parts.length !== 3) throw new OAuthError('invalid_client', 'assertion_malformed', 401);
@@ -116,6 +129,8 @@ export class ClientRegistry {
     if (form.client_id !== undefined && form.client_id !== clientId) throw new OAuthError('invalid_client', 'client_id_mismatch', 401);
     if (claims.sub !== clientId) throw new OAuthError('invalid_client', 'assertion_sub_mismatch', 401);
     const client = await this.resolve(clientId);
+    // A public client has no registered key, so an assertion naming it cannot be verified.
+    if (client.authMethod !== 'private_key_jwt') throw new OAuthError('invalid_client', 'assertion_not_registered', 401);
     const alg = ALGS[header?.alg];
     if (!alg) throw new OAuthError('invalid_client', 'assertion_alg_unsupported', 401);
     const signed = Buffer.from(`${parts[0]}.${parts[1]}`), signature = Buffer.from(parts[2], 'base64url');
@@ -146,7 +161,15 @@ export class ClientRegistry {
     if (this.#seenJti.size >= 4096) throw new OAuthError('temporarily_unavailable', 'assertion_replay_capacity', 429);
     this.#seenJti.set(jtiKey, claims.exp + SKEW_S);
     // Evidence that the signature was verified, and with which key (public metadata only).
-    this.audit({ event: 'client_authenticated', clientId, alg: header.alg, kid: typeof header.kid === 'string' ? header.kid.slice(0, 64).replace(/[^A-Za-z0-9._-]/g, '_') : null, lifetime: claims.iat !== undefined ? claims.exp - claims.iat : null });
+    this.audit({ event: 'client_authenticated', clientId, method: 'private_key_jwt', alg: header.alg, kid: typeof header.kid === 'string' ? header.kid.slice(0, 64).replace(/[^A-Za-z0-9._-]/g, '_') : null, lifetime: claims.iat !== undefined ? claims.exp - claims.iat : null });
+    return client;
+  }
+
+  async #authenticatePublic(clientId) {
+    const client = await this.resolve(clientId);
+    // The document decides: one that declares private_key_jwt keeps requiring the assertion.
+    if (client.authMethod !== 'none') throw new OAuthError('invalid_client', 'private_key_jwt_required', 401);
+    this.audit({ event: 'client_authenticated', clientId, method: 'none' });
     return client;
   }
 

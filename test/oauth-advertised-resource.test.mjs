@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { startConnector, http, freePort } from './oauth-apoio.mjs';
+import { startConnector, http } from './oauth-apoio.mjs';
 import { CLIENT } from './oauth-fixtures.mjs';
 import { loadOAuthConfig } from '../src/oauth/config.mjs';
 
@@ -23,7 +23,7 @@ test('config: advertised resource requires tunnel mode and an exact https URL', 
 });
 
 test('tunnel mode: metadata and challenge advertise the advertised resource; only the accepted one authorizes', async t => {
-  const c = await startConnector({ config: { resource: ACCEPTED, advertisedResource: ADVERTISED, tunnelPort: await freePort() } }); t.after(c.close);
+  const c = await startConnector({ config: { resource: ACCEPTED, advertisedResource: ADVERTISED, tunnelPort: 'free' } }); t.after(c.close);
   const tb = c.mcpUrl.replace(/\/mcp$/, '');
   const prm = await http('GET', `${tb}/.well-known/oauth-protected-resource/mcp`);
   assert.equal(prm.data.resource, ADVERTISED);
@@ -67,7 +67,7 @@ test('tunnel mode: metadata and challenge advertise the advertised resource; onl
 });
 
 test('default and plain tunnel mode are unchanged by the advertised setting', async t => {
-  const c = await startConnector({ config: { resource: ACCEPTED, tunnelPort: await freePort() } }); t.after(c.close);
+  const c = await startConnector({ config: { resource: ACCEPTED, tunnelPort: 'free' } }); t.after(c.close);
   const prm = await http('GET', `${c.mcpUrl.replace(/\/mcp$/, '')}/.well-known/oauth-protected-resource/mcp`);
   assert.equal(prm.data.resource, ACCEPTED);
 });

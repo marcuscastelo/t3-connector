@@ -112,19 +112,27 @@ export function http(method, url, { headers = {}, body, host, timeoutMs = defaul
  * Runs createOAuthConnector (or `create`, a connector's branded wrapper) on loopback with a fake
  * client and an enrolled software passkey. Returns helpers for sign-in, token, refresh and MCP.
  * `mount` ('/fleet') serves it under a path of the issuer: http://localhost:<port>/fleet. `keys`
- * (from clientKeys()) gives several connectors the same fake client key.
+ * (from clientKeys()) gives several connectors the same fake client key. `authMethod: 'none'` makes
+ * the fake client public: its document declares "none", it is listed in `publicClients`, and token
+ * requests carry `client_id` with no assertion. `token(params, { assertion })` sends the given one;
+ * `assertion: null` sends none, for any client.
  */
-export async function startConnector({ create = createOAuthConnector, tools, config = {}, loginMode = 'button', enroll = true, mount = '', keys: clientKey, serverInfo = { name: 'connector-test', version: '0.0.0' }, ...options } = {}) {
+export async function startConnector({ create = createOAuthConnector, tools, config = {}, loginMode = 'button', enroll = true, mount = '', keys: clientKey, authMethod = 'private_key_jwt', serverInfo = { name: 'connector-test', version: '0.0.0' }, ...options } = {}) {
   let mono = 0, wallMs = Date.now();
   const clock = () => mono, wall = () => wallMs;
   const keys = clientKey ?? clientKeys('ES256');
-  const doc = { client_id: CLIENT, client_name: 'Fake client', redirect_uris: ['https://client.example/cb'], token_endpoint_auth_method: 'private_key_jwt', jwks: { keys: [keys.jwk] } };
+  const pub = authMethod === 'none';
+  const doc = pub
+    ? { client_id: CLIENT, client_name: 'Fake public client', redirect_uris: ['https://client.example/cb'], token_endpoint_auth_method: 'none' }
+    : { client_id: CLIENT, client_name: 'Fake client', redirect_uris: ['https://client.example/cb'], token_endpoint_auth_method: 'private_key_jwt', jwks: { keys: [keys.jwk] } };
   // freePort() releases the port before the connector binds it, so a parallel test file can take it
-  // first. A partial listen leaves bound servers that keep the process alive: close and retry.
+  // first. A partial listen leaves bound servers that keep the process alive: close and retry, with
+  // new ports. `config.tunnelPort: 'free'` is picked again on every attempt too; a number stays fixed.
   let cfg, connector;
   for (let attempt = 1; ; attempt++) {
     const [publicPort, localPort] = [await freePort(), await freePort()];
-    cfg = { ...DEFAULTS, issuer: `http://localhost:${publicPort}${mount}`, publicPort, localPort, stateDir: mkdtempSync(join(tmpdir(), 'connector-oauth-')), clients: [CLIENT], loginMode, ...config };
+    const tunnelPort = config.tunnelPort === 'free' ? { tunnelPort: await freePort() } : {};
+    cfg = { ...DEFAULTS, issuer: `http://localhost:${publicPort}${mount}`, publicPort, localPort, stateDir: mkdtempSync(join(tmpdir(), 'connector-oauth-')), clients: [CLIENT], ...(pub ? { publicClients: [CLIENT] } : {}), loginMode, ...config, ...tunnelPort };
     connector = create({ config: cfg, tools, fetch: cimdFetch({ [CLIENT]: doc }), clock, wall, serverInfo, ...options });
     try { await connector.listen(); break; } catch (e) {
       await connector.close();
@@ -150,14 +158,16 @@ export async function startConnector({ create = createOAuthConnector, tools, con
   let counter = 1;
   const form = obj => new URLSearchParams(Object.entries(obj).filter(([, v]) => v !== undefined)).toString();
   const fresh = (claims = {}) => { const now = Math.floor(wall() / 1000); return keys.assertion({ aud: `${issuer}/token`, iat: now, exp: now + 60, ...claims }); };
-  const token = (params, { assertion = fresh() } = {}) => http('POST', `${issuer}/token`, {
+  // `assertion: null` sends no client assertion (what a public client does).
+  const token = (params, { assertion = pub ? null : fresh() } = {}) => http('POST', `${issuer}/token`, {
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: form({ client_id: CLIENT, client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer', client_assertion: assertion, ...params }),
+    body: form({ client_id: CLIENT, ...(assertion === null ? {} : { client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer', client_assertion: assertion }), ...params }),
   });
 
   // Full first access: /authorize -> local passkey -> /resume -> callback -> /token.
   // tokenResource: resource named at the code exchange (default: the configured one; null omits it).
-  async function signIn({ via = loginMode === 'oob' ? 'oob' : 'handoff', uv = true, tokenResource = resource, scope = 'connector:read connector:write' } = {}) {
+  // exchange: false stops at the callback and returns the code and verifier unexchanged.
+  async function signIn({ via = loginMode === 'oob' ? 'oob' : 'handoff', uv = true, tokenResource = resource, scope = 'connector:read connector:write', exchange = true } = {}) {
     const verifier = randomBytes(32).toString('base64url'), state = randomBytes(8).toString('hex');
     const challenge = createHash('sha256').update(verifier).digest('base64url');
     const auth = await http('GET', `${issuer}/authorize?${form({ response_type: 'code', client_id: CLIENT, redirect_uri: 'https://client.example/cb', code_challenge: challenge, code_challenge_method: 'S256', state, resource, scope })}`);
@@ -178,7 +188,7 @@ export async function startConnector({ create = createOAuthConnector, tools, con
     const resume = await http('GET', resumeUrl, { headers: cookie ? { cookie } : {} });
     const cb = resume.headers.location ? new URL(resume.headers.location) : null;
     const code = cb?.searchParams.get('code');
-    const tokens = code ? await token({ grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: 'https://client.example/cb', resource: tokenResource ?? undefined }) : null;
+    const tokens = code && exchange ? await token({ grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: 'https://client.example/cb', resource: tokenResource ?? undefined }) : null;
     return { auth, cookie, view, verify, resume, cb, state, verifier, code, statusId, tokens: tokens?.data, tokenResponse: tokens };
   }
 

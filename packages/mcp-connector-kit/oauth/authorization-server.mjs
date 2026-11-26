@@ -5,7 +5,7 @@ import { OAuthError } from './token-store.mjs';
 import { json, html, redirect, readBody, cookies, page, esc, redact } from './http.mjs';
 
 // Embedded OAuth 2.1 authorization server (public routes). Authorization code + PKCE S256 only,
-// CIMD clients with private_key_jwt, RFC 9207 `iss` in every callback, RFC 8707 single resource.
+// CIMD clients with private_key_jwt (or "none" for clients explicitly listed as public), RFC 9207 `iss` in every callback, RFC 8707 single resource.
 // Public mode authenticates at the issuer and requires explicit consent after UV. The existing
 // local button/302/OOB handoff remains available for desktop use and HTTP rehearsal.
 export const SCOPES = ['connector:read', 'connector:write'];
@@ -14,7 +14,10 @@ export const transactionCookie = (issuer, brand) => { const c = brandOf(brand).c
 const VERIFIER = /^[A-Za-z0-9\-._~]{43,128}$/;
 const GRANT_TYPES = new Set(['authorization_code', 'refresh_token']);
 
-export function asMetadata({ issuer }) {
+// "none" is advertised only when at least one public client is configured; without one the
+// metadata is that of 0.3.0.
+export function asMetadata({ issuer, publicClients = false }) {
+  const methods = publicClients ? ['private_key_jwt', 'none'] : ['private_key_jwt'];
   return {
     issuer,
     authorization_endpoint: `${issuer}/authorize`,
@@ -24,9 +27,9 @@ export function asMetadata({ issuer }) {
     response_modes_supported: ['query'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256'],
-    token_endpoint_auth_methods_supported: ['private_key_jwt'],
+    token_endpoint_auth_methods_supported: methods,
     token_endpoint_auth_signing_alg_values_supported: ['ES256', 'RS256', 'PS256'],
-    revocation_endpoint_auth_methods_supported: ['private_key_jwt'],
+    revocation_endpoint_auth_methods_supported: methods,
     revocation_endpoint_auth_signing_alg_values_supported: ['ES256', 'RS256', 'PS256'],
     scopes_supported: SCOPES,
     authorization_response_iss_parameter_supported: true,
@@ -147,6 +150,9 @@ ${loginMode === 'button' ? `<p>Approve this sign-in with your passkey on the loc
     try {
       form = await formBody(req);
       client = await clients.authenticate(form, { audiences: [`${issuer}/token`, issuer] });
+      // A public client has no credential, so the code exchange must name the exact redirect URI
+      // the code was issued for (RFC 6749 §4.1.3), besides the PKCE verifier.
+      if (form.grant_type === 'authorization_code' && client.authMethod === 'none' && form.redirect_uri === undefined) throw new OAuthError('invalid_request', 'redirect_uri_required');
       let issued;
       if (form.grant_type === 'authorization_code') issued = tokens.consumeCode(form.code, { clientId: client.clientId, redirectUri: form.redirect_uri, verifyPkce: c => pkceMatches(form.code_verifier, c), resource: form.resource });
       else if (form.grant_type === 'refresh_token') issued = tokens.refresh(form.refresh_token, { clientId: client.clientId, resource: form.resource, scope: form.scope });
@@ -170,7 +176,7 @@ ${loginMode === 'button' ? `<p>Approve this sign-in with your passkey on the loc
   return async function handle(req, res, url) {
     if (DISCOVERY.has(url.pathname)) {
       audit({ event: 'discovery', path: url.pathname });
-      json(res, 200, asMetadata({ issuer })); return true;
+      json(res, 200, asMetadata({ issuer, publicClients: clients.publicClients.size > 0 })); return true;
     }
     if (!url.pathname.startsWith(`${mount}/`)) return false;
     const p = url.pathname.slice(mount.length);
