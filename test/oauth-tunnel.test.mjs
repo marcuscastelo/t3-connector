@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { startConnector, http, freePort } from './oauth-apoio.mjs';
+import { startConnector, http } from './oauth-apoio.mjs';
 import { loadOAuthConfig } from '../src/oauth/config.mjs';
 import { CLIENT } from './oauth-fixtures.mjs';
 
@@ -10,7 +10,7 @@ import { CLIENT } from './oauth-fixtures.mjs';
 // canonical URL is named by the tunnel service, is served on a loopback listener for the tunnel
 // client. Tokens are bound to that exact resource.
 const RESOURCE = 'https://tunnel.example.com/v1/mcp/tunnel_abc123';
-const tunnelConnector = async (config = {}) => startConnector({ config: { resource: RESOURCE, tunnelPort: await freePort(), ...config } });
+const tunnelConnector = async (config = {}) => startConnector({ config: { resource: RESOURCE, tunnelPort: 'free', ...config } });
 const events = c => readFileSync(join(c.connector.stateDir, 'events.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
 
 test('config: tunnel mode needs an exact https resource with a path, together with the tunnel port', () => {
@@ -134,8 +134,8 @@ test('tunnel mode: code exchange naming another resource is refused; a same-stor
 });
 
 test('tunnel mode: after a restart with another resource, old tokens are refused and a new sign-in works', async t => {
-  const tunnelPort = await freePort();
-  const c = await tunnelConnector({ tunnelPort });
+  const c = await tunnelConnector();
+  const tunnelPort = Number(new URL(c.mcpUrl).port);
   const s = await c.signIn();
   const stateDir = c.connector.stateDir;
   await c.close();

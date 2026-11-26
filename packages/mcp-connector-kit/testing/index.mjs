@@ -126,11 +126,13 @@ export async function startConnector({ create = createOAuthConnector, tools, con
     ? { client_id: CLIENT, client_name: 'Fake public client', redirect_uris: ['https://client.example/cb'], token_endpoint_auth_method: 'none' }
     : { client_id: CLIENT, client_name: 'Fake client', redirect_uris: ['https://client.example/cb'], token_endpoint_auth_method: 'private_key_jwt', jwks: { keys: [keys.jwk] } };
   // freePort() releases the port before the connector binds it, so a parallel test file can take it
-  // first. A partial listen leaves bound servers that keep the process alive: close and retry.
+  // first. A partial listen leaves bound servers that keep the process alive: close and retry, with
+  // new ports. `config.tunnelPort: 'free'` is picked again on every attempt too; a number stays fixed.
   let cfg, connector;
   for (let attempt = 1; ; attempt++) {
     const [publicPort, localPort] = [await freePort(), await freePort()];
-    cfg = { ...DEFAULTS, issuer: `http://localhost:${publicPort}${mount}`, publicPort, localPort, stateDir: mkdtempSync(join(tmpdir(), 'connector-oauth-')), clients: [CLIENT], ...(pub ? { publicClients: [CLIENT] } : {}), loginMode, ...config };
+    const tunnelPort = config.tunnelPort === 'free' ? { tunnelPort: await freePort() } : {};
+    cfg = { ...DEFAULTS, issuer: `http://localhost:${publicPort}${mount}`, publicPort, localPort, stateDir: mkdtempSync(join(tmpdir(), 'connector-oauth-')), clients: [CLIENT], ...(pub ? { publicClients: [CLIENT] } : {}), loginMode, ...config, ...tunnelPort };
     connector = create({ config: cfg, tools, fetch: cimdFetch({ [CLIENT]: doc }), clock, wall, serverInfo, ...options });
     try { await connector.listen(); break; } catch (e) {
       await connector.close();
