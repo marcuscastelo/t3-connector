@@ -18,6 +18,7 @@ export const DEFAULTS = {
   maxAgeSeconds: 0,
   loginMode: 'public',
   clients: [CHATGPT_CLIENT_ID],
+  publicClients: [],
   allowedOrigins: ['https://chatgpt.com'],
 };
 
@@ -57,6 +58,9 @@ export function loadOAuthConfig(env = process.env, { rehearsal = false, prefix =
     maxAgeSeconds: int(`${P}_MAX_AGE_SECONDS`, env[`${P}_MAX_AGE_SECONDS`], 0, 365 * 86400) ?? D.maxAgeSeconds,
     loginMode: env[`${P}_LOGIN_MODE`] || (localhostHttp ? 'button' : D.loginMode),
     clients: list(env[`${P}_CLIENTS`]) ?? D.clients,
+    // Clients allowed to authenticate with "none" (public client, PKCE only), one by one. Each must
+    // also be in <prefix>_CLIENTS, and its CIMD document must declare "none".
+    publicClients: list(env[`${P}_PUBLIC_CLIENTS`]) ?? D.publicClients,
     allowedOrigins: list(env[`${P}_ALLOWED_ORIGINS`]) ?? D.allowedOrigins,
     verbose: env[`${P}_VERBOSE`] === '1',
     resource: null,
@@ -87,6 +91,8 @@ export function loadOAuthConfig(env = process.env, { rehearsal = false, prefix =
   }
   if (Boolean(cfg.resource) !== Boolean(cfg.tunnelPort)) throw new Error(`${P}_RESOURCE and ${P}_TUNNEL_PORT go together (tunnel mode)`);
   if (cfg.tunnelPort && (cfg.tunnelPort === cfg.publicPort || cfg.tunnelPort === cfg.localPort)) throw new Error('the tunnel port must differ from the public and local ports');
+  const notAllowed = cfg.publicClients.filter(id => !cfg.clients.includes(id));
+  if (notAllowed.length) throw new Error(`${P}_PUBLIC_CLIENTS must be listed in ${P}_CLIENTS too: ${notAllowed.join(', ')}`);
   if (!LOGIN_MODES.includes(cfg.loginMode)) throw new Error(`${P}_LOGIN_MODE must be one of ${LOGIN_MODES.join(', ')}`);
   if (cfg.loginMode === 'public' && u.protocol !== 'https:') throw new Error(`${P}_LOGIN_MODE=public requires an https issuer`);
   if (cfg.localPort === cfg.publicPort) throw new Error('public and local ports must differ');

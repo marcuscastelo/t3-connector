@@ -7,7 +7,7 @@ connector needs except its domain: no T3, Fleet or other backend knowledge lives
 | Entry | Contents |
 | --- | --- |
 | `mcp-connector-kit` | tool plumbing: `strictRegistrar` (unknown parameters refused), `jsonResult`, `errorResult`, `toolErrorMapper` |
-| `mcp-connector-kit/oauth` | OAuth session profile: authorization server (PKCE S256, CIMD clients, `private_key_jwt`, resource-bound tokens, rotating refresh), MCP resource server over Streamable HTTP with `connector:read` / `connector:write` scopes per tool, sessions with idle window, maximum age, revocation and kill switch, local and public passkey sign-in, local control plane, bounded audit, `loadOAuthConfig` |
+| `mcp-connector-kit/oauth` | OAuth session profile: authorization server (PKCE S256, CIMD clients, `private_key_jwt` or, for listed public clients, `none`, resource-bound tokens, rotating refresh), MCP resource server over Streamable HTTP with `connector:read` / `connector:write` scopes per tool, sessions with idle window, maximum age, revocation and kill switch, local and public passkey sign-in, local control plane, bounded audit, `loadOAuthConfig` |
 | `mcp-connector-kit/testing` | fake OAuth client, software WebAuthn authenticator and `startConnector` to drive the full sign-in and MCP calls in tests |
 
 ## Building a connector on it
@@ -59,6 +59,33 @@ cannot be reused under another mount. Ingress rule for `/fleet` (e.g. a Cloudfla
 `^/(fleet|\.well-known/(oauth-authorization-server|openid-configuration|oauth-protected-resource)/fleet)(/.*)?$`.
 In tests, `startConnector({ mount: '/fleet' })` serves the connector at `http://localhost:<port>/fleet`.
 
+## Public CIMD clients (`none`)
+
+By default every client authenticates at `/token` and `/revoke` with `private_key_jwt`. A client
+whose CIMD document declares `"token_endpoint_auth_method": "none"` (a public client with PKCE and
+no key) is accepted only when its `client_id` is listed one by one in
+`<prefix>_PUBLIC_CLIENTS` (`config.publicClients`), which must be a subset of `<prefix>_CLIENTS`:
+
+```sh
+MY_CONNECTOR_OAUTH_CLIENTS=https://chatgpt.com/oauth/client.json,https://public-client.example/client.json
+MY_CONNECTOR_OAUTH_PUBLIC_CLIENTS=https://public-client.example/client.json
+```
+
+- The method comes from the client's document. A listed client whose document declares
+  `private_key_jwt` still needs its assertion; one that is not listed and declares `none` is refused
+  with `cimd_auth_method_unsupported`. An assertion or `client_secret` from a public client is refused.
+- Nothing else changes for a public client: the exact registered `redirect_uri`, PKCE S256 at
+  `/authorize`, the passkey sign-in and consent, single-use codes, resource binding, rotating refresh
+  tokens whose reuse ends the session, idle window and revocation. Its code exchange must also send
+  `redirect_uri`, since there is no client credential.
+- Discovery lists `none` in `token_endpoint_auth_methods_supported` and
+  `revocation_endpoint_auth_methods_supported` only when a public client is configured; without
+  one the surface is that of 0.3.0.
+- A stolen refresh token of a public client can be used without a key until the legitimate client
+  refreshes (reuse then ends the session) or the session goes idle; that is the residual risk
+  `private_key_jwt` avoids.
+- In tests, `startConnector({ authMethod: 'none' })` runs the fake client as a public one.
+
 ## Dependencies and versioning
 
 Runtime dependencies are peer dependencies (`@modelcontextprotocol/sdk`, `zod`,
@@ -68,4 +95,5 @@ copy of each. Independent semver, released as `mcp-connector-kit-<version>.tgz` 
 version. The T3 Connector bundles it in its own tarball.
 
 0.1.0 had only the tool plumbing; 0.2.0 adds the OAuth session profile and the test support;
-0.3.0 accepts an issuer mounted on a path.
+0.3.0 accepts an issuer mounted on a path; 0.4.0 accepts public CIMD clients (`none`) listed one by
+one.

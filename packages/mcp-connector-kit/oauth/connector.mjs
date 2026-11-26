@@ -62,7 +62,7 @@ export function createOAuthConnector({ config, tools, serverInfo, fetch, clock, 
     off() { rmSync(killFile, { force: true }); authority.release(); },
   };
   const tokens = new TokenStore({ authority, atTtlMs: config.accessTokenSeconds * 1000, rtTtlMs: config.refreshTokenSeconds * 1000, clock, wall, audit });
-  const clients = new ClientRegistry({ allowedClients: config.clients, fetch, clock, wall, audit });
+  const clients = new ClientRegistry({ allowedClients: config.clients, publicClients: config.publicClients ?? [], fetch, clock, wall, audit });
   const transactions = new LoginTransactions({ clock, wall });
   const enrollment = enrollmentTicket({ clock, wall });
 

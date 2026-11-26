@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `mcp-connector-kit` 0.4.0: public CIMD clients. A client whose document declares
+  `token_endpoint_auth_method: "none"` (PKCE, no key) is accepted only when its `client_id` is listed
+  in `<prefix>_PUBLIC_CLIENTS` (a subset of `<prefix>_CLIENTS`; for this connector
+  `T3_CONNECTOR_OAUTH_PUBLIC_CLIENTS`, empty by default). The document decides the method: a
+  `private_key_jwt` client keeps needing its assertion even when listed, and a public client sending
+  an assertion or a secret is refused. Exact redirect URI, PKCE S256, passkey sign-in, refresh
+  rotation and revocation are unchanged; a public client's code exchange must name `redirect_uri`.
+  Discovery advertises `none` only when a public client is configured, so without one the surface is
+  that of 0.3.0.
+
 ## 0.15.0
 
 - Operator core (`src/ops.mjs`, `t3-connector-ops`) reaches the whole connector surface:
